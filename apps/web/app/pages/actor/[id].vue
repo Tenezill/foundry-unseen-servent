@@ -25,6 +25,13 @@
       </header>
 
       <main class="sheet-main">
+        <SectionActions
+          v-if="activeTab === 'actions'"
+          :actions="combatActions"
+          :action-busy="actionBusy"
+          :readonly="offline"
+          @action="onCombatAction"
+        />
         <template v-for="section in activeSections" :key="section.id">
           <SectionStats
             v-if="section.kind === 'stats'"
@@ -54,7 +61,9 @@
             @action="onAction"
           />
         </template>
-        <p v-if="activeSections.length === 0" class="tab-empty">Nothing on this tab.</p>
+        <p v-if="activeTab !== 'actions' && activeSections.length === 0" class="tab-empty">
+          Nothing on this tab.
+        </p>
       </main>
 
       <nav class="tabbar" aria-label="Sheet sections">
@@ -124,7 +133,7 @@ import type { ActionResponse, ActionRollResult, ApiErrorBody, SheetResponse } fr
 
 const LARGE_DELTA = 10
 
-type TabId = 'overview' | 'resources' | 'inventory' | 'spells'
+type TabId = 'overview' | 'actions' | 'resources' | 'inventory' | 'spells'
 
 interface TabDef {
   id: TabId
@@ -137,6 +146,11 @@ const TABS: TabDef[] = [
     id: 'overview',
     label: 'Overview',
     icon: 'M12 3 3 8v13h6v-6h6v6h6V8Z',
+  },
+  {
+    id: 'actions',
+    label: 'Actions',
+    icon: 'M13 2 3 14h6.5L9 22l11-14h-6.5Z',
   },
   {
     id: 'resources',
@@ -207,6 +221,7 @@ function tabOf(section: SheetSection): TabId {
 const sectionsByTab = computed<Record<TabId, SheetSection[]>>(() => {
   const groups: Record<TabId, SheetSection[]> = {
     overview: [],
+    actions: [],
     resources: [],
     inventory: [],
     spells: [],
@@ -215,8 +230,19 @@ const sectionsByTab = computed<Record<TabId, SheetSection[]>>(() => {
   return groups
 })
 
+/** Actions-tab source: attack/cast/use only (checks/saves stay on Overview, equip in Inventory). */
+const combatActions = computed(() =>
+  (sheet.value?.actions ?? []).filter(
+    (a) => a.kind === 'attack' || a.kind === 'cast' || a.kind === 'use',
+  ),
+)
+
 const visibleTabs = computed(() =>
-  TABS.filter((t) => t.id === 'overview' || sectionsByTab.value[t.id].length > 0),
+  TABS.filter((t) => {
+    if (t.id === 'overview') return true
+    if (t.id === 'actions') return combatActions.value.length > 0
+    return sectionsByTab.value[t.id].length > 0
+  }),
 )
 
 const activeSections = computed(() => sectionsByTab.value[activeTab.value])
@@ -373,6 +399,24 @@ function onAction(actionId: string): void {
       )
       break
   }
+}
+
+/**
+ * Actions-tab taps: same paths as onAction, except at-will/cantrip casts
+ * (no slotLevels) skip the slot dialog and cast directly.
+ */
+function onCombatAction(actionId: string): void {
+  if (offline.value || actionBusy.value) return
+  const action = actionMap.value[actionId]
+  if (!action) return
+  if (action.kind === 'cast') {
+    if (action.slotLevels === undefined) {
+      void submitAction({ kind: 'cast', actionId }, action.label)
+      return
+    }
+    if (action.slotLevels.length === 0) return
+  }
+  onAction(actionId)
 }
 
 function onActionSubmit(intent: ActionIntent): void {
