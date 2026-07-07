@@ -12,7 +12,7 @@ interface EventStream {
 import { buildApp } from '../src/app.js';
 import { sha256Hex, type Player } from '../src/players.js';
 import { createRegistry } from '../src/registry.js';
-import { actorDoc, fakeAdapter, FakeRelay, FAKE_API_KEY, FAKE_RELAY_URL } from './fakes.js';
+import { actionlessAdapter, actorDoc, fakeAdapter, FakeRelay, FAKE_API_KEY, FAKE_RELAY_URL } from './fakes.js';
 
 const ANNA_TOKEN = 'anna-invite-token-123';
 const BOB_TOKEN = 'bob-invite-token-456';
@@ -237,6 +237,161 @@ describe('intents', () => {
     const res31 = await post(app, 'a1', { kind: 'delta', resourceId: 'hp', amount: 0 });
     expect(res31.statusCode).toBe(429);
     expect(res31.json().error.code).toBe('RATE_LIMITED');
+  });
+});
+
+describe('actions', () => {
+  const post = (appInst: FastifyInstance, actorId: string, payload: unknown) =>
+    appInst.inject({ method: 'POST', url: `/api/actors/${actorId}/actions`, headers: asAnna, payload: payload as object });
+
+  it('404s on a foreign actor', async () => {
+    const { app } = setup();
+    const res = await post(app, 'b1', { kind: 'check', actionId: 'skill.ath' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('NOT_FOUND');
+  });
+
+  it('403 FORBIDDEN_RESOURCE for an actionId not in the adapter list', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'check', actionId: 'skill.nope' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('FORBIDDEN_RESOURCE');
+    expect(relay.rollCalls).toHaveLength(0);
+  });
+
+  it('403 FORBIDDEN_RESOURCE when the kind does not match the descriptor', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'attack', actionId: 'skill.ath' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('FORBIDDEN_RESOURCE');
+    expect(relay.rollCalls).toHaveLength(0);
+    expect(relay.useAbilityCalls).toHaveLength(0);
+  });
+
+  it('403 for every action when the adapter has no action support', async () => {
+    await app?.close();
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
+    app = buildApp({
+      relay,
+      players: makePlayers(),
+      registry: createRegistry([actionlessAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+    });
+    const res = await post(app, 'a1', { kind: 'check', actionId: 'skill.ath' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('FORBIDDEN_RESOURCE');
+  });
+
+  it('422 INVALID_INTENT for bad payloads (each shape rule)', async () => {
+    const { app, relay } = setup();
+    for (const payload of [
+      { kind: 'check' }, // actionId missing
+      { kind: 'check', actionId: 'skill.ath', mode: 'lucky' }, // unknown mode
+      { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 1.5 }, // non-integer
+      { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: -1 }, // negative
+      { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 'two' }, // non-number
+      { kind: 'equip', actionId: 'item.i1.equip' }, // equipped missing
+      { kind: 'equip', actionId: 'item.i1.equip', equipped: 'yes' }, // non-boolean
+    ]) {
+      const res = await post(app, 'a1', payload);
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error.code).toBe('INVALID_INTENT');
+    }
+    expect(relay.rollCalls).toHaveLength(0);
+    expect(relay.useAbilityCalls).toHaveLength(0);
+    expect(relay.equipCalls).toHaveLength(0);
+  });
+
+  it('422 INVALID_INTENT when the adapter rejects an illegal slot level', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 3 });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('INVALID_INTENT');
+    expect(relay.useAbilityCalls).toHaveLength(0);
+  });
+
+  it('check -> relay roll speaking as the actor, returns result + fresh sheet', async () => {
+    const { app, relay } = setup();
+    relay.rollResult = { formula: '1d20 + 6', total: 23, isCritical: false, isFumble: false };
+    const res = await post(app, 'a1', { kind: 'check', actionId: 'skill.ath', mode: 'advantage' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.rollCalls).toEqual([{ actorUuid: 'Actor.a1', formula: '1d20 + 6', flavor: 'Athletics' }]);
+    const body = res.json();
+    expect(body.result).toEqual({ formula: '1d20 + 6', total: 23, isCritical: false, isFumble: false });
+    expect(body.sheet.actorId).toBe('a1');
+  });
+
+  it('cast with slotLevel 2 -> use-spell on the item uuid with the slot level', async () => {
+    const { app, relay } = setup();
+    relay.useAbilityResult = { roll: { total: 11, formula: '4d6', isCritical: false, isFumble: false } };
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 2 });
+    expect(res.statusCode).toBe(200);
+    expect(relay.useAbilityCalls).toEqual([
+      { endpoint: 'use-spell', actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.s1', opts: { slotLevel: 2 } },
+    ]);
+    const body = res.json();
+    expect(body.result).toEqual({ total: 11, formula: '4d6', isCritical: false, isFumble: false });
+    expect(body.sheet.actorId).toBe('a1');
+  });
+
+  it('attack -> use-item without a slot level, null result when nothing rolled', async () => {
+    const { app, relay } = setup();
+    relay.useAbilityResult = { success: true }; // no roll in the response
+    const res = await post(app, 'a1', { kind: 'attack', actionId: 'item.i1.attack' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.useAbilityCalls).toEqual([
+      { endpoint: 'use-item', actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.i1', opts: {} },
+    ]);
+    expect(res.json().result).toBeNull();
+  });
+
+  it('equip -> equip-item with the desired state, result null', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'equip', actionId: 'item.i1.equip', equipped: true });
+    expect(res.statusCode).toBe(200);
+    expect(relay.equipCalls).toEqual([{ actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.i1', equipped: true }]);
+    const body = res.json();
+    expect(body.result).toBeNull();
+    expect(body.sheet.actorId).toBe('a1');
+  });
+
+  it('shares the write rate limit with intents', async () => {
+    const { app } = setup({ rateLimitMax: 5 });
+    for (let i = 0; i < 3; i++) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/actors/a1/intents',
+        headers: asAnna,
+        payload: { kind: 'delta', resourceId: 'hp', amount: 0 },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+    for (let i = 0; i < 2; i++) {
+      const res = await post(app, 'a1', { kind: 'check', actionId: 'skill.ath' });
+      expect(res.statusCode).toBe(200);
+    }
+    const res6 = await post(app, 'a1', { kind: 'check', actionId: 'skill.ath' });
+    expect(res6.statusCode).toBe(429);
+    expect(res6.json().error.code).toBe('RATE_LIMITED');
+  });
+
+  it('502 UPSTREAM on a relay failure without leaking secrets', async () => {
+    const { app, relay } = setup();
+    relay.actionError = true;
+    for (const payload of [
+      { kind: 'check', actionId: 'skill.ath' },
+      { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 1 },
+      { kind: 'equip', actionId: 'item.i1.equip', equipped: true },
+    ]) {
+      const res = await post(app, 'a1', payload);
+      expect(res.statusCode).toBe(502);
+      expect(res.json().error.code).toBe('UPSTREAM');
+      expect(res.body).not.toContain(FAKE_API_KEY);
+      expect(res.body).not.toContain(FAKE_RELAY_URL);
+    }
   });
 });
 

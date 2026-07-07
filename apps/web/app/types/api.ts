@@ -20,6 +20,19 @@ export interface SheetResponse {
   sheet: SheetViewModel
 }
 
+/** Roll outcome from POST /api/actors/:id/actions (null for e.g. equip). */
+export interface ActionRollResult {
+  total: number
+  formula: string
+  isCritical?: boolean
+  isFumble?: boolean
+}
+
+export interface ActionResponse {
+  result: ActionRollResult | null
+  sheet: SheetViewModel
+}
+
 export interface ApiErrorBody {
   error?: { code?: string; message?: string }
   /** 409 CONFLICT responses carry the fresh sheet. */

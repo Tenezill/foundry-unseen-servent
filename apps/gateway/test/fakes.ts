@@ -1,7 +1,10 @@
 /** Test doubles: an in-memory relay and a tiny clamping SystemAdapter. */
 import type {
+  ActionDescriptor,
+  ActionIntent,
   FoundryActorDoc,
   FoundryUpdate,
+  RelayAction,
   ResourceDescriptor,
   ResourceIntent,
   SheetViewModel,
@@ -81,6 +84,57 @@ export class FakeRelay implements RelayPort {
     for (const [path, value] of Object.entries(data)) setPath(target, path, value);
   }
 
+  // ---- actions (M6) --------------------------------------------------------
+
+  /** When set, rollFormula/useAbility/equipItem throw errors embedding secrets. */
+  actionError = false;
+  readonly rollCalls: Array<{ actorUuid: string; formula: string; flavor: string }> = [];
+  rollResult: { formula: string; total: number; isCritical?: boolean; isFumble?: boolean } = {
+    formula: '1d20 + 6',
+    total: 17,
+    isCritical: false,
+    isFumble: false,
+  };
+  readonly useAbilityCalls: Array<{
+    endpoint: 'use-item' | 'use-spell' | 'use-feature';
+    actorUuid: string;
+    itemUuid: string;
+    opts: { slotLevel?: number };
+  }> = [];
+  /** Response for useAbility (the relay's `data` payload, roll nested under `roll`). */
+  useAbilityResult: Record<string, unknown> = {};
+  readonly equipCalls: Array<{ actorUuid: string; itemUuid: string; equipped: boolean }> = [];
+
+  private throwActionError(endpoint: string): never {
+    throw new Error(`relay POST ${FAKE_RELAY_URL}/${endpoint} rejected key ${FAKE_API_KEY}`);
+  }
+
+  async rollFormula(
+    actorUuid: string,
+    formula: string,
+    flavor: string,
+  ): Promise<{ formula: string; total: number; [key: string]: unknown }> {
+    this.rollCalls.push({ actorUuid, formula, flavor });
+    if (this.actionError) this.throwActionError('roll');
+    return structuredClone(this.rollResult);
+  }
+
+  async useAbility(
+    endpoint: 'use-item' | 'use-spell' | 'use-feature',
+    actorUuid: string,
+    itemUuid: string,
+    opts: { slotLevel?: number } = {},
+  ): Promise<Record<string, unknown>> {
+    this.useAbilityCalls.push({ endpoint, actorUuid, itemUuid, opts: { ...opts } });
+    if (this.actionError) this.throwActionError(`dnd5e/${endpoint}`);
+    return structuredClone(this.useAbilityResult);
+  }
+
+  async equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void> {
+    this.equipCalls.push({ actorUuid, itemUuid, equipped });
+    if (this.actionError) this.throwActionError('dnd5e/equip-item');
+  }
+
   async subscribeHooks(
     hooks: string[],
     onEvent: (ev: { event: string; data: unknown }) => void,
@@ -139,6 +193,16 @@ function descriptors(actor: FoundryActorDoc): ResourceDescriptor[] {
   return out;
 }
 
+/** Fixed action list (M6): one check, one attack item, one leveled cast, one equip. */
+function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
+  return [
+    { id: 'skill.ath', label: 'Athletics', kind: 'check' },
+    { id: 'item.i1.attack', label: 'Arrows', kind: 'attack' },
+    { id: 'spell.s1.cast', label: 'Zap', kind: 'cast', slotLevels: [1, 2] },
+    { id: 'item.i1.equip', label: 'Arrows', kind: 'equip', equipped: false },
+  ];
+}
+
 export const fakeAdapter: SystemAdapter = {
   systemId: 'fake',
   toViewModel(actor: FoundryActorDoc): SheetViewModel {
@@ -163,7 +227,40 @@ export const fakeAdapter: SystemAdapter = {
     if (m) return { itemId: m[1] as string, data: { 'system.quantity': value } };
     throw new IntentError(`unknown resource ${intent.resourceId}`, 'UNKNOWN_RESOURCE');
   },
+  actions: actionList,
+  buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction {
+    const desc = actionList(actor).find((a) => a.id === intent.actionId);
+    if (!desc || desc.kind !== intent.kind) {
+      throw new IntentError(`unknown action ${intent.actionId}`, 'UNKNOWN_RESOURCE');
+    }
+    switch (intent.kind) {
+      case 'check':
+      case 'save':
+        return { endpoint: 'roll', formula: '1d20 + 6', flavor: desc.label };
+      case 'attack':
+        return { endpoint: 'use-item', itemId: 'i1' };
+      case 'use':
+        return { endpoint: 'use-feature', itemId: 'f1' };
+      case 'cast':
+        if (intent.slotLevel !== undefined && !(desc.slotLevels ?? []).includes(intent.slotLevel)) {
+          throw new IntentError(`illegal slot level ${intent.slotLevel}`, 'INVALID');
+        }
+        return {
+          endpoint: 'use-spell',
+          itemId: 's1',
+          ...(intent.slotLevel !== undefined ? { slotLevel: intent.slotLevel } : {}),
+        };
+      case 'equip':
+        return { endpoint: 'equip-item', itemId: 'i1', equipped: intent.equipped };
+    }
+  },
 };
+
+/** The same adapter with no action support at all (M6 rule: every action -> 403). */
+export const actionlessAdapter: SystemAdapter = (() => {
+  const { actions: _actions, buildAction: _buildAction, ...rest } = fakeAdapter;
+  return rest;
+})();
 
 export function actorDoc(id: string, name: string, hp: number, hpMax: number): Record<string, unknown> {
   return {

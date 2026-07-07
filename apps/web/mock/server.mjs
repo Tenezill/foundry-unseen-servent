@@ -5,7 +5,10 @@
  *
  * - Accepts the invite token "demo" (Bearer header or ?token=).
  * - Serves a mutable in-memory dnd5e-ish view model, STRICTLY in the
- *   SheetViewModel shape from @companion/adapter-sdk.
+ *   SheetViewModel shape from @companion/adapter-sdk (incl. M6 actions[]).
+ * - POST /api/actors/:id/actions validates like the real gateway (403 for
+ *   unknown action ids / kind mismatch, 422 for bad payloads) and returns
+ *   { result, sheet }. Roll totals cycle 8, 15, 20 (20 = critical).
  * - SSE per actor: current sheet on connect, ping every 25s, and a random
  *   HP drift every ~20s so live updates are visible without a GM.
  */
@@ -15,8 +18,19 @@ const PORT = Number(process.env.PORT || 8090)
 const TOKEN = 'demo'
 const PLAYER = { name: 'Demo Player', actorIds: ['a-sariel', 'a-brakk'] }
 
+const ABILITY_NAMES = {
+  str: 'Strength',
+  dex: 'Dexterity',
+  con: 'Constitution',
+  int: 'Intelligence',
+  wis: 'Wisdom',
+  cha: 'Charisma',
+}
+
 /* ------------------------------------------------------------------------- */
 /* Mutable resource state. Descriptors match adapter-sdk ResourceDescriptor.  */
+/* Internal-only fields on section defs (attackMod, equip, level, use) are    */
+/* stripped by buildSheet — the wire format stays SheetViewModel-strict.      */
 /* ------------------------------------------------------------------------- */
 
 function r(id, label, value, opts = {}) {
@@ -30,6 +44,7 @@ actors.set('a-sariel', {
   name: 'Sariel Dawnwhisper',
   img: '/icons/portrait-caster.svg',
   systemId: 'dnd5e',
+  baseAc: 12,
   resources: [
     r('hp', 'Hit Points', 24, { max: 31, group: 'hp' }),
     r('hp.temp', 'Temp HP', 0, { group: 'hp' }),
@@ -45,7 +60,6 @@ actors.set('a-sariel', {
     r('item.i-wand.uses', 'Wand of Magic Missiles', 5, { max: 7, group: 'items' }),
   ],
   headline: [
-    { id: 'ac', label: 'AC', value: 12 },
     { id: 'class', label: 'Class', value: 'Wizard 5' },
     { id: 'speed', label: 'Speed', value: '30 ft' },
     { id: 'prof', label: 'Prof', value: '+3' },
@@ -60,21 +74,31 @@ actors.set('a-sariel', {
       { id: 'wis', label: 'WIS', value: 12, sub: '+1' },
       { id: 'cha', label: 'CHA', value: 10, sub: '+0' },
     ],
+    skills: [
+      { id: 'arc', label: 'Arcana', value: '+7' },
+      { id: 'inv', label: 'Investigation', value: '+7' },
+      { id: 'per', label: 'Perception', value: '+1' },
+    ],
+    saves: [
+      { id: 'int', label: 'INT Save', value: '+7' },
+      { id: 'wis', label: 'WIS Save', value: '+4' },
+      { id: 'dex', label: 'DEX Save', value: '+2' },
+    ],
     inventory: [
-      { id: 'i-staff', label: 'Quarterstaff', sub: '1d6 bludgeoning' },
+      { id: 'i-staff', label: 'Quarterstaff', sub: '1d6 bludgeoning', attackMod: 2, equip: { equipped: false, acBonus: 0 } },
       { id: 'i-potion', label: 'Potion of Healing', sub: 'consumable', resourceId: 'item.i-potion.qty' },
       { id: 'i-wand', label: 'Wand of Magic Missiles', sub: 'charges', resourceId: 'item.i-wand.uses', tags: ['attuned'] },
       { id: 'i-book', label: 'Spellbook' },
       { id: 'i-pouch', label: 'Component Pouch' },
     ],
     spells: [
-      { id: 's-firebolt', label: 'Fire Bolt', sub: 'Cantrip · V,S' },
-      { id: 's-magearmor', label: 'Mage Armor', sub: '1st · V,S,M', tags: ['prepared'] },
-      { id: 's-mistystep', label: 'Misty Step', sub: '2nd · V' },
-      { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'] },
+      { id: 's-firebolt', label: 'Fire Bolt', sub: 'Cantrip · V,S', level: 0 },
+      { id: 's-magearmor', label: 'Mage Armor', sub: '1st · V,S,M', tags: ['prepared'], level: 1 },
+      { id: 's-mistystep', label: 'Misty Step', sub: '2nd · V', level: 2 },
+      { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'], level: 3 },
     ],
     features: [
-      { id: 'f-recovery', label: 'Arcane Recovery', sub: 'Wizard 1' },
+      { id: 'f-recovery', label: 'Arcane Recovery', sub: 'Wizard 1', use: true },
       { id: 'f-sculpt', label: 'Sculpt Spells', sub: 'Evocation 2' },
     ],
   },
@@ -85,6 +109,7 @@ actors.set('a-brakk', {
   name: 'Brakk Ironhide',
   img: '/icons/portrait-martial.svg',
   systemId: 'dnd5e',
+  baseAc: 16,
   resources: [
     r('hp', 'Hit Points', 39, { max: 45, group: 'hp' }),
     r('hp.temp', 'Temp HP', 0, { group: 'hp' }),
@@ -96,7 +121,6 @@ actors.set('a-brakk', {
     r('item.i-javelin.qty', 'Javelins', 4, { max: 12, group: 'items' }),
   ],
   headline: [
-    { id: 'ac', label: 'AC', value: 18 },
     { id: 'class', label: 'Class', value: 'Fighter 5' },
     { id: 'speed', label: 'Speed', value: '30 ft' },
     { id: 'prof', label: 'Prof', value: '+3' },
@@ -110,36 +134,129 @@ actors.set('a-brakk', {
       { id: 'wis', label: 'WIS', value: 13, sub: '+1' },
       { id: 'cha', label: 'CHA', value: 10, sub: '+0' },
     ],
+    skills: [
+      { id: 'ath', label: 'Athletics', value: '+7' },
+      { id: 'itm', label: 'Intimidation', value: '+3' },
+      { id: 'prc', label: 'Perception', value: '+4' },
+    ],
+    saves: [
+      { id: 'str', label: 'STR Save', value: '+7' },
+      { id: 'con', label: 'CON Save', value: '+6' },
+      { id: 'dex', label: 'DEX Save', value: '+1' },
+    ],
     inventory: [
-      { id: 'i-sword', label: 'Longsword', sub: '1d8 slashing', tags: ['equipped'] },
-      { id: 'i-bow', label: 'Longbow', sub: '1d8 piercing' },
+      { id: 'i-sword', label: 'Longsword', sub: '1d8 slashing', attackMod: 7, equip: { equipped: true, acBonus: 0 } },
+      { id: 'i-bow', label: 'Longbow', sub: '1d8 piercing', attackMod: 4, equip: { equipped: false, acBonus: 0 } },
       { id: 'i-arrows', label: 'Arrows', sub: 'ammunition', resourceId: 'item.i-arrows.qty' },
-      { id: 'i-javelin', label: 'Javelins', sub: '1d6 piercing', resourceId: 'item.i-javelin.qty' },
-      { id: 'i-shield', label: 'Shield', sub: '+2 AC', tags: ['equipped'] },
+      { id: 'i-javelin', label: 'Javelins', sub: '1d6 piercing', resourceId: 'item.i-javelin.qty', attackMod: 7 },
+      { id: 'i-shield', label: 'Shield', sub: '+2 AC', equip: { equipped: true, acBonus: 2 } },
     ],
     spells: null,
     features: [
-      { id: 'f-secondwind', label: 'Second Wind', sub: 'Fighter 1' },
-      { id: 'f-surge', label: 'Action Surge', sub: 'Fighter 2' },
+      { id: 'f-secondwind', label: 'Second Wind', sub: 'Fighter 1', use: true },
+      { id: 'f-surge', label: 'Action Surge', sub: 'Fighter 2', use: true },
     ],
   },
 })
 
 /* ------------------------------------------------------------------------- */
+/* Actions (M6): ActionDescriptor[] derived from the mutable state            */
+/* ------------------------------------------------------------------------- */
+
+function availableSlotLevels(actor, minLevel) {
+  return actor.resources
+    .filter((x) => x.group === 'slots' && x.value > 0)
+    .map((x) => Number(x.id.split('.')[1]))
+    .filter((n) => n >= minLevel)
+    .sort((a, b) => a - b)
+}
+
+function buildActions(actor) {
+  const s = actor.staticSections
+  const actions = []
+  for (const a of s.abilities) {
+    actions.push({ id: `ability.${a.id}.check`, label: `${ABILITY_NAMES[a.id]} check`, kind: 'check' })
+  }
+  for (const a of s.saves ?? []) {
+    actions.push({ id: `ability.${a.id}.save`, label: `${ABILITY_NAMES[a.id]} save`, kind: 'save' })
+  }
+  for (const a of s.skills ?? []) {
+    actions.push({ id: `skill.${a.id}`, label: `${a.label} check`, kind: 'check' })
+  }
+  for (const it of s.inventory) {
+    if (it.attackMod !== undefined) {
+      actions.push({ id: `item.${it.id}.attack`, label: it.label, kind: 'attack' })
+    }
+    if (it.equip) {
+      actions.push({ id: `item.${it.id}.equip`, label: it.label, kind: 'equip', equipped: it.equip.equipped })
+    }
+  }
+  for (const sp of s.spells ?? []) {
+    const a = { id: `spell.${sp.id}.cast`, label: sp.label, kind: 'cast' }
+    if (sp.level > 0) a.slotLevels = availableSlotLevels(actor, sp.level)
+    actions.push(a)
+  }
+  for (const f of s.features) {
+    if (f.use) actions.push({ id: `feature.${f.id}.use`, label: f.label, kind: 'use' })
+  }
+  return actions
+}
+
+/* ------------------------------------------------------------------------- */
 /* SheetViewModel assembly                                                    */
 /* ------------------------------------------------------------------------- */
 
+function listItem(def, actionId, equipActionId) {
+  const item = { id: def.id, label: def.label }
+  if (def.sub) item.sub = def.sub
+  if (def.img) item.img = def.img
+  if (def.resourceId) item.resourceId = def.resourceId
+  const tags = [...(def.tags ?? [])]
+  if (def.equip?.equipped) tags.push('equipped')
+  if (tags.length > 0) item.tags = tags
+  if (actionId) item.actionId = actionId
+  if (equipActionId) item.equipActionId = equipActionId
+  return item
+}
+
 function buildSheet(actor) {
   const s = actor.staticSections
+  const acBonus = s.inventory.reduce(
+    (sum, it) => sum + (it.equip?.equipped ? it.equip.acBonus : 0),
+    0,
+  )
+  const headline = [{ id: 'ac', label: 'AC', value: actor.baseAc + acBonus }, ...actor.headline]
+
   const sections = [
-    { kind: 'stats', id: 'abilities', label: 'Abilities', stats: s.abilities },
     {
-      kind: 'tracks',
-      id: 'hp',
-      label: 'Hit Points',
-      resourceIds: actor.resources.filter((x) => x.group === 'hp').map((x) => x.id),
+      kind: 'stats',
+      id: 'abilities',
+      label: 'Abilities',
+      stats: s.abilities.map((a) => ({ ...a, actionId: `ability.${a.id}.check` })),
     },
   ]
+  if (s.saves) {
+    sections.push({
+      kind: 'stats',
+      id: 'saves',
+      label: 'Saving Throws',
+      stats: s.saves.map((a) => ({ ...a, id: `save-${a.id}`, actionId: `ability.${a.id}.save` })),
+    })
+  }
+  if (s.skills) {
+    sections.push({
+      kind: 'stats',
+      id: 'skills',
+      label: 'Skills',
+      stats: s.skills.map((a) => ({ ...a, actionId: `skill.${a.id}` })),
+    })
+  }
+  sections.push({
+    kind: 'tracks',
+    id: 'hp',
+    label: 'Hit Points',
+    resourceIds: actor.resources.filter((x) => x.group === 'hp').map((x) => x.id),
+  })
   const slots = actor.resources.filter((x) => x.group === 'slots')
   if (slots.length > 0) {
     sections.push({ kind: 'tracks', id: 'slots', label: 'Spell Slots', resourceIds: slots.map((x) => x.id) })
@@ -163,21 +280,43 @@ function buildSheet(actor) {
       label: 'Currency',
       resourceIds: actor.resources.filter((x) => x.group === 'currency').map((x) => x.id),
     },
-    { kind: 'list', id: 'inventory', label: 'Inventory', items: s.inventory },
+    {
+      kind: 'list',
+      id: 'inventory',
+      label: 'Inventory',
+      items: s.inventory.map((it) =>
+        listItem(
+          it,
+          it.attackMod !== undefined ? `item.${it.id}.attack` : undefined,
+          it.equip ? `item.${it.id}.equip` : undefined,
+        ),
+      ),
+    },
   )
   if (s.spells) {
-    sections.push({ kind: 'list', id: 'spells', label: 'Spells', items: s.spells })
+    sections.push({
+      kind: 'list',
+      id: 'spells',
+      label: 'Spells',
+      items: s.spells.map((sp) => listItem(sp, `spell.${sp.id}.cast`, undefined)),
+    })
   }
-  sections.push({ kind: 'list', id: 'features', label: 'Features', items: s.features })
+  sections.push({
+    kind: 'list',
+    id: 'features',
+    label: 'Features',
+    items: s.features.map((f) => listItem(f, f.use ? `feature.${f.id}.use` : undefined, undefined)),
+  })
 
   return {
     actorId: actor.id,
     systemId: actor.systemId,
     name: actor.name,
     img: actor.img,
-    headline: actor.headline,
+    headline,
     sections,
     resources: actor.resources.map((x) => ({ ...x })),
+    actions: buildActions(actor),
   }
 }
 
@@ -281,6 +420,76 @@ function handleIntent(actor, intent, res) {
   broadcast(actor.id)
 }
 
+/* ---- POST /api/actors/:id/actions (M6) ----------------------------------- */
+
+const ROLL_TOTALS = [8, 15, 20]
+let rollCursor = 0
+
+function mockRoll(mode, mod) {
+  const total = ROLL_TOTALS[rollCursor++ % ROLL_TOTALS.length]
+  const die = mode === 'advantage' ? '2d20kh' : mode === 'disadvantage' ? '2d20kl' : '1d20'
+  return {
+    formula: `${die} + ${mod}`,
+    total,
+    isCritical: total === 20,
+    isFumble: false,
+  }
+}
+
+const ACTION_KINDS = ['check', 'save', 'attack', 'cast', 'use', 'equip']
+
+function handleAction(actor, intent, res) {
+  if (typeof intent !== 'object' || intent === null) {
+    return sendError(res, 422, 'INVALID_INTENT', 'body must be an ActionIntent object')
+  }
+  const { kind, actionId } = intent
+  if (!ACTION_KINDS.includes(kind)) {
+    return sendError(res, 422, 'INVALID_INTENT', `unknown action kind: ${String(kind)}`)
+  }
+  const action = buildActions(actor).find((a) => a.id === actionId)
+  if (!action || action.kind !== kind) {
+    return sendError(res, 403, 'FORBIDDEN_RESOURCE', `no such action: ${String(actionId)}`)
+  }
+
+  let result = null
+
+  if (kind === 'check' || kind === 'save') {
+    const { mode } = intent
+    if (mode !== undefined && mode !== 'advantage' && mode !== 'disadvantage') {
+      return sendError(res, 422, 'INVALID_INTENT', 'mode must be advantage or disadvantage')
+    }
+    result = mockRoll(mode, 5)
+  } else if (kind === 'attack') {
+    const itemId = actionId.split('.')[1]
+    const it = actor.staticSections.inventory.find((x) => x.id === itemId)
+    result = mockRoll(undefined, it?.attackMod ?? 5)
+  } else if (kind === 'cast') {
+    if (action.slotLevels !== undefined) {
+      const lvl = intent.slotLevel
+      if (typeof lvl !== 'number' || !action.slotLevels.includes(lvl)) {
+        return sendError(res, 422, 'INVALID_INTENT', `illegal slotLevel: ${String(intent.slotLevel)}`)
+      }
+      const slot = actor.resources.find((x) => x.id === `slots.${lvl}`)
+      slot.value = clamp(slot.value - 1, slot.min, slot.max)
+    } else if (intent.slotLevel !== undefined) {
+      return sendError(res, 422, 'INVALID_INTENT', 'cantrips take no slotLevel')
+    }
+    result = mockRoll(undefined, 7)
+  } else if (kind === 'use') {
+    result = mockRoll(undefined, 3)
+  } else if (kind === 'equip') {
+    if (typeof intent.equipped !== 'boolean') {
+      return sendError(res, 422, 'INVALID_INTENT', 'equipped must be a boolean')
+    }
+    const itemId = actionId.split('.')[1]
+    const it = actor.staticSections.inventory.find((x) => x.id === itemId)
+    it.equip.equipped = intent.equipped
+  }
+
+  sendJson(res, 200, { result, sheet: buildSheet(actor) })
+  broadcast(actor.id)
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`)
   const path = url.pathname
@@ -319,7 +528,7 @@ const server = createServer(async (req, res) => {
     })
   }
 
-  const match = path.match(/^\/api\/actors\/([^/]+)\/(sheet|intents|events)$/)
+  const match = path.match(/^\/api\/actors\/([^/]+)\/(sheet|intents|actions|events)$/)
   if (match) {
     const [, actorId, tail] = match
     const actor = PLAYER.actorIds.includes(actorId) ? actors.get(actorId) : undefined
@@ -329,14 +538,14 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 200, { sheet: buildSheet(actor) })
     }
 
-    if (tail === 'intents' && req.method === 'POST') {
-      let intent
+    if ((tail === 'intents' || tail === 'actions') && req.method === 'POST') {
+      let body
       try {
-        intent = JSON.parse((await readBody(req)) || 'null')
+        body = JSON.parse((await readBody(req)) || 'null')
       } catch {
         return sendError(res, 422, 'INVALID_INTENT', 'body is not valid JSON')
       }
-      return handleIntent(actor, intent, res)
+      return tail === 'intents' ? handleIntent(actor, body, res) : handleAction(actor, body, res)
     }
 
     if (tail === 'events' && req.method === 'GET') {

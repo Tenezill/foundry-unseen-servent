@@ -15,7 +15,16 @@ import Fastify, {
   type FastifyRequest,
   type FastifyServerOptions,
 } from 'fastify';
-import type { FoundryActorDoc, FoundryUpdate, ResourceIntent, SheetViewModel, SystemAdapter } from '@companion/adapter-sdk';
+import type {
+  ActionIntent,
+  FoundryActorDoc,
+  FoundryUpdate,
+  RelayAction,
+  ResourceIntent,
+  SheetActionKind,
+  SheetViewModel,
+  SystemAdapter,
+} from '@companion/adapter-sdk';
 import { IntentError } from '@companion/adapter-sdk';
 import { verifyToken, type Player } from './players.js';
 import { LiveManager } from './live.js';
@@ -28,6 +37,21 @@ export interface RelayPort {
   /** System-specific derived data (relay /<system>/get-actor-details). */
   getSystemDetails(systemPath: string, actorUuid: string, details: string[]): Promise<unknown>;
   updateEntity(uuid: string, data: Record<string, number | string | boolean>): Promise<void>;
+  /** POST /roll — roll a formula, chat card speaking as the actor (M6). */
+  rollFormula(
+    actorUuid: string,
+    formula: string,
+    flavor: string,
+  ): Promise<{ formula: string; total: number; [key: string]: unknown }>;
+  /** POST /dnd5e/use-* — the system's real usage workflow for an item (M6). */
+  useAbility(
+    endpoint: 'use-item' | 'use-spell' | 'use-feature',
+    actorUuid: string,
+    itemUuid: string,
+    opts?: { slotLevel?: number },
+  ): Promise<Record<string, unknown>>;
+  /** POST /dnd5e/equip-item — toggle an item's equipped state (M6). */
+  equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void>;
   /** World-level hooks SSE stream (the M0-verified push channel). */
   subscribeHooks(
     hooks: string[],
@@ -117,6 +141,66 @@ function parseIntent(body: Record<string, unknown>, resourceId: string): Resourc
       : { kind: 'delta', resourceId, amount: body.amount, expected };
   }
   return null;
+}
+
+/**
+ * Validate the per-kind extras of an action body. `kind` is the descriptor's
+ * kind (already confirmed to equal `body.kind` by the allow-list check).
+ */
+function parseActionIntent(
+  body: Record<string, unknown>,
+  actionId: string,
+  kind: SheetActionKind,
+): ActionIntent | null {
+  switch (kind) {
+    case 'check':
+    case 'save':
+      if (body.mode !== undefined && body.mode !== 'advantage' && body.mode !== 'disadvantage') return null;
+      return body.mode === undefined ? { kind, actionId } : { kind, actionId, mode: body.mode };
+    case 'attack':
+    case 'use':
+      return { kind, actionId };
+    case 'cast':
+      if (
+        body.slotLevel !== undefined &&
+        (typeof body.slotLevel !== 'number' || !Number.isInteger(body.slotLevel) || body.slotLevel < 0)
+      ) {
+        return null;
+      }
+      return body.slotLevel === undefined
+        ? { kind, actionId }
+        : { kind, actionId, slotLevel: body.slotLevel };
+    case 'equip':
+      if (typeof body.equipped !== 'boolean') return null;
+      return { kind, actionId, equipped: body.equipped };
+  }
+}
+
+/** The roll summary returned to the client for actions that rolled dice. */
+interface ActionRollResult {
+  total: number;
+  formula: string;
+  isCritical?: boolean;
+  isFumble?: boolean;
+}
+
+/**
+ * Pull `{total, formula, isCritical?, isFumble?}` out of a relay response:
+ * `rollFormula` returns the roll itself; the `use-*` endpoints nest it under
+ * `roll` (the M6-verified `data.roll` shape). Anything else -> null.
+ */
+function extractRoll(value: unknown): ActionRollResult | null {
+  if (value === null || typeof value !== 'object') return null;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.total === 'number' && typeof obj.formula === 'string') {
+    return {
+      total: obj.total,
+      formula: obj.formula,
+      ...(typeof obj.isCritical === 'boolean' ? { isCritical: obj.isCritical } : {}),
+      ...(typeof obj.isFumble === 'boolean' ? { isFumble: obj.isFumble } : {}),
+    };
+  }
+  return 'roll' in obj ? extractRoll(obj.roll) : null;
 }
 
 export function buildApp(deps: GatewayDeps): FastifyInstance {
@@ -348,6 +432,101 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const freshAdapter = adapterFor(fresh) ?? adapter;
       return reply.code(200).send({ sheet: buildSheet(freshAdapter, fresh) });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/actors/:id/actions',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const player = req.player as Player;
+
+      // Shares the write rate limit (and limiter instance) with intents.
+      if (!limiter.allow(player.tokenHash)) {
+        return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
+      }
+
+      // 1. Ownership (404, never 403 — do not leak actor existence).
+      const { id } = req.params;
+      if (!player.actorIds.includes(id)) return sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      const actor = await fetchActor(id);
+      if (!actor) return sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      const adapter = adapterFor(actor);
+      if (!adapter) return sendError(reply, 502, 'UPSTREAM', 'no adapter for actor system');
+
+      const body = req.body;
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        return sendError(reply, 422, 'INVALID_INTENT', 'action body must be an object');
+      }
+      const raw = body as Record<string, unknown>;
+      if (typeof raw.actionId !== 'string' || raw.actionId === '') {
+        return sendError(reply, 422, 'INVALID_INTENT', 'actionId is required');
+      }
+
+      // 2. Allow-list: the adapter's action list is the whole legal surface.
+      // An adapter without action support means every action is forbidden.
+      const descriptor =
+        adapter.actions && adapter.buildAction
+          ? adapter.actions(actor).find((a) => a.id === raw.actionId)
+          : undefined;
+      if (!descriptor || descriptor.kind !== raw.kind) {
+        return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'action does not exist or kind does not match');
+      }
+
+      // 3. Payload must validate.
+      const intent = parseActionIntent(raw, raw.actionId, descriptor.kind);
+      if (!intent) return sendError(reply, 422, 'INVALID_INTENT', 'invalid action payload');
+
+      // 4. Adapter translates the intent into a relay call.
+      let action: RelayAction;
+      try {
+        action = (adapter.buildAction as NonNullable<SystemAdapter['buildAction']>)(actor, intent);
+      } catch (err) {
+        if (err instanceof IntentError) {
+          switch (err.code) {
+            case 'UNKNOWN_RESOURCE':
+            case 'READ_ONLY':
+              return sendError(reply, 403, 'FORBIDDEN_RESOURCE', err.message);
+            case 'INVALID':
+              return sendError(reply, 422, 'INVALID_INTENT', err.message);
+            case 'CONFLICT':
+              return reply.code(409).send({
+                error: { code: 'CONFLICT', message: err.message },
+                sheet: buildSheet(adapter, actor),
+              });
+          }
+        }
+        throw err;
+      }
+
+      // 5. Execute via the relay (Foundry rolls, posts cards, consumes
+      // slots/uses itself). Relay failures throw -> 502 via setErrorHandler.
+      let result: ActionRollResult | null = null;
+      switch (action.endpoint) {
+        case 'roll':
+          result = extractRoll(await relay.rollFormula(`Actor.${id}`, action.formula, action.flavor));
+          break;
+        case 'use-item':
+        case 'use-spell':
+        case 'use-feature':
+          result = extractRoll(
+            await relay.useAbility(
+              action.endpoint,
+              `Actor.${id}`,
+              `Actor.${id}.Item.${action.itemId}`,
+              action.slotLevel !== undefined ? { slotLevel: action.slotLevel } : {},
+            ),
+          );
+          break;
+        case 'equip-item':
+          await relay.equipItem(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.equipped);
+          break;
+      }
+
+      const fresh = await fetchActor(id);
+      if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+      const freshAdapter = adapterFor(fresh) ?? adapter;
+      return reply.code(200).send({ result, sheet: buildSheet(freshAdapter, fresh) });
     },
   );
 

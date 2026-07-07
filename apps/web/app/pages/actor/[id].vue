@@ -26,7 +26,13 @@
 
       <main class="sheet-main">
         <template v-for="section in activeSections" :key="section.id">
-          <SectionStats v-if="section.kind === 'stats'" :section="section" />
+          <SectionStats
+            v-if="section.kind === 'stats'"
+            :section="section"
+            :readonly="offline"
+            :busy="actionBusy"
+            @action="onAction"
+          />
           <SectionTracks
             v-else-if="section.kind === 'tracks'"
             :section="section"
@@ -40,9 +46,12 @@
             v-else
             :section="section"
             :resources="resMap"
+            :actions="actionMap"
             :busy="busy"
+            :action-busy="actionBusy"
             :readonly="offline"
             @step="stepResource"
+            @action="onAction"
           />
         </template>
         <p v-if="activeSections.length === 0" class="tab-empty">Nothing on this tab.</p>
@@ -69,6 +78,19 @@
         @apply="applyNumpad"
         @close="numpadFor = null"
       />
+      <ActionSheet
+        v-if="sheetAction"
+        :action="sheetAction"
+        :busy="actionBusy !== null"
+        @submit="onActionSubmit"
+        @close="actionSheetFor = null"
+      />
+      <RollResultPill
+        v-if="lastRoll"
+        :result="lastRoll.result"
+        :label="lastRoll.label"
+        @dismiss="dismissRoll"
+      />
       <ConfirmDialog
         v-if="confirmState"
         :message="confirmState.message"
@@ -91,12 +113,14 @@
 
 <script setup lang="ts">
 import type {
+  ActionDescriptor,
+  ActionIntent,
   ResourceDescriptor,
   ResourceIntent,
   SheetSection,
   SheetViewModel,
 } from '@companion/adapter-sdk'
-import type { ApiErrorBody, SheetResponse } from '~/types/api'
+import type { ActionResponse, ActionRollResult, ApiErrorBody, SheetResponse } from '~/types/api'
 
 const LARGE_DELTA = 10
 
@@ -155,6 +179,19 @@ const resMap = computed<Record<string, ResourceDescriptor>>(() => {
 
 const numpadResource = computed(() =>
   numpadFor.value ? (resMap.value[numpadFor.value] ?? null) : null,
+)
+
+const actionMap = computed<Record<string, ActionDescriptor>>(() => {
+  const m: Record<string, ActionDescriptor> = {}
+  for (const a of sheet.value?.actions ?? []) m[a.id] = a
+  return m
+})
+
+const actionBusy = ref<string | null>(null)
+const actionSheetFor = ref<string | null>(null)
+
+const sheetAction = computed(() =>
+  actionSheetFor.value ? (actionMap.value[actionSheetFor.value] ?? null) : null,
 )
 
 /** System-agnostic tab routing: tracks -> Resources; lists by id/label keyword. */
@@ -296,6 +333,88 @@ function applyNumpad(delta: number): void {
   )
 }
 
+/* ---- actions (M6) --------------------------------------------------------- */
+
+const lastRoll = ref<{ result: ActionRollResult; label: string } | null>(null)
+let rollTimer: ReturnType<typeof setTimeout> | undefined
+
+function showRoll(result: ActionRollResult, label: string): void {
+  lastRoll.value = { result, label }
+  if (rollTimer !== undefined) clearTimeout(rollTimer)
+  rollTimer = setTimeout(() => (lastRoll.value = null), 6000)
+}
+
+function dismissRoll(): void {
+  if (rollTimer !== undefined) clearTimeout(rollTimer)
+  rollTimer = undefined
+  lastRoll.value = null
+}
+
+function onAction(actionId: string): void {
+  if (offline.value || actionBusy.value) return
+  const action = actionMap.value[actionId]
+  if (!action) return
+  switch (action.kind) {
+    case 'check':
+    case 'save':
+    case 'cast':
+      actionSheetFor.value = actionId
+      break
+    case 'attack':
+      void submitAction({ kind: 'attack', actionId }, action.label)
+      break
+    case 'use':
+      void submitAction({ kind: 'use', actionId }, action.label)
+      break
+    case 'equip':
+      void submitAction(
+        { kind: 'equip', actionId, equipped: !(action.equipped ?? false) },
+        action.label,
+      )
+      break
+  }
+}
+
+function onActionSubmit(intent: ActionIntent): void {
+  const label = actionMap.value[intent.actionId]?.label ?? 'Roll'
+  actionSheetFor.value = null
+  void submitAction(intent, label)
+}
+
+async function submitAction(intent: ActionIntent, label: string): Promise<void> {
+  if (offline.value || actionBusy.value) return
+  actionBusy.value = intent.actionId
+  try {
+    const res = await api<ActionResponse>(`/api/actors/${actorId.value}/actions`, {
+      method: 'POST',
+      body: intent,
+    })
+    applySheet(res.sheet)
+    if (res.result) {
+      showRoll(res.result, label)
+    } else if (intent.kind === 'equip') {
+      toast.show(`${label} ${intent.equipped ? 'equipped' : 'unequipped'}`)
+    } else {
+      toast.show(`${label} done — see Foundry chat`)
+    }
+  } catch (err) {
+    const status = errorStatus(err)
+    if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else if (status === 403 || status === 422) {
+      toast.show('That action isn’t available right now.')
+      void fetchSheet()
+    } else if (status === 429) {
+      toast.show('Slow down — too many actions at once')
+    } else {
+      toast.show('The table didn’t respond. Try again.')
+    }
+  } finally {
+    actionBusy.value = null
+  }
+}
+
 /* ---- live updates (SSE) -------------------------------------------------- */
 
 let es: EventSource | null = null
@@ -387,6 +506,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (rollTimer !== undefined) clearTimeout(rollTimer)
   closeEvents()
   window.removeEventListener('online', onOnline)
   window.removeEventListener('offline', onOffline)

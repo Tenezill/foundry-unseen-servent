@@ -24,11 +24,14 @@
  * This fallback is presentation-only — NOT a rules engine.
  */
 import type {
+  ActionDescriptor,
+  ActionIntent,
   AdapterIO,
   FoundryActorDoc,
   FoundryItemDoc,
   FoundryUpdate,
   ListItem,
+  RelayAction,
   ResourceDescriptor,
   ResourceIntent,
   SheetSection,
@@ -122,6 +125,9 @@ const SPELL_SCHOOLS: Record<string, string> = {
 };
 
 const PHYSICAL_ITEM_TYPES = new Set(['weapon', 'equipment', 'consumable', 'tool', 'container', 'loot']);
+
+/** dnd5e equipment `system.type.value`s that are armor/shield (equippable). */
+const ARMOR_EQUIPMENT_TYPES = new Set(['light', 'medium', 'heavy', 'natural', 'shield']);
 
 const CURRENCIES = [
   { id: 'pp', label: 'Platinum (pp)' },
@@ -503,23 +509,60 @@ function abilityStats(actor: FoundryActorDoc): Stat[] {
     label: a.label,
     value: abilityScore(actor.system, a.id),
     sub: signed(abilityMod(actor.system, a.id)),
+    actionId: `ability.${a.id}.check`,
   }));
 }
 
+/** Skill total + provenance shared by the view model and buildAction so the
+ * rolled bonus is exactly what the sheet shows (derived total preferred,
+ * fallback = ability mod + prof multiplier). */
+function skillInfo(actor: FoundryActorDoc, s: { id: string; ability: string }): { total: number; ability: string; profMult: number } {
+  const skill = rec(getPath(actor.system, `skills.${s.id}`));
+  const ability = typeof skill.ability === 'string' && skill.ability !== '' ? skill.ability : s.ability;
+  const profMult = typeof skill.value === 'number' && Number.isFinite(skill.value) ? skill.value : 0;
+  const derivedTotal = typeof skill.total === 'number' && Number.isFinite(skill.total) ? skill.total : undefined;
+  const total = derivedTotal ?? abilityMod(actor.system, ability) + Math.floor(profMult * proficiency(actor));
+  return { total, ability, profMult };
+}
+
+/** Save bonus = ability mod + prof when save-proficient (`abilities.<id>.proficient` >= 1). */
+function saveBonus(actor: FoundryActorDoc, abilityId: string): number {
+  const proficient = numAt(actor.system, `abilities.${abilityId}.proficient`) ?? 0;
+  return abilityMod(actor.system, abilityId) + (proficient >= 1 ? proficiency(actor) : 0);
+}
+
 function skillStats(actor: FoundryActorDoc): Stat[] {
-  const prof = proficiency(actor);
   return SKILLS.map((s) => {
-    const skill = rec(getPath(actor.system, `skills.${s.id}`));
-    const ability = typeof skill.ability === 'string' && skill.ability !== '' ? skill.ability : s.ability;
-    const profMult = typeof skill.value === 'number' && Number.isFinite(skill.value) ? skill.value : 0;
-    const derivedTotal = typeof skill.total === 'number' && Number.isFinite(skill.total) ? skill.total : undefined;
-    const total = derivedTotal ?? abilityMod(actor.system, ability) + Math.floor(profMult * prof);
+    const { total, ability, profMult } = skillInfo(actor, s);
     const subParts = [ability.toUpperCase()];
     if (profMult >= 2) subParts.push('expertise');
     else if (profMult >= 1) subParts.push('proficient');
     else if (profMult > 0) subParts.push('half proficiency');
-    return { id: `skill.${s.id}`, label: s.label, value: signed(total), sub: subParts.join(' · ') };
+    return {
+      id: `skill.${s.id}`,
+      label: s.label,
+      value: signed(total),
+      sub: subParts.join(' · '),
+      actionId: `skill.${s.id}`,
+    };
   });
+}
+
+/** Physical items whose equipped state the player may toggle: weapons plus
+ * equipment that is armor or a shield (clothing/trinkets stay untoggled). */
+function isEquippable(item: FoundryItemDoc): boolean {
+  if (item.type === 'weapon') return true;
+  if (item.type !== 'equipment') return false;
+  const typeVal = strAt(item.system, 'type.value');
+  return typeVal !== undefined && ARMOR_EQUIPMENT_TYPES.has(typeVal);
+}
+
+/** A feature is usable when it has activities to run or limited uses; a
+ * passive feat (no activities, no uses) gets no action. */
+function isUsableFeature(item: FoundryItemDoc): boolean {
+  if (item.type !== 'feat') return false;
+  const activities = rec(getPath(item.system, 'activities'));
+  return Object.keys(activities).length > 0 || usesInfo(item) !== undefined;
 }
 
 function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListItem {
@@ -539,6 +582,8 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>): List
     ...(item.img !== undefined ? { img: item.img } : {}),
     ...(resourceId !== undefined ? { resourceId } : {}),
     ...(tags.length > 0 ? { tags } : {}),
+    ...(item.type === 'weapon' ? { actionId: `item.${item._id}.attack` } : {}),
+    ...(isEquippable(item) ? { equipActionId: `item.${item._id}.equip` } : {}),
   };
 }
 
@@ -552,10 +597,12 @@ function featureListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListIt
     sub,
     ...(item.img !== undefined ? { img: item.img } : {}),
     ...(resourceIds.has(usesId) ? { resourceId: usesId } : {}),
+    ...(isUsableFeature(item) ? { actionId: `feature.${item._id}.use` } : {}),
   };
 }
 
 function spellListItem(item: FoundryItemDoc): ListItem {
+  const actionId = `spell.${item._id}.cast`;
   const level = numAt(item.system, 'level') ?? 0;
   const school = strAt(item.system, 'school');
   // dnd5e 5.3.3 (live-verified): `system.method` ("spell", …) plus a numeric
@@ -585,8 +632,147 @@ function spellListItem(item: FoundryItemDoc): ListItem {
     sub: subParts.join(' · '),
     ...(item.img !== undefined ? { img: item.img } : {}),
     ...(tags.length > 0 ? { tags } : {}),
+    actionId,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Actions (PLAN.md M6) — descriptors + intent -> relay call. The adapter only
+// describes what is possible and translates taps; Foundry owns all rules
+// (attack/damage math, slot & uses consumption, chat cards).
+
+/** Slot levels the actor can legally cast a level-`spellLevel` spell with
+ * right now: every `spells.spellN` with a remaining slot (`value > 0`) at
+ * `N >= spellLevel`. Requires the enriched document for accuracy, but the
+ * raw one degrades gracefully (source data still carries `value`). */
+function availableSlotLevels(actor: FoundryActorDoc, spellLevel: number): number[] {
+  const out: number[] = [];
+  for (let lvl = Math.max(1, spellLevel); lvl <= 9; lvl++) {
+    const value = numAt(actor.system, `spells.spell${lvl}.value`) ?? 0;
+    if (value > 0) out.push(lvl);
+  }
+  return out;
+}
+
+function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
+  const out: ActionDescriptor[] = [];
+  for (const s of SKILLS) {
+    out.push({ id: `skill.${s.id}`, label: s.label, kind: 'check' });
+  }
+  for (const a of ABILITIES) {
+    out.push({ id: `ability.${a.id}.check`, label: `${a.label} Check`, kind: 'check' });
+    out.push({ id: `ability.${a.id}.save`, label: `${a.label} Save`, kind: 'save' });
+  }
+  for (const item of actor.items ?? []) {
+    if (item.type === 'weapon') {
+      out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack' });
+    }
+    if (isEquippable(item)) {
+      out.push({
+        id: `item.${item._id}.equip`,
+        label: item.name,
+        kind: 'equip',
+        equipped: getPath(item.system, 'equipped') === true,
+      });
+    }
+    if (item.type === 'spell') {
+      // Deliberately offer EVERY spell on the sheet, prepared or not
+      // (mirrors spellListItem, which always sets actionId): dnd5e casts
+      // unprepared spells legitimately via rituals, always-prepared domain
+      // spells (`prepared: 2`), and table rulings. Foundry's use-spell
+      // workflow owns preparation/slot rules and is free to refuse; the
+      // sheet surfaces the prepared state as tags so the player can judge.
+      const level = numAt(item.system, 'level') ?? 0;
+      out.push({
+        id: `spell.${item._id}.cast`,
+        label: item.name,
+        kind: 'cast',
+        // cantrips are at-will: no slotLevels at all
+        ...(level > 0 ? { slotLevels: availableSlotLevels(actor, level) } : {}),
+      });
+    }
+    if (isUsableFeature(item)) {
+      out.push({ id: `feature.${item._id}.use`, label: item.name, kind: 'use' });
+    }
+  }
+  return out;
+}
+
+function d20Formula(bonus: number, mode: 'advantage' | 'disadvantage' | undefined): string {
+  const dice = mode === 'advantage' ? '2d20kh1' : mode === 'disadvantage' ? '2d20kl1' : '1d20';
+  return bonus < 0 ? `${dice} - ${-bonus}` : `${dice} + ${bonus}`;
+}
+
+function buildRollAction(
+  actor: FoundryActorDoc,
+  actionId: string,
+  mode: 'advantage' | 'disadvantage' | undefined,
+): RelayAction {
+  const skillMatch = /^skill\.([a-z]+)$/.exec(actionId);
+  if (skillMatch) {
+    const def = SKILLS.find((s) => s.id === skillMatch[1]);
+    if (!def) throw new IntentError(`unknown action "${actionId}"`, 'UNKNOWN_RESOURCE');
+    return { endpoint: 'roll', formula: d20Formula(skillInfo(actor, def).total, mode), flavor: `${def.label} Check` };
+  }
+  const abilityMatch = /^ability\.([a-z]+)\.(check|save)$/.exec(actionId);
+  const def = abilityMatch ? ABILITIES.find((a) => a.id === abilityMatch[1]) : undefined;
+  if (!abilityMatch || !def) throw new IntentError(`unknown action "${actionId}"`, 'UNKNOWN_RESOURCE');
+  if (abilityMatch[2] === 'check') {
+    return { endpoint: 'roll', formula: d20Formula(abilityMod(actor.system, def.id), mode), flavor: `${def.label} Check` };
+  }
+  return { endpoint: 'roll', formula: d20Formula(saveBonus(actor, def.id), mode), flavor: `${def.label} Save` };
+}
+
+function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction {
+  const descriptor = buildActions(actor).find((a) => a.id === intent.actionId);
+  if (!descriptor) {
+    throw new IntentError(`unknown action "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
+  }
+  if (descriptor.kind !== intent.kind) {
+    throw new IntentError(
+      `action "${intent.actionId}" is "${descriptor.kind}", not "${intent.kind}"`,
+      'UNKNOWN_RESOURCE',
+    );
+  }
+
+  switch (intent.kind) {
+    case 'check':
+    case 'save': {
+      const mode = intent.mode;
+      if (mode !== undefined && mode !== 'advantage' && mode !== 'disadvantage') {
+        throw new IntentError(`unknown roll mode "${String(mode)}"`, 'INVALID');
+      }
+      return buildRollAction(actor, intent.actionId, mode);
+    }
+    case 'attack':
+      return { endpoint: 'use-item', itemId: intent.actionId.slice('item.'.length, -'.attack'.length) };
+    case 'use':
+      return { endpoint: 'use-feature', itemId: intent.actionId.slice('feature.'.length, -'.use'.length) };
+    case 'cast': {
+      const itemId = intent.actionId.slice('spell.'.length, -'.cast'.length);
+      const slotLevel = intent.slotLevel;
+      if (slotLevel === undefined) return { endpoint: 'use-spell', itemId };
+      if (!Number.isInteger(slotLevel) || !(descriptor.slotLevels ?? []).includes(slotLevel)) {
+        throw new IntentError(`slot level ${String(slotLevel)} is not available for "${intent.actionId}"`, 'INVALID');
+      }
+      return { endpoint: 'use-spell', itemId, slotLevel };
+    }
+    case 'equip': {
+      if (typeof intent.equipped !== 'boolean') {
+        throw new IntentError('equip requires a boolean "equipped"', 'INVALID');
+      }
+      return {
+        endpoint: 'equip-item',
+        itemId: intent.actionId.slice('item.'.length, -'.equip'.length),
+        equipped: intent.equipped,
+      };
+    }
+    default:
+      throw new IntentError(`unknown intent kind "${String((intent as { kind: unknown }).kind)}"`, 'INVALID');
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   const resources = buildResources(actor);
@@ -655,6 +841,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     headline,
     sections,
     resources,
+    actions: buildActions(actor),
   };
 }
 
@@ -705,6 +892,8 @@ export const dnd5eAdapter: SystemAdapter = {
   toViewModel,
   resources: buildResources,
   buildUpdate,
+  actions: buildActions,
+  buildAction,
 };
 
 export default dnd5eAdapter;
