@@ -1,0 +1,229 @@
+{
+  "_id": "actorCaster00001",
+  "uuid": "Actor.actorCaster00001",
+  "name": "Seraphine Dawnwhisper",
+  "type": "character",
+  "img": "icons/svg/mystery-man.svg",
+  "system": {
+    "abilities": {
+      "str": { "value": 12, "mod": 1, "proficient": 0, "max": null, "bonuses": { "check": "", "save": "" } },
+      "dex": { "value": 10, "mod": 0, "proficient": 0, "max": null, "bonuses": { "check": "", "save": "" } },
+      "con": { "value": 14, "mod": 2, "proficient": 0, "max": null, "bonuses": { "check": "", "save": "" } },
+      "int": { "value": 11, "mod": 0, "proficient": 0, "max": null, "bonuses": { "check": "", "save": "" } },
+      "wis": { "value": 18, "mod": 4, "proficient": 1, "max": null, "bonuses": { "check": "", "save": "" } },
+      "cha": { "value": 13, "mod": 1, "proficient": 1, "max": null, "bonuses": { "check": "", "save": "" } }
+    },
+    "attributes": {
+      "hp": { "value": 33, "max": 33, "temp": 0, "tempmax": 0 },
+      "ac": { "flat": null, "calc": "default", "formula": "", "value": 18 },
+      "init": { "ability": "", "bonus": "", "total": 0 },
+      "movement": { "burrow": 0, "climb": 0, "fly": 0, "swim": 0, "walk": 25, "units": "ft", "hover": false },
+      "death": { "ability": "", "success": 0, "failure": 0 },
+      "attunement": { "max": 3 },
+      "exhaustion": 0,
+      "inspiration": false,
+      "prof": 3
+    },
+    "details": {
+      "alignment": "",
+      "race": "Hill Dwarf",
+      "background": "Acolyte",
+      "level": 5,
+      "xp": { "value": 6500 }
+    },
+    "skills": {
+      "acr": { "value": 0, "ability": "dex", "total": 0, "bonuses": { "check": "", "passive": "" } },
+      "ani": { "value": 0, "ability": "wis", "total": 4, "bonuses": { "check": "", "passive": "" } },
+      "arc": { "value": 0, "ability": "int", "total": 0, "bonuses": { "check": "", "passive": "" } },
+      "ath": { "value": 0, "ability": "str", "total": 1, "bonuses": { "check": "", "passive": "" } },
+      "dec": { "value": 0, "ability": "cha", "total": 1, "bonuses": { "check": "", "passive": "" } },
+      "his": { "value": 1, "ability": "int", "total": 3, "bonuses": { "check": "", "passive": "" } },
+      "ins": { "value": 1, "ability": "wis", "total": 7, "bonuses": { "check": "", "passive": "" } },
+      "itm": { "value": 0, "ability": "cha", "total": 1, "bonuses": { "check": "", "passive": "" } },
+      "inv": { "value": 0, "ability": "int", "total": 0, "bonuses": { "check": "", "passive": "" } },
+      "med": { "value": 1, "ability": "wis", "total": 7, "bonuses": { "check": "", "passive": "" } },
+      "nat": { "value": 0, "ability": "int", "total": 0, "bonuses": { "check": "", "passive": "" } },
+      "prc": { "value": 0, "ability": "wis", "total": 4, "bonuses": { "check": "", "passive": "" } },
+      "prf": { "value": 0, "ability": "cha", "total": 1, "bonuses": { "check": "", "passive": "" } },
+      "per": { "value": 1, "ability": "cha", "total": 4, "bonuses": { "check": "", "passive": "" } },
+      "rel": { "value": 0, "ability": "int", "total": 2, "bonuses": { "check": "+2", "passive": "" } },
+      "slt": { "value": 0, "ability": "dex", "total": 0, "bonuses": { "check": "", "passive": "" } },
+      "ste": { "value": 0, "ability": "dex", "total": 0, "bonuses": { "check": "", "passive": "" } },
+      "sur": { "value": 0, "ability": "wis", "total": 4, "bonuses": { "check": "", "passive": "" } }
+    },
+    "spells": {
+      "spell1": { "value": 2, "max": 4, "override": null },
+      "spell2": { "value": 1, "max": 3, "override": null },
+      "spell3": { "value": 2, "max": 2, "override": null },
+      "spell4": { "value": 0, "max": 0, "override": null },
+      "spell5": { "value": 0, "max": 0, "override": null },
+      "spell6": { "value": 0, "max": 0, "override": null },
+      "spell7": { "value": 0, "max": 0, "override": null },
+      "spell8": { "value": 0, "max": 0, "override": null },
+      "spell9": { "value": 0, "max": 0, "override": null },
+      "pact": { "value": 0, "max": 0, "override": null, "level": 0 }
+    },
+    "currency": { "pp": 1, "gp": 57, "ep": 0, "sp": 12, "cp": 3 },
+    "bonuses": {},
+    "traits": { "size": "med" }
+  },
+  "items": [
+    {
+      "_id": "clsCleric0000001",
+      "name": "Cleric",
+      "type": "class",
+      "img": "icons/svg/holy-symbol.svg",
+      "sort": 100000,
+      "system": {
+        "identifier": "cleric",
+        "levels": 5,
+        "hd": { "denomination": "d8", "spent": 0, "additional": "" },
+        "spellcasting": { "progression": "full", "ability": "wis" }
+      }
+    },
+    {
+      "_id": "itmMace000000001",
+      "name": "Mace",
+      "type": "weapon",
+      "img": "icons/svg/item-bag.svg",
+      "sort": 200000,
+      "system": {
+        "quantity": 1,
+        "weight": { "value": 4, "units": "lb" },
+        "equipped": true,
+        "type": { "value": "simpleM", "baseItem": "mace" },
+        "uses": { "spent": 0, "max": "", "recovery": [] }
+      }
+    },
+    {
+      "_id": "itmChainShirt001",
+      "name": "Chain Shirt",
+      "type": "equipment",
+      "img": "icons/svg/shield.svg",
+      "sort": 300000,
+      "system": {
+        "quantity": 1,
+        "weight": { "value": 20, "units": "lb" },
+        "equipped": true,
+        "type": { "value": "medium", "baseItem": "chainshirt" },
+        "uses": { "spent": 0, "max": "", "recovery": [] }
+      }
+    },
+    {
+      "_id": "itmShield0000001",
+      "name": "Shield",
+      "type": "equipment",
+      "img": "icons/svg/shield.svg",
+      "sort": 400000,
+      "system": {
+        "quantity": 1,
+        "weight": { "value": 6, "units": "lb" },
+        "equipped": true,
+        "type": { "value": "shield", "baseItem": "shield" },
+        "uses": { "spent": 0, "max": "", "recovery": [] }
+      }
+    },
+    {
+      "_id": "featChannelDiv01",
+      "name": "Channel Divinity",
+      "type": "feat",
+      "img": "icons/svg/upgrade.svg",
+      "sort": 500000,
+      "system": {
+        "type": { "value": "class", "subtype": "" },
+        "requirements": "Cleric 2",
+        "uses": { "spent": 1, "max": 2, "recovery": [{ "period": "sr", "type": "recoverAll" }] }
+      }
+    },
+    {
+      "_id": "splSacredFlame01",
+      "name": "Sacred Flame",
+      "type": "spell",
+      "img": "icons/svg/fire.svg",
+      "sort": 600000,
+      "system": {
+        "level": 0,
+        "school": "evo",
+        "method": "spell",
+        "prepared": 1,
+        "properties": ["vocal", "somatic"],
+        "uses": { "spent": 0, "max": "", "recovery": [] }
+      }
+    },
+    {
+      "_id": "splBless00000001",
+      "name": "Bless",
+      "type": "spell",
+      "img": "icons/svg/angel.svg",
+      "sort": 700000,
+      "system": {
+        "level": 1,
+        "school": "enc",
+        "method": "spell",
+        "prepared": 1,
+        "properties": ["vocal", "somatic", "material", "concentration"],
+        "uses": { "spent": 0, "max": "", "recovery": [] }
+      }
+    },
+    {
+      "_id": "splCureWounds001",
+      "name": "Cure Wounds",
+      "type": "spell",
+      "img": "icons/svg/heal.svg",
+      "sort": 800000,
+      "system": {
+        "level": 1,
+        "school": "evo",
+        "method": "spell",
+        "prepared": 1,
+        "properties": ["vocal", "somatic"],
+        "uses": { "spent": 0, "max": "", "recovery": [] }
+      }
+    },
+    {
+      "_id": "splDetectMagic01",
+      "name": "Detect Magic",
+      "type": "spell",
+      "img": "icons/svg/eye.svg",
+      "sort": 900000,
+      "system": {
+        "level": 1,
+        "school": "div",
+        "method": "spell",
+        "prepared": 2,
+        "properties": ["vocal", "somatic", "concentration", "ritual"],
+        "uses": { "spent": 0, "max": "", "recovery": [] }
+      }
+    },
+    {
+      "_id": "splSpiritWeapon1",
+      "name": "Spiritual Weapon",
+      "type": "spell",
+      "img": "icons/svg/sword.svg",
+      "sort": 1000000,
+      "system": {
+        "level": 2,
+        "school": "evo",
+        "method": "spell",
+        "prepared": 0,
+        "properties": ["vocal", "somatic"],
+        "uses": { "spent": 0, "max": "", "recovery": [] }
+      }
+    },
+    {
+      "_id": "splSpiritGuard01",
+      "name": "Spirit Guardians",
+      "type": "spell",
+      "img": "icons/svg/holy-shield.svg",
+      "sort": 1100000,
+      "system": {
+        "level": 3,
+        "school": "con",
+        "method": "spell",
+        "prepared": 1,
+        "properties": ["vocal", "somatic", "material", "concentration"],
+        "uses": { "spent": 0, "max": "", "recovery": [] }
+      }
+    }
+  ]
+}

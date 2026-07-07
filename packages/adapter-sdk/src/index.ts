@@ -60,6 +60,12 @@ export type ResourceIntent =
 
 /** Concrete Foundry update payload: dotted paths → values. */
 export interface FoundryUpdate {
+  /**
+   * When set, the update targets the embedded item document
+   * (`Actor.<actorId>.Item.<itemId>`) instead of the actor itself —
+   * used for item quantity/charges.
+   */
+  itemId?: string;
   /** e.g. { "system.attributes.hp.value": 17 } */
   data: Record<string, number | string | boolean>;
 }
@@ -105,9 +111,26 @@ export interface SheetViewModel {
   resources: ResourceDescriptor[];
 }
 
+/**
+ * IO handed to `SystemAdapter.enrich`: lets the adapter pull extra derived
+ * data for THIS actor from the relay's system-specific endpoints without
+ * knowing transport details (URLs/keys stay in foundry-client/gateway).
+ */
+export interface AdapterIO {
+  /** relay GET /<systemId>/get-actor-details?details=[…] for this actor. */
+  getSystemDetails(details: string[]): Promise<unknown>;
+}
+
 export interface SystemAdapter {
   /** Foundry system id this adapter handles, e.g. "dnd5e". */
   systemId: string;
+  /**
+   * Optional: merge derived data the relay's plain /get does not serialize
+   * (e.g. dnd5e spell-slot maxima) into the document before rendering.
+   * Must tolerate IO failure by returning the actor unchanged — a sheet
+   * with fallback bounds beats no sheet.
+   */
+  enrich?(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryActorDoc>;
   /** Raw Foundry actor document -> normalized view model. */
   toViewModel(actor: FoundryActorDoc): SheetViewModel;
   /** The writable resources this system exposes, with bounds. */
