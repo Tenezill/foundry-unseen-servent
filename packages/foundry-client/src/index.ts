@@ -59,6 +59,14 @@ export interface ActorEvent {
   data: unknown;
 }
 
+/** A named SSE event from the relay hooks stream. */
+export interface HookEvent {
+  /** SSE event name, e.g. "updateActor", "connected" */
+  event: string;
+  /** parsed data payload; hook events carry {data:{args:[<updated doc>, <diff>, …]}} */
+  data: unknown;
+}
+
 export class FoundryRelayClient {
   constructor(private readonly cfg: RelayConfig) {}
 
@@ -137,18 +145,39 @@ export class FoundryRelayClient {
   }
 
   /**
-   * GET /actor/subscribe?actorUuid=… — SSE push of actor changes.
-   * Calls `onEvent` for every event until `signal` aborts or the stream
-   * ends. Resolves when the stream closes; the caller owns reconnection.
+   * GET /hooks/subscribe?hooks=updateActor,… — SSE push of Foundry hook
+   * events. This is the live feed that works (M0-verified); a single
+   * subscription covers all actors — filter by the document `_id` in
+   * `data.args[0]`. Calls `onEvent` for every named event until `signal`
+   * aborts or the stream ends. Resolves when the stream closes; the caller
+   * owns reconnection.
+   */
+  async subscribeHooks(hooks: string[], onEvent: (ev: HookEvent) => void, signal: AbortSignal): Promise<void> {
+    await this.readSse('/hooks/subscribe', { hooks: hooks.join(',') }, signal, onEvent);
+  }
+
+  /**
+   * GET /actor/subscribe?actorUuid=… — per-actor SSE subscription.
+   * M0 finding: connects but delivers no update events in relay/module
+   * 3.4.1 — kept only for re-testing on upgrades. Prefer subscribeHooks.
    */
   async subscribeActor(actorUuid: string, onEvent: (ev: ActorEvent) => void, signal: AbortSignal): Promise<void> {
-    const endpoint = this.url('/actor/subscribe', { actorUuid });
+    await this.readSse('/actor/subscribe', { actorUuid }, signal, (ev) => onEvent({ actorUuid, data: ev.data }));
+  }
+
+  private async readSse(
+    path: string,
+    params: Record<string, string>,
+    signal: AbortSignal,
+    onEvent: (ev: HookEvent) => void,
+  ): Promise<void> {
+    const endpoint = this.url(path, params);
     const res = await fetch(endpoint, {
       headers: this.headers({ accept: 'text/event-stream' }),
       signal,
     });
     if (!res.ok || !res.body) {
-      throw new RelayError(`relay /actor/subscribe -> ${res.status}`, res.status, '/actor/subscribe');
+      throw new RelayError(`relay ${path} -> ${res.status}`, res.status, path);
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -163,10 +192,12 @@ export class FoundryRelayClient {
         if (sep === -1) break;
         const frame = buffer.slice(0, sep);
         buffer = buffer.slice(sep + 2);
-        const dataLines = frame
-          .split('\n')
-          .filter((l) => l.startsWith('data:'))
-          .map((l) => l.slice(5).trim());
+        let event = 'message';
+        const dataLines: string[] = [];
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+        }
         if (dataLines.length === 0) continue;
         const raw = dataLines.join('\n');
         let data: unknown = raw;
@@ -175,23 +206,24 @@ export class FoundryRelayClient {
         } catch {
           /* keep raw string */
         }
-        onEvent({ actorUuid, data });
+        onEvent({ event, data });
       }
     }
   }
 }
 
 /**
- * The /get envelope: v3 docs say "object containing entity details" without
- * a literal example. Handle both a bare document and common wrappers;
- * M0 live verification pins the actual shape.
+ * The /get envelope, M0-verified (relay 3.4.1):
+ * `{"type":"entity-result","requestId":"…","uuid":"Actor.x","data":{<doc>}}`.
+ * The envelope itself carries a top-level `uuid`, so `data` must be checked
+ * FIRST — a bare-document fallback is kept for older relays.
  */
 export function unwrapEntity(body: Record<string, unknown>): Record<string, unknown> | null {
   if (body === null || typeof body !== 'object') return null;
-  if (typeof body._id === 'string' || typeof body.uuid === 'string') return body;
-  for (const key of ['entity', 'data', 'result']) {
+  for (const key of ['data', 'entity', 'result']) {
     const inner = body[key];
-    if (inner && typeof inner === 'object') return inner as Record<string, unknown>;
+    if (inner && typeof inner === 'object' && !Array.isArray(inner)) return inner as Record<string, unknown>;
   }
-  return body;
+  if (typeof body._id === 'string') return body;
+  return null;
 }

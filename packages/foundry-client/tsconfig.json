@@ -1,7 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true
+    "noEmit": true,
+    // No @types/node in the workspace; the DOM lib supplies the web-standard
+    // globals (fetch, Response, URL, TextDecoder) this Node-22 code uses.
+    "lib": ["ES2022", "DOM"]
   },
   "include": ["src", "test"]
 }

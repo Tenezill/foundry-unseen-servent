@@ -1,0 +1,71 @@
+name: foundry-companion
+
+# Production stack (PLAN.md M5). Public surface = Caddy only:
+#   https://vtt.<domain>  -> Foundry (normal play)
+#   https://app.<domain>  -> PWA static files + /api -> gateway
+# The relay is NOT published; gateway reaches it on the internal network.
+#
+# Required: stack/.env (see .env.example) plus PROD_DOMAIN_* below,
+# and apps/gateway/players.yaml mounted as a secret.
+
+services:
+  caddy:
+    image: caddy:2.10
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../apps/web/.output/public:/srv/app:ro
+      - ./caddy-data:/data
+    restart: unless-stopped
+    depends_on:
+      - foundry
+      - gateway
+
+  foundry:
+    image: felddy/foundryvtt:13.351.0
+    env_file:
+      - path: .env
+        format: raw
+    environment:
+      - TIMEZONE=Europe/Vienna
+      - FOUNDRY_PROXY_SSL=true
+      - FOUNDRY_PROXY_PORT=443
+      - FOUNDRY_MINIFY_STATIC_FILES=true
+    expose:
+      - "30000"
+    volumes:
+      - ./foundry-data:/data
+    restart: unless-stopped
+
+  relay:
+    image: threehats/foundryvtt-rest-api-relay:3.4.1
+    environment:
+      - APP_ENV=production
+      - PORT=3010
+      - DB_TYPE=sqlite
+    expose:
+      - "3010"
+    volumes:
+      - ./relay-data:/app/data
+    restart: unless-stopped
+
+  gateway:
+    image: node:22-alpine
+    working_dir: /repo
+    command: sh -c "corepack enable && pnpm install --frozen-lockfile --filter @companion/gateway... && pnpm --filter @companion/gateway start"
+    environment:
+      - PORT=8090
+      - RELAY_URL=http://relay:3010
+      - RELAY_API_KEY=${RELAY_API_KEY}
+      - RELAY_CLIENT_ID=${RELAY_CLIENT_ID}
+      - PLAYERS_FILE=/run/secrets/players.yaml
+    expose:
+      - "8090"
+    volumes:
+      - ..:/repo
+      - ../apps/gateway/players.yaml:/run/secrets/players.yaml:ro
+    restart: unless-stopped
+    depends_on:
+      - relay

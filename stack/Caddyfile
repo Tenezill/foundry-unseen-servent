@@ -1,0 +1,18 @@
+# Replace the two hostnames with your real DNS names before deploying.
+# Caddy provisions Let's Encrypt certificates automatically.
+
+vtt.example.com {
+	reverse_proxy foundry:30000
+}
+
+app.example.com {
+	handle /api/* {
+		reverse_proxy gateway:8090
+	}
+	handle {
+		root * /srv/app
+		try_files {path} /index.html
+		file_server
+	}
+	encode gzip
+}
