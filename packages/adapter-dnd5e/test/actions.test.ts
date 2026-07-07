@@ -145,12 +145,12 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     expect(all).toHaveLength(55);
   });
 
-  it('leveled spells list the slot levels with remaining slots (raw capture: 1..3 all have value > 0)', () => {
+  it('a leveled spell with a base-level slot is directly castable (no slotLevels — the bridge casts at base only)', () => {
+    // Guiding Bolt (level 1); raw capture has spell1.value > 0.
     expect(action(casterCaptured, 'spell.pZMrJb3AXiRYO5E8.cast')).toEqual({
       id: 'spell.pZMrJb3AXiRYO5E8.cast',
       label: 'Guiding Bolt',
       kind: 'cast',
-      slotLevels: [1, 2, 3],
     });
   });
 
@@ -160,33 +160,22 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     expect(flame.slotLevels).toBeUndefined();
   });
 
-  it('slotLevels track the enriched slot values (empty levels drop out)', async () => {
+  it('a leveled spell with no base-level slot is disabled (slotLevels: []) — upcast is not supported by the bridge', async () => {
     if (!dnd5eAdapter.enrich) throw new Error('adapter must expose enrich()');
-    // Same merge path production uses: derived slot data via AdapterIO.
+    // Guiding Bolt is level 1; drain 1st-level slots but leave 2nd/3rd. Since
+    // the module casts at base level only, it is NOT castable.
     const enriched = await dnd5eAdapter.enrich(casterCaptured, {
       getSystemDetails: async () => ({
         spellSlots: {
-          spell1: { value: 0, max: 4 }, // all 1st-level slots spent
+          spell1: { value: 0, max: 4 },
           spell2: { value: 2, max: 3 },
           spell3: { value: 1, max: 1 },
         },
       }),
     });
-    expect(action(enriched, 'spell.pZMrJb3AXiRYO5E8.cast').slotLevels).toEqual([2, 3]);
-  });
-
-  it('a leveled spell above every remaining slot gets an empty slotLevels list', async () => {
-    if (!dnd5eAdapter.enrich) throw new Error('adapter must expose enrich()');
-    const enriched = await dnd5eAdapter.enrich(casterCaptured, {
-      getSystemDetails: async () => ({
-        spellSlots: {
-          spell1: { value: 0, max: 4 },
-          spell2: { value: 0, max: 3 },
-          spell3: { value: 0, max: 1 },
-        },
-      }),
-    });
     expect(action(enriched, 'spell.pZMrJb3AXiRYO5E8.cast').slotLevels).toEqual([]);
+    // ...and buildAction refuses it.
+    expect(() => build(enriched, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' })).toThrow(IntentError);
   });
 
   it('unprepared spells still get cast actions (deliberate: rituals/table rulings; Foundry owns the rules)', () => {
@@ -195,24 +184,15 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
       id: 'spell.9FrgmKwWCYPhlZ5w.cast',
       label: 'Bane',
       kind: 'cast',
-      slotLevels: [1, 2, 3],
     });
-    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.9FrgmKwWCYPhlZ5w.cast', slotLevel: 1 })).toEqual({
+    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.9FrgmKwWCYPhlZ5w.cast' })).toEqual({
       endpoint: 'use-spell',
       itemId: '9FrgmKwWCYPhlZ5w',
-      slotLevel: 1,
     });
     // Consistency with the view model: every spell row is tappable.
     const spells = section(casterCaptured, 'spells');
     if (spells.kind !== 'list') throw new Error('spells must be a list section');
     expect(spells.items.every((i) => i.actionId !== undefined)).toBe(true);
-  });
-
-  it('slotLevels start at the spell level (synthetic caster: level-2 spell with slots 1..3)', () => {
-    // caster.json has derived slot maxima inline: spell1 2/4, spell2 1/3, spell3 2/2.
-    expect(action(caster, 'spell.splSpiritWeapon1.cast').slotLevels).toEqual([2, 3]);
-    expect(action(caster, 'spell.splSpiritGuard01.cast').slotLevels).toEqual([3]);
-    expect(action(caster, 'spell.splBless00000001.cast').slotLevels).toEqual([1, 2, 3]);
   });
 });
 
@@ -306,15 +286,14 @@ describe('buildAction — attack / cast / use / equip', () => {
     });
   });
 
-  it('cast maps to use-spell, carrying a legal slotLevel', () => {
+  it('cast maps to use-spell at base level (a requested slotLevel is ignored — the bridge cannot upcast)', () => {
     expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast', slotLevel: 2 })).toEqual({
       endpoint: 'use-spell',
       itemId: 'pZMrJb3AXiRYO5E8',
-      slotLevel: 2,
     });
   });
 
-  it('cast without a slotLevel omits it (Foundry picks the default)', () => {
+  it('cantrip cast maps to use-spell with no slot', () => {
     expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.P97npemu7j70IZAQ.cast' })).toEqual({
       endpoint: 'use-spell',
       itemId: 'P97npemu7j70IZAQ',
@@ -361,19 +340,17 @@ describe('buildAction — rejections', () => {
     );
   });
 
-  it('illegal slot level -> INVALID', () => {
-    // No 4th-level slots on Akra.
+  it('casting a spell with no base-level slot -> INVALID (bridge casts at base only)', async () => {
+    if (!dnd5eAdapter.enrich) throw new Error('adapter must expose enrich()');
+    // Guiding Bolt is level 1; drain 1st-level slots (2nd/3rd remain but the
+    // module cannot upcast into them).
+    const drained = await dnd5eAdapter.enrich(casterCaptured, {
+      getSystemDetails: async () => ({
+        spellSlots: { spell1: { value: 0, max: 4 }, spell2: { value: 2, max: 3 }, spell3: { value: 1, max: 1 } },
+      }),
+    });
     expectIntentError(
-      () => build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast', slotLevel: 4 }),
-      'INVALID',
-    );
-    expectIntentError(
-      () => build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast', slotLevel: 1.5 }),
-      'INVALID',
-    );
-    // Cantrips take no slot level at all.
-    expectIntentError(
-      () => build(casterCaptured, { kind: 'cast', actionId: 'spell.P97npemu7j70IZAQ.cast', slotLevel: 1 }),
+      () => build(drained, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' }),
       'INVALID',
     );
   });

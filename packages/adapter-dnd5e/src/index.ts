@@ -641,17 +641,23 @@ function spellListItem(item: FoundryItemDoc): ListItem {
 // describes what is possible and translates taps; Foundry owns all rules
 // (attack/damage math, slot & uses consumption, chat cards).
 
-/** Slot levels the actor can legally cast a level-`spellLevel` spell with
- * right now: every `spells.spellN` with a remaining slot (`value > 0`) at
- * `N >= spellLevel`. Requires the enriched document for accuracy, but the
- * raw one degrades gracefully (source data still carries `value`). */
-function availableSlotLevels(actor: FoundryActorDoc, spellLevel: number): number[] {
-  const out: number[] = [];
-  for (let lvl = Math.max(1, spellLevel); lvl <= 9; lvl++) {
-    const value = numAt(actor.system, `spells.spell${lvl}.value`) ?? 0;
-    if (value > 0) out.push(lvl);
-  }
-  return out;
+/**
+ * Whether the actor can cast a level-`spellLevel` spell right now.
+ *
+ * The relay module (3.4.1) casts a spell only at its OWN base level and
+ * ignores any requested higher level — true upcasting is not supported over
+ * the bridge (M6-live-verified). So castable ⇔ a remaining slot exists at the
+ * spell's base level (`spells.spellN.value > 0`). Pact slots also satisfy a
+ * spell of level ≤ the pact slot level. Cantrips (level 0) are always at-will.
+ * Needs the enriched document for accuracy but degrades gracefully (source
+ * data still carries `value`).
+ */
+function canCastAtBase(actor: FoundryActorDoc, spellLevel: number): boolean {
+  if (spellLevel <= 0) return true;
+  if ((numAt(actor.system, `spells.spell${spellLevel}.value`) ?? 0) > 0) return true;
+  const pactValue = numAt(actor.system, 'spells.pact.value') ?? 0;
+  const pactLevel = numAt(actor.system, 'spells.pact.level') ?? 0;
+  return pactValue > 0 && pactLevel >= spellLevel;
 }
 
 function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
@@ -683,12 +689,16 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       // workflow owns preparation/slot rules and is free to refuse; the
       // sheet surfaces the prepared state as tags so the player can judge.
       const level = numAt(item.system, 'level') ?? 0;
+      // The bridge casts at base level only (no upcast), so a spell is either
+      // castable now (single Cast) or not (disabled). We signal this with
+      // slotLevels: absent = castable directly (cantrip or a base slot is
+      // free); [] = no slot, render disabled. No per-level picker — the
+      // module cannot honour a chosen higher level.
       out.push({
         id: `spell.${item._id}.cast`,
         label: item.name,
         kind: 'cast',
-        // cantrips are at-will: no slotLevels at all
-        ...(level > 0 ? { slotLevels: availableSlotLevels(actor, level) } : {}),
+        ...(level > 0 && !canCastAtBase(actor, level) ? { slotLevels: [] } : {}),
       });
     }
     if (isUsableFeature(item)) {
@@ -750,12 +760,13 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       return { endpoint: 'use-feature', itemId: intent.actionId.slice('feature.'.length, -'.use'.length) };
     case 'cast': {
       const itemId = intent.actionId.slice('spell.'.length, -'.cast'.length);
-      const slotLevel = intent.slotLevel;
-      if (slotLevel === undefined) return { endpoint: 'use-spell', itemId };
-      if (!Number.isInteger(slotLevel) || !(descriptor.slotLevels ?? []).includes(slotLevel)) {
-        throw new IntentError(`slot level ${String(slotLevel)} is not available for "${intent.actionId}"`, 'INVALID');
+      // slotLevels === [] means no slot is available at the spell's base
+      // level. The bridge casts at base only (no upcast), so intent.slotLevel
+      // is intentionally ignored — Foundry consumes the base-level slot.
+      if (descriptor.slotLevels !== undefined && descriptor.slotLevels.length === 0) {
+        throw new IntentError(`no spell slot available for "${intent.actionId}"`, 'INVALID');
       }
-      return { endpoint: 'use-spell', itemId, slotLevel };
+      return { endpoint: 'use-spell', itemId };
     }
     case 'equip': {
       if (typeof intent.equipped !== 'boolean') {

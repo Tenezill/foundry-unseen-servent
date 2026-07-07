@@ -183,10 +183,12 @@ export class FoundryRelayClient {
     itemUuid: string,
     opts: { slotLevel?: number } = {},
   ): Promise<Record<string, unknown>> {
+    // The module's upcast parameter is `level` (M6-live-verified: `slotLevel`
+    // and other names are not recognised and make the cast fail outright).
     const body = await this.request<{ data?: Record<string, unknown>; error?: string }>('POST', `/dnd5e/${endpoint}`, {}, {
       actorUuid,
       abilityUuid: itemUuid,
-      ...(opts.slotLevel !== undefined ? { slotLevel: opts.slotLevel } : {}),
+      ...(opts.slotLevel !== undefined ? { level: opts.slotLevel } : {}),
     });
     if (typeof body.error === 'string' && body.error !== '') {
       throw new RelayError(`relay /dnd5e/${endpoint}: ${body.error}`, 200, `/dnd5e/${endpoint}`);

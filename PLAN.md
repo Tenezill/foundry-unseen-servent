@@ -191,8 +191,16 @@ equipment), so this stays "companion, not builder": Foundry rolls, we tap.
 **Accept:** tapping Athletics in the app produces a chat card in Foundry
 speaking as the character within 2 s; casting a leveled spell consumes the slot
 in Foundry AND updates the app sheet; equip toggle changes AC on both ends.
-Known limit (documented): chat cards are authored by the module's GM user —
-per-player authorship needs per-player Foundry sessions (open-source-phase).
+Known limits (documented, M6-live-verified):
+- Chat cards are authored by the module's GM user but *speak as* the character
+  (card alias = character name); true per-player authorship needs per-player
+  Foundry sessions (open-source-phase).
+- The relay module (3.4.1) casts a spell at its **base level only** — it
+  ignores any requested higher slot level, so **upcasting is not supported**
+  over the bridge. The app therefore offers a single Cast per spell (consumes
+  a base-level slot) and disables it when no base-level slot remains, rather
+  than a misleading slot-level picker. Upcast is a v2 item if the module gains
+  support.
 
 ### v2 backlog (do not build in v1): Mörk Borg adapter, OIDC, push notifications ("you took damage"), GM dashboard, per-player roll authorship.
 
