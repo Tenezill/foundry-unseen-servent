@@ -62,6 +62,31 @@ Semantics (server-enforced, in this order):
 
 Rate limit: 30 write intents/min per token → `429 RATE_LIMITED`.
 
+### `POST /api/actors/:id/actions` (M6)
+Trigger a sheet action. The sheet's `actions` array (`ActionDescriptor[]`)
+lists everything legal; `actionId` must reference one of them.
+
+```json
+{ "kind": "check",  "actionId": "skill.ath", "mode": "advantage" }
+{ "kind": "save",   "actionId": "ability.con.save" }
+{ "kind": "attack", "actionId": "item.X3ab9.attack" }
+{ "kind": "cast",   "actionId": "spell.k9Q2f.cast", "slotLevel": 2 }
+{ "kind": "use",    "actionId": "feature.p0Wm1.use" }
+{ "kind": "equip",  "actionId": "item.X3ab9.equip", "equipped": false }
+```
+
+Semantics (server-enforced, in this order):
+1. Actor owned by token → else `404`.
+2. `actionId` present in the adapter's action list and `kind` matches →
+   else `403 FORBIDDEN_RESOURCE`.
+3. Payload valid (known kind, legal `slotLevel`…) → else `422 INVALID_INTENT`.
+4. Execute via the relay (Foundry rolls, posts chat cards as the character,
+   consumes slots/uses itself), then:
+   `200 { "result": { "total": 14, "formula": "1d20 + 5", "isCritical": false, "isFumble": false } | null, "sheet": SheetViewModel }`
+   (`result` is null for actions without a roll, e.g. equip.)
+
+Shares the write rate limit with intents (30/min per token).
+
 ### `GET /api/actors/:id/events` (SSE)
 `Content-Type: text/event-stream`. Events:
 

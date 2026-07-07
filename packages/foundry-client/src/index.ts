@@ -59,6 +59,15 @@ export interface ActorEvent {
   data: unknown;
 }
 
+/** Result of a /roll or /dnd5e use-* roll, as returned by the relay. */
+export interface RollResult {
+  formula: string;
+  total: number;
+  isCritical?: boolean;
+  isFumble?: boolean;
+  [key: string]: unknown;
+}
+
 /** A named SSE event from the relay hooks stream. */
 export interface HookEvent {
   /** SSE event name, e.g. "updateActor", "connected" */
@@ -147,6 +156,47 @@ export class FoundryRelayClient {
       details: JSON.stringify(details),
     });
     return body.data ?? body;
+  }
+
+  /**
+   * POST /roll — roll a formula in Foundry and post the chat card speaking
+   * as the given actor (M6-verified). Requires the roll:execute scope.
+   */
+  async rollFormula(actorUuid: string, formula: string, flavor: string): Promise<RollResult> {
+    const body = await this.request<{ data?: { roll?: RollResult } }>('POST', '/roll', {}, {
+      formula,
+      flavor,
+      speaker: actorUuid,
+      createChatMessage: true,
+    });
+    return body.data?.roll ?? { formula, total: Number.NaN };
+  }
+
+  /**
+   * POST /dnd5e/use-item|use-spell|use-feature — run the system's real usage
+   * workflow for an embedded item (chat card, slot/uses consumption).
+   * Addressed by item uuid (`Actor.<id>.Item.<id>`).
+   */
+  async useAbility(
+    endpoint: 'use-item' | 'use-spell' | 'use-feature',
+    actorUuid: string,
+    itemUuid: string,
+    opts: { slotLevel?: number } = {},
+  ): Promise<Record<string, unknown>> {
+    const body = await this.request<{ data?: Record<string, unknown>; error?: string }>('POST', `/dnd5e/${endpoint}`, {}, {
+      actorUuid,
+      abilityUuid: itemUuid,
+      ...(opts.slotLevel !== undefined ? { slotLevel: opts.slotLevel } : {}),
+    });
+    if (typeof body.error === 'string' && body.error !== '') {
+      throw new RelayError(`relay /dnd5e/${endpoint}: ${body.error}`, 200, `/dnd5e/${endpoint}`);
+    }
+    return body.data ?? {};
+  }
+
+  /** POST /dnd5e/equip-item — toggle an embedded item's equipped state. */
+  async equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void> {
+    await this.request('POST', '/dnd5e/equip-item', {}, { actorUuid, itemUuid, equipped });
   }
 
   /**

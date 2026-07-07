@@ -172,7 +172,29 @@ Nuxt app: join-link flow, actor picker, sheet screens (overview / resources / in
 Single `docker-compose.prod.yml`: Caddy (auto-TLS) + Foundry + relay (internal-only) + gateway + PWA static. Deploy on the VPS, migrate the group's world in, generate real invite tokens. Write `docs/OPERATIONS.md` (backup of Foundry data dir, update procedure honoring `VERSIONS.md`, token rotation).
 **Accept:** the group plays one real session using the app.
 
-### v2 backlog (do not build in v1): dice rolling into Foundry chat, Mörk Borg adapter, OIDC, push notifications ("you took damage"), GM dashboard.
+### M6 — Actions (scope amendment, Sebastian, 2026-07-07)
+v1 as originally cut turned out too passive to *play* with: players must be able
+to tap a skill/ability to roll it, attack with a weapon, cast a spell, use a
+feature, and change what is equipped. The M0/M6 spike showed the upstream
+module ships all of it (relay `/roll` posts chat cards speaking as the actor;
+`/dnd5e/use-item|use-spell|use-feature` run the real dnd5e usage workflow —
+chat card + automatic slot/uses consumption; `/dnd5e/equip-item` toggles
+equipment), so this stays "companion, not builder": Foundry rolls, we tap.
+- `adapter-sdk`: `ActionDescriptor`/`ActionIntent`/`RelayAction`; adapters may
+  expose `actions(actor)` + `buildAction(actor, intent)`; stats/list items
+  carry an optional `actionId`.
+- Gateway: `POST /api/actors/:id/actions` — ownership-scoped, allow-listed by
+  the adapter's action list (same philosophy as intents), rate-limited.
+- PWA: tappable skills/abilities (advantage/disadvantage sheet), Attack/Use
+  buttons on items & features, Cast with slot-level choice, equip toggles.
+- Relay API key needs the `roll:execute` scope.
+**Accept:** tapping Athletics in the app produces a chat card in Foundry
+speaking as the character within 2 s; casting a leveled spell consumes the slot
+in Foundry AND updates the app sheet; equip toggle changes AC on both ends.
+Known limit (documented): chat cards are authored by the module's GM user —
+per-player authorship needs per-player Foundry sessions (open-source-phase).
+
+### v2 backlog (do not build in v1): Mörk Borg adapter, OIDC, push notifications ("you took damage"), GM dashboard, per-player roll authorship.
 
 ---
 

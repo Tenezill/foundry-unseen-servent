@@ -77,6 +77,8 @@ export interface Stat {
   value: string | number;
   /** e.g. the modifier "+4" under an ability score, or "proficient". */
   sub?: string;
+  /** When set, tapping this stat triggers the referenced sheet action. */
+  actionId?: string;
 }
 
 /** One row in a list section (inventory, features, spells). */
@@ -90,6 +92,10 @@ export interface ListItem {
   resourceId?: string;
   /** Free-form badges, e.g. ["equipped"], ["prepared"], ["concentration"]. */
   tags?: string[];
+  /** Primary action for the row (attack, cast, use). */
+  actionId?: string;
+  /** Secondary equip/unequip toggle action, when applicable. */
+  equipActionId?: string;
 }
 
 export type SheetSection =
@@ -109,7 +115,44 @@ export interface SheetViewModel {
   sections: SheetSection[];
   /** Every tracked resource, including all writable ones. */
   resources: ResourceDescriptor[];
+  /** Every action the player may trigger (M6); referenced by actionId. */
+  actions?: ActionDescriptor[];
 }
+
+// ---------------------------------------------------------------------------
+// Actions (PLAN.md M6): tap a skill to roll it, attack, cast, use, equip.
+// Adapters describe what is possible; the gateway allow-lists against that
+// list; Foundry executes and owns all rules (slot/uses consumption, cards).
+
+export type SheetActionKind = 'check' | 'save' | 'attack' | 'cast' | 'use' | 'equip';
+
+export interface ActionDescriptor {
+  /** stable id, e.g. "skill.ath", "ability.str.save", "item.<id>.attack",
+   *  "spell.<id>.cast", "feature.<id>.use", "item.<id>.equip" */
+  id: string;
+  label: string;
+  kind: SheetActionKind;
+  /** cast only: slot levels currently legal (empty/absent = at-will/cantrip). */
+  slotLevels?: number[];
+  /** equip only: current state (the intent carries the desired state). */
+  equipped?: boolean;
+}
+
+export type ActionIntent =
+  | { kind: 'check' | 'save'; actionId: string; mode?: 'advantage' | 'disadvantage' }
+  | { kind: 'attack' | 'use'; actionId: string }
+  | { kind: 'cast'; actionId: string; slotLevel?: number }
+  | { kind: 'equip'; actionId: string; equipped: boolean };
+
+/**
+ * What the gateway should ask the relay to do. `roll` posts a chat card
+ * speaking as the actor; the `use-*` endpoints run the system's real usage
+ * workflow; `equip-item` toggles equipment state.
+ */
+export type RelayAction =
+  | { endpoint: 'roll'; formula: string; flavor: string }
+  | { endpoint: 'use-item' | 'use-spell' | 'use-feature'; itemId: string; slotLevel?: number }
+  | { endpoint: 'equip-item'; itemId: string; equipped: boolean };
 
 /**
  * IO handed to `SystemAdapter.enrich`: lets the adapter pull extra derived
@@ -141,6 +184,14 @@ export interface SystemAdapter {
    * to [min, max] from the descriptor.
    */
   buildUpdate(actor: FoundryActorDoc, intent: ResourceIntent): FoundryUpdate;
+  /** Optional (M6): every action the player may trigger on this actor. */
+  actions?(actor: FoundryActorDoc): ActionDescriptor[];
+  /**
+   * Optional (M6): action intent -> relay call. Must throw `IntentError`
+   * ('UNKNOWN_RESOURCE' for unknown action ids, 'INVALID' for bad params
+   * such as an illegal slot level).
+   */
+  buildAction?(actor: FoundryActorDoc, intent: ActionIntent): RelayAction;
 }
 
 /** Error contract so the gateway can map failures to HTTP codes. */
