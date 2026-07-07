@@ -10,6 +10,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @companion/gateway test:e2e",
     "dev:gateway": "pnpm --filter @companion/gateway dev",
     "dev:web": "pnpm --filter @companion/web dev"
   }
