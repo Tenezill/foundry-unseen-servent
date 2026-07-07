@@ -42,6 +42,11 @@ Summaries of the player's own actors only.
 Full `SheetViewModel` (see `packages/adapter-sdk`).
 → `200 { "sheet": SheetViewModel }`
 
+The view model also carries (M8): `conditions` (active effects as badges),
+`concentration` (`{label}` of the concentrated spell or `null`), and, on list
+items, an optional `detail` (the item's own description HTML from the world,
+for a detail view — the client sanitizes it).
+
 ### `POST /api/actors/:id/intents`
 Body: a single `ResourceIntent`:
 
@@ -70,10 +75,20 @@ lists everything legal; `actionId` must reference one of them.
 { "kind": "check",  "actionId": "skill.ath", "mode": "advantage" }
 { "kind": "save",   "actionId": "ability.con.save" }
 { "kind": "attack", "actionId": "item.X3ab9.attack" }
-{ "kind": "cast",   "actionId": "spell.k9Q2f.cast", "slotLevel": 2 }
+{ "kind": "cast",   "actionId": "spell.k9Q2f.cast" }
 { "kind": "use",    "actionId": "feature.p0Wm1.use" }
 { "kind": "equip",  "actionId": "item.X3ab9.equip", "equipped": false }
+{ "kind": "rest",   "actionId": "rest.short" }
+{ "kind": "rest",   "actionId": "rest.long" }
+{ "kind": "deathsave",       "actionId": "deathsave.roll" }
+{ "kind": "endconcentration","actionId": "concentration.end" }
 ```
+
+The M8 actor-command kinds (`rest`/`deathsave`/`endconcentration`) take no
+item target; the gateway runs the matching relay command
+(`short-rest`/`long-rest`/`death-save`/`break-concentration`) and returns the
+fresh sheet (`result` null — these post their own chat card). `cast` no longer
+takes `slotLevel`: the bridge casts at base level only (see M6 known limits).
 
 Semantics (server-enforced, in this order):
 1. Actor owned by token → else `404`.

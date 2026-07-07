@@ -96,6 +96,21 @@ export interface ListItem {
   actionId?: string;
   /** Secondary equip/unequip toggle action, when applicable. */
   equipActionId?: string;
+  /**
+   * Rich description for a detail view (M8). This is content from the user's
+   * OWN world (the item's own description) — the app only ever renders what
+   * the world legally contains; the repo ships no game-rules text. May be
+   * HTML; the client sanitizes before rendering.
+   */
+  detail?: string;
+}
+
+/** An active condition/effect on the actor (M8), shown as a badge. */
+export interface Condition {
+  id: string;
+  label: string;
+  /** icon path served by Foundry (optional; client falls back to a glyph). */
+  icon?: string;
 }
 
 export type SheetSection =
@@ -117,6 +132,10 @@ export interface SheetViewModel {
   resources: ResourceDescriptor[];
   /** Every action the player may trigger (M6); referenced by actionId. */
   actions?: ActionDescriptor[];
+  /** Active conditions/effects on the actor (M8). */
+  conditions?: Condition[];
+  /** The spell being concentrated on, if any (M8, dnd5e: from effects). */
+  concentration?: { label: string } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,11 +143,22 @@ export interface SheetViewModel {
 // Adapters describe what is possible; the gateway allow-lists against that
 // list; Foundry executes and owns all rules (slot/uses consumption, cards).
 
-export type SheetActionKind = 'check' | 'save' | 'attack' | 'cast' | 'use' | 'equip';
+export type SheetActionKind =
+  | 'check'
+  | 'save'
+  | 'attack'
+  | 'cast'
+  | 'use'
+  | 'equip'
+  // M8 actor-scoped commands (no item target):
+  | 'rest'
+  | 'deathsave'
+  | 'endconcentration';
 
 export interface ActionDescriptor {
   /** stable id, e.g. "skill.ath", "ability.str.save", "item.<id>.attack",
-   *  "spell.<id>.cast", "feature.<id>.use", "item.<id>.equip" */
+   *  "spell.<id>.cast", "feature.<id>.use", "item.<id>.equip",
+   *  "rest.short", "rest.long", "deathsave.roll", "concentration.end" */
   id: string;
   label: string;
   kind: SheetActionKind;
@@ -142,17 +172,20 @@ export type ActionIntent =
   | { kind: 'check' | 'save'; actionId: string; mode?: 'advantage' | 'disadvantage' }
   | { kind: 'attack' | 'use'; actionId: string }
   | { kind: 'cast'; actionId: string; slotLevel?: number }
-  | { kind: 'equip'; actionId: string; equipped: boolean };
+  | { kind: 'equip'; actionId: string; equipped: boolean }
+  | { kind: 'rest' | 'deathsave' | 'endconcentration'; actionId: string };
 
 /**
  * What the gateway should ask the relay to do. `roll` posts a chat card
  * speaking as the actor; the `use-*` endpoints run the system's real usage
- * workflow; `equip-item` toggles equipment state.
+ * workflow; `equip-item` toggles equipment; the actor-command endpoints
+ * (M8, no item target) run rests, a death save, or drop concentration.
  */
 export type RelayAction =
   | { endpoint: 'roll'; formula: string; flavor: string }
   | { endpoint: 'use-item' | 'use-spell' | 'use-feature'; itemId: string; slotLevel?: number }
-  | { endpoint: 'equip-item'; itemId: string; equipped: boolean };
+  | { endpoint: 'equip-item'; itemId: string; equipped: boolean }
+  | { endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration' };
 
 /**
  * IO handed to `SystemAdapter.enrich`: lets the adapter pull extra derived

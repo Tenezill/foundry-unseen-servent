@@ -202,6 +202,29 @@ export class FoundryRelayClient {
   }
 
   /**
+   * POST /dnd5e/{short-rest|long-rest|death-save|break-concentration} — an
+   * actor-scoped command (no item). M8-verified: `actorUuid` goes in the
+   * query, no body needed; Foundry applies the result and posts any card.
+   * death-save returns a roll under `data`; the others return a result
+   * summary we ignore (the caller re-fetches the sheet).
+   */
+  async actorCommand(
+    endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration',
+    actorUuid: string,
+  ): Promise<Record<string, unknown>> {
+    const body = await this.request<{ data?: Record<string, unknown>; error?: string }>(
+      'POST',
+      `/dnd5e/${endpoint}`,
+      { actorUuid },
+      {},
+    );
+    if (typeof body.error === 'string' && body.error !== '') {
+      throw new RelayError(`relay /dnd5e/${endpoint}: ${body.error}`, 200, `/dnd5e/${endpoint}`);
+    }
+    return body.data ?? {};
+  }
+
+  /**
    * PUT /update — apply a dot-notation update to an entity. The payload is
    * passed straight to Foundry's Document.update(), e.g.
    * `{ "system.attributes.hp.value": 25 }`.
