@@ -1,0 +1,18 @@
+{
+  "name": "@companion/adapter-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"types-only package, covered by consumers\""
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

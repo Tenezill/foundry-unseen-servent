@@ -1,0 +1,24 @@
+{
+  "name": "@companion/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@companion/adapter-dnd5e": "workspace:*",
+    "@companion/adapter-sdk": "workspace:*",
+    "@companion/foundry-client": "workspace:*",
+    "fastify": "^5.0.0",
+    "tsx": "^4.19.0",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

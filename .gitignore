@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.output/
+.nuxt/
+coverage/
+*.log
+
+# secrets & local runtime state
+.env
+stack/.env
+stack/foundry-data/
+stack/relay-data/
+stack/caddy-data/
+apps/gateway/players.yaml
+
+licence

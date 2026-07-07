@@ -1,0 +1,32 @@
+name: foundry-companion-dev
+
+services:
+  foundry:
+    image: felddy/foundryvtt:13.351.0
+    hostname: foundry
+    env_file:
+      # raw: passwords may contain $ — no compose interpolation
+      - path: .env
+        format: raw
+    environment:
+      - TIMEZONE=Europe/Vienna
+      - FOUNDRY_HOSTNAME=localhost
+      - FOUNDRY_LOCAL_HOSTNAME=localhost
+      - FOUNDRY_MINIFY_STATIC_FILES=true
+    ports:
+      - "30000:30000"
+    volumes:
+      - ./foundry-data:/data
+    restart: unless-stopped
+
+  relay:
+    image: threehats/foundryvtt-rest-api-relay:3.4.1
+    environment:
+      - APP_ENV=production
+      - PORT=3010
+      - DB_TYPE=sqlite
+    ports:
+      - "3010:3010"
+    volumes:
+      - ./relay-data:/app/data
+    restart: unless-stopped

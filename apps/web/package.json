@@ -1,0 +1,23 @@
+{
+  "name": "@companion/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck",
+    "test": "echo \"e2e via stack, no unit tests in v1\""
+  },
+  "dependencies": {
+    "nuxt": "^4.0.0",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@vite-pwa/nuxt": "^1.0.0",
+    "typescript": "^5.7.0",
+    "vue-tsc": "^2.1.0"
+  }
+}
