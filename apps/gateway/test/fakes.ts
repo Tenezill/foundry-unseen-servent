@@ -135,6 +135,22 @@ export class FakeRelay implements RelayPort {
     if (this.actionError) this.throwActionError('dnd5e/equip-item');
   }
 
+  readonly actorCommandCalls: Array<{
+    endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration';
+    actorUuid: string;
+  }> = [];
+  /** Response for actorCommand (the relay's `data` payload; empty by default). */
+  actorCommandResult: Record<string, unknown> = {};
+
+  async actorCommand(
+    endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration',
+    actorUuid: string,
+  ): Promise<Record<string, unknown>> {
+    this.actorCommandCalls.push({ endpoint, actorUuid });
+    if (this.actionError) this.throwActionError(`dnd5e/${endpoint}`);
+    return structuredClone(this.actorCommandResult);
+  }
+
   async subscribeHooks(
     hooks: string[],
     onEvent: (ev: { event: string; data: unknown }) => void,
@@ -200,6 +216,10 @@ function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
     { id: 'item.i1.attack', label: 'Arrows', kind: 'attack' },
     { id: 'spell.s1.cast', label: 'Zap', kind: 'cast', slotLevels: [1, 2] },
     { id: 'item.i1.equip', label: 'Arrows', kind: 'equip', equipped: false },
+    { id: 'rest.short', label: 'Short Rest', kind: 'rest' },
+    { id: 'rest.long', label: 'Long Rest', kind: 'rest' },
+    { id: 'deathsave.roll', label: 'Death Save', kind: 'deathsave' },
+    { id: 'concentration.end', label: 'End Concentration', kind: 'endconcentration' },
   ];
 }
 
@@ -252,6 +272,12 @@ export const fakeAdapter: SystemAdapter = {
         };
       case 'equip':
         return { endpoint: 'equip-item', itemId: 'i1', equipped: intent.equipped };
+      case 'rest':
+        return { endpoint: intent.actionId === 'rest.long' ? 'long-rest' : 'short-rest' };
+      case 'deathsave':
+        return { endpoint: 'death-save' };
+      case 'endconcentration':
+        return { endpoint: 'break-concentration' };
     }
   },
 };

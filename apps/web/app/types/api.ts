@@ -33,6 +33,16 @@ export interface ActionResponse {
   sheet: SheetViewModel
 }
 
+/** One client-side roll-history entry (in-memory, last ~20; not persisted). */
+export interface RollLogEntry {
+  id: number
+  label: string
+  total: number
+  formula: string
+  isCritical: boolean
+  isFumble: boolean
+}
+
 export interface ApiErrorBody {
   error?: { code?: string; message?: string }
   /** 409 CONFLICT responses carry the fresh sheet. */

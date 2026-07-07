@@ -3,6 +3,9 @@
     <h2 class="section-title">{{ group.label }}</h2>
     <div class="list card">
       <div v-for="action in group.actions" :key="action.id" class="row">
+        <span class="ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path :d="group.icon" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        </span>
         <div class="row-main">
           <span class="row-label">{{ action.label }}</span>
           <span v-if="noSlots(action)" class="row-sub">No spell slots left</span>
@@ -36,9 +39,9 @@ const emit = defineEmits<{
 }>()
 
 const GROUP_DEFS = [
-  { id: 'attacks', label: 'Attacks', kind: 'attack', verb: 'Attack' },
-  { id: 'spells', label: 'Spells', kind: 'cast', verb: 'Cast' },
-  { id: 'features', label: 'Features', kind: 'use', verb: 'Use' },
+  { id: 'attacks', label: 'Attacks', kind: 'attack', verb: 'Attack', icon: 'M14.5 3.5 21 10l-2 2-6.5-6.5ZM3 21l7-7M6.5 17.5 3 21' },
+  { id: 'spells', label: 'Spells', kind: 'cast', verb: 'Cast', icon: 'M12 3l1.8 4.9L18.8 9l-4.9 1.8L12 15.7 10.2 10.8 5.2 9l5-1.1ZM18 15l.9 2.4 2.4.9-2.4.9L18 22l-.9-2.4-2.4-.9 2.4-.9Z' },
+  { id: 'features', label: 'Features', kind: 'use', verb: 'Use', icon: 'M13 2 4 14h6l-1 8 9-12h-6z' },
 ] as const
 
 /** Non-empty groups only — empty headers are omitted. */
@@ -63,12 +66,28 @@ function noSlots(action: ActionDescriptor): boolean {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   min-height: 60px;
 }
 
 .row + .row {
   border-top: 1px solid var(--line);
+}
+
+.ico {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--gold) 16%, var(--panel-2));
+  color: var(--gold-bright);
+}
+
+.ico svg {
+  width: 18px;
+  height: 18px;
 }
 
 .row-main {
@@ -81,7 +100,7 @@ function noSlots(action: ActionDescriptor): boolean {
 
 .row-label {
   font-weight: 600;
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -89,7 +108,7 @@ function noSlots(action: ActionDescriptor): boolean {
 
 .row-sub {
   font-size: 0.76rem;
-  color: var(--text-dim);
+  color: var(--ink-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -98,13 +117,15 @@ function noSlots(action: ActionDescriptor): boolean {
 .act-btn {
   flex: none;
   min-height: 36px;
-  padding: 0 14px;
+  padding: 0 16px;
   border-radius: 999px;
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  border: 1px solid transparent;
-  background: var(--accent-soft);
-  color: var(--accent);
+  letter-spacing: 0.02em;
+  border: 1px solid var(--gold-deep);
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  color: var(--accent-ink);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--gold) 30%, transparent);
 }
 
 .act-btn:active:not(:disabled) {

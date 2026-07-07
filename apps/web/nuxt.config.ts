@@ -27,6 +27,13 @@ export default defineNuxtConfig({
     public: {
       /** Gateway base URL; '' = same-origin (prod default behind Caddy). */
       apiBase: '',
+      /**
+       * Foundry origin (e.g. https://foundry.example). Actor/effect images are
+       * world-relative Foundry paths ('systems/dnd5e/…'); when set, the hero
+       * medallion and condition badges prefix relative paths with this origin.
+       * '' leaves paths as-is (same-origin/absolute), falling back to a glyph.
+       */
+      foundryBase: '',
     },
   },
 
@@ -42,7 +49,7 @@ export default defineNuxtConfig({
       title: 'Foundry Companion',
       meta: [
         { name: 'viewport', content: 'width=device-width, initial-scale=1, viewport-fit=cover' },
-        { name: 'theme-color', content: '#111318' },
+        { name: 'theme-color', content: '#131017' },
         { name: 'apple-mobile-web-app-capable', content: 'yes' },
         { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
       ],
@@ -59,8 +66,8 @@ export default defineNuxtConfig({
       name: 'Foundry Companion',
       short_name: 'Companion',
       description: 'Your character sheet, live from the table.',
-      theme_color: '#111318',
-      background_color: '#111318',
+      theme_color: '#131017',
+      background_color: '#131017',
       display: 'standalone',
       orientation: 'portrait',
       start_url: '/',

@@ -1,59 +1,133 @@
 /* ---------------------------------------------------------------------------
-   Foundry Companion — design tokens & base styles.
-   Mobile-first (390px baseline), dark-mode-first, one amber accent.
+   Foundry Companion — the "Gilded Tome" design system (M7).
+
+   Two worlds share one token set:
+     • dark  "Midnight Tome"   (default)
+     • light "Aged Parchment"
+
+   Selection: prefers-color-scheme picks the default world; a `data-theme`
+   attribute on <html> overrides it (higher specificity always wins, so source
+   order is irrelevant — same trick as the approved mockup).
+
+   Components consume tokens only. Legacy semantic aliases (--surface, --accent,
+   --text …) map onto the gilded palette so every existing component is regilded
+   without a rewrite; they resolve per-theme because they reference the palette
+   tokens via var().
 --------------------------------------------------------------------------- */
 
 :root {
   color-scheme: dark;
 
-  --bg: #0e1014;
-  --surface: #171a21;
-  --surface-2: #1e222c;
-  --text: #e9ebf1;
-  --text-dim: #9aa1b2;
-  --line: rgba(255, 255, 255, 0.08);
+  /* ---- Midnight Tome (dark, default) ---- */
+  --bg: #131017;
+  --bg-grad-1: #1a1620;
+  --bg-grad-2: #0f0c13;
+  --panel: #1d1922;
+  --panel-2: #262029;
+  --line: #3a3140;
+  --ink: #ece5d8;
+  --ink-dim: #a99f8f;
+  --ink-faint: #726a5e;
+  --gold: #d9a441;
+  --gold-bright: #f0c56a;
+  --gold-deep: #8a6320;
+  --garnet: #c94640;
+  --garnet-deep: #7d221e;
+  --jade: #5aa878;
+  --shadow: rgba(0, 0, 0, 0.55);
+  --accent-ink: #241a08;
 
-  --accent: #e2a63d;
-  --accent-ink: #201503;
-  --accent-soft: rgba(226, 166, 61, 0.14);
+  /* ---- fonts ---- */
+  --serif: 'Palatino Linotype', 'Book Antiqua', Palatino, 'Iowan Old Style', Georgia, serif;
+  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 
-  --danger: #e06060;
-  --danger-soft: rgba(224, 96, 96, 0.14);
-  --success: #5cbd7c;
-  --success-soft: rgba(92, 189, 124, 0.14);
-
+  /* ---- geometry ---- */
   --radius: 14px;
   --radius-sm: 10px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 28px rgba(0, 0, 0, 0.28);
-  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.35);
-
   --tap: 44px;
-  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
-    Arial, sans-serif;
-
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /* ---- legacy semantic aliases (resolve per-theme via the palette) ---- */
+  --font: var(--sans);
+  --surface: var(--panel);
+  --surface-2: var(--panel-2);
+  --text: var(--ink);
+  --text-dim: var(--ink-dim);
+  --accent: var(--gold);
+  --accent-soft: color-mix(in srgb, var(--gold) 15%, transparent);
+  --danger: var(--garnet);
+  --danger-soft: color-mix(in srgb, var(--garnet) 15%, transparent);
+  --success: var(--jade);
+  --success-soft: color-mix(in srgb, var(--jade) 16%, transparent);
+  --shadow-soft: 0 1px 2px color-mix(in srgb, var(--shadow) 70%, transparent);
 }
 
+/* Default world follows the device when no explicit override is set. */
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
-    --bg: #f2f2f5;
-    --surface: #ffffff;
-    --surface-2: #f6f6f9;
-    --text: #1b1e27;
-    --text-dim: #5e6577;
-    --line: rgba(22, 26, 40, 0.11);
-    --accent: #a3720f;
-    --accent-ink: #ffffff;
-    --accent-soft: rgba(163, 114, 15, 0.12);
-    --danger: #c23f3f;
-    --danger-soft: rgba(194, 63, 63, 0.1);
-    --success: #2c8c50;
-    --success-soft: rgba(44, 140, 80, 0.12);
-    --shadow: 0 1px 2px rgba(24, 28, 45, 0.08), 0 10px 28px rgba(24, 28, 45, 0.1);
-    --shadow-soft: 0 1px 2px rgba(24, 28, 45, 0.08);
+    --bg: #ece3d0;
+    --bg-grad-1: #f1e9d8;
+    --bg-grad-2: #e2d6bd;
+    --panel: #f4eedd;
+    --panel-2: #e7dcc3;
+    --line: #cdbc9b;
+    --ink: #2c2216;
+    --ink-dim: #6d5f49;
+    --ink-faint: #9a8a6e;
+    --gold: #a2711b;
+    --gold-bright: #c08a26;
+    --gold-deep: #7c560f;
+    --garnet: #a92a22;
+    --garnet-deep: #d5b6a2;
+    --jade: #3f7d54;
+    --shadow: rgba(80, 60, 30, 0.22);
+    --accent-ink: #241a08;
   }
+}
+
+/* Explicit overrides (the in-app theme toggle stamps these; they beat media). */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #131017;
+  --bg-grad-1: #1a1620;
+  --bg-grad-2: #0f0c13;
+  --panel: #1d1922;
+  --panel-2: #262029;
+  --line: #3a3140;
+  --ink: #ece5d8;
+  --ink-dim: #a99f8f;
+  --ink-faint: #726a5e;
+  --gold: #d9a441;
+  --gold-bright: #f0c56a;
+  --gold-deep: #8a6320;
+  --garnet: #c94640;
+  --garnet-deep: #7d221e;
+  --jade: #5aa878;
+  --shadow: rgba(0, 0, 0, 0.55);
+  --accent-ink: #241a08;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #ece3d0;
+  --bg-grad-1: #f1e9d8;
+  --bg-grad-2: #e2d6bd;
+  --panel: #f4eedd;
+  --panel-2: #e7dcc3;
+  --line: #cdbc9b;
+  --ink: #2c2216;
+  --ink-dim: #6d5f49;
+  --ink-faint: #9a8a6e;
+  --gold: #a2711b;
+  --gold-bright: #c08a26;
+  --gold-deep: #7c560f;
+  --garnet: #a92a22;
+  --garnet-deep: #d5b6a2;
+  --jade: #3f7d54;
+  --shadow: rgba(80, 60, 30, 0.22);
+  --accent-ink: #241a08;
 }
 
 * {
@@ -66,10 +140,13 @@ html {
 
 body {
   margin: 0;
-  font-family: var(--font);
-  background: var(--bg);
-  color: var(--text);
-  line-height: 1.45;
+  font-family: var(--sans);
+  background:
+    radial-gradient(120% 60% at 50% -10%, var(--bg-grad-1), transparent 70%),
+    linear-gradient(180deg, var(--bg), var(--bg-grad-2));
+  background-attachment: fixed;
+  color: var(--ink);
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
 }
@@ -106,22 +183,38 @@ img {
   max-width: 100%;
 }
 
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---- shared primitives ------------------------------------------------- */
 
 .card {
-  background: var(--surface);
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow-soft);
 }
 
+/* Gilded eyebrow: serif, letterspaced, gold, trailing filigree rule. */
 .section-title {
-  font-size: 0.72rem;
+  font-family: var(--serif);
+  font-size: 0.74rem;
   font-weight: 700;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--text-dim);
-  margin: 20px 4px 8px;
+  color: var(--gold);
+  margin: 26px 4px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 45%, transparent), transparent);
 }
 
 .btn {
@@ -133,8 +226,9 @@ img {
   padding: 0 18px;
   border-radius: 12px;
   font-weight: 600;
-  background: var(--surface-2);
+  background: var(--panel-2);
   border: 1px solid var(--line);
+  color: var(--ink);
   transition: transform 0.06s ease, background 0.15s ease;
 }
 
@@ -143,9 +237,10 @@ img {
 }
 
 .btn-accent {
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
   color: var(--accent-ink);
-  border-color: transparent;
+  border: 1px solid var(--gold-deep);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--gold) 35%, transparent);
 }
 
 .chip {
@@ -155,7 +250,7 @@ img {
   gap: 1px;
   padding: 6px 12px;
   border-radius: 10px;
-  background: var(--surface);
+  background: var(--panel);
   border: 1px solid var(--line);
   white-space: nowrap;
 }
@@ -171,12 +266,12 @@ img {
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--ink-dim);
 }
 
 .chip .chip-sub {
   font-size: 0.66rem;
-  color: var(--text-dim);
+  color: var(--ink-dim);
 }
 
 /* ---- skeleton shimmer --------------------------------------------------- */
@@ -185,9 +280,9 @@ img {
   border-radius: var(--radius-sm);
   background: linear-gradient(
     100deg,
-    var(--surface) 40%,
-    var(--surface-2) 50%,
-    var(--surface) 60%
+    var(--panel) 40%,
+    var(--panel-2) 50%,
+    var(--panel) 60%
   );
   background-size: 240% 100%;
   animation: skel-slide 1.4s ease-in-out infinite;
@@ -202,20 +297,14 @@ img {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .skel {
-    animation: none;
-  }
-}
-
 /* ---- modal scrim --------------------------------------------------------- */
 
 .scrim {
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(6, 8, 12, 0.6);
-  backdrop-filter: blur(2px);
+  background: rgba(6, 4, 8, 0.62);
+  backdrop-filter: blur(3px);
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -224,12 +313,12 @@ img {
 .modal-sheet {
   width: 100%;
   max-width: 480px;
-  background: var(--surface);
+  background: var(--panel);
   border: 1px solid var(--line);
   border-bottom: 0;
   border-radius: 20px 20px 0 0;
   padding: 20px 20px calc(20px + var(--safe-bottom));
-  box-shadow: var(--shadow);
+  box-shadow: 0 -10px 40px var(--shadow);
   animation: sheet-up 0.18s ease-out;
 }
 
@@ -251,4 +340,14 @@ img {
   margin: 0 auto;
   padding: calc(16px + var(--safe-top)) 16px calc(24px + var(--safe-bottom));
   min-height: 100dvh;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

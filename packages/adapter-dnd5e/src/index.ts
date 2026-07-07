@@ -27,6 +27,7 @@ import type {
   ActionDescriptor,
   ActionIntent,
   AdapterIO,
+  Condition,
   FoundryActorDoc,
   FoundryItemDoc,
   FoundryUpdate,
@@ -78,6 +79,10 @@ function ordinal(n: number): string {
   if (n === 2) return '2nd';
   if (n === 3) return '3rd';
   return `${n}th`;
+}
+
+function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
 // ---------------------------------------------------------------------------
@@ -565,6 +570,62 @@ function isUsableFeature(item: FoundryItemDoc): boolean {
   return Object.keys(activities).length > 0 || usesInfo(item) !== undefined;
 }
 
+/**
+ * The item's own description HTML (`system.description.value`), for the M8
+ * detail view. Content from the user's OWN world — the repo ships none; the
+ * client sanitizes before rendering. Empty/missing -> undefined.
+ */
+function itemDetail(item: FoundryItemDoc): string | undefined {
+  const v = getPath(item.system, 'description.value');
+  return typeof v === 'string' && v !== '' ? v : undefined;
+}
+
+/**
+ * Conditions + concentration from `actor.effects` (M8). Each enabled effect
+ * (disabled !== true) is either the concentration marker (name starts with
+ * "Concentrating" OR statuses include "concentrating") or a condition badge.
+ * `statuses` may be a bare string or an array; both normalize to string[].
+ */
+interface EffectSummary {
+  concentration: { label: string } | null;
+  conditions: Condition[];
+}
+
+function normalizeStatuses(raw: unknown): string[] {
+  if (typeof raw === 'string') return raw === '' ? [] : [raw];
+  if (Array.isArray(raw)) return raw.filter((s): s is string => typeof s === 'string');
+  return [];
+}
+
+function parseEffects(actor: FoundryActorDoc): EffectSummary {
+  const rawEffects = getPath(actor, 'effects');
+  const effects = Array.isArray(rawEffects) ? rawEffects : [];
+  let concentration: { label: string } | null = null;
+  const conditions: Condition[] = [];
+  const CONC_PREFIX = 'Concentrating: ';
+  for (const raw of effects) {
+    const eff = rec(raw);
+    if (eff.disabled === true) continue;
+    const name = typeof eff.name === 'string' ? eff.name : '';
+    const statuses = normalizeStatuses(eff.statuses);
+    if (name.startsWith('Concentrating') || statuses.includes('concentrating')) {
+      const label = name.startsWith(CONC_PREFIX) ? name.slice(CONC_PREFIX.length) : name;
+      concentration = { label };
+      continue;
+    }
+    const id =
+      (typeof eff._id === 'string' && eff._id !== '' ? eff._id : undefined) ??
+      (typeof eff.id === 'string' && eff.id !== '' ? eff.id : undefined) ??
+      slug(name);
+    conditions.push({
+      id,
+      label: name,
+      ...(typeof eff.icon === 'string' ? { icon: eff.icon } : {}),
+    });
+  }
+  return { concentration, conditions };
+}
+
 function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListItem {
   const qty = numAt(item.system, 'quantity') ?? 1;
   const subParts: string[] = [];
@@ -575,6 +636,7 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>): List
   const resourceId = resourceIds.has(usesId) ? usesId : resourceIds.has(qtyId) ? qtyId : undefined;
   const tags: string[] = [];
   if (getPath(item.system, 'equipped') === true) tags.push('equipped');
+  const detail = itemDetail(item);
   return {
     id: item._id,
     label: item.name,
@@ -584,6 +646,7 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>): List
     ...(tags.length > 0 ? { tags } : {}),
     ...(item.type === 'weapon' ? { actionId: `item.${item._id}.attack` } : {}),
     ...(isEquippable(item) ? { equipActionId: `item.${item._id}.equip` } : {}),
+    ...(detail !== undefined ? { detail } : {}),
   };
 }
 
@@ -591,6 +654,7 @@ function featureListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListIt
   const featType = strAt(item.system, 'type.value');
   const sub = featType === 'class' ? 'Class feature' : 'Feat';
   const usesId = `item.${item._id}.uses`;
+  const detail = itemDetail(item);
   return {
     id: item._id,
     label: item.name,
@@ -598,6 +662,7 @@ function featureListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListIt
     ...(item.img !== undefined ? { img: item.img } : {}),
     ...(resourceIds.has(usesId) ? { resourceId: usesId } : {}),
     ...(isUsableFeature(item) ? { actionId: `feature.${item._id}.use` } : {}),
+    ...(detail !== undefined ? { detail } : {}),
   };
 }
 
@@ -626,12 +691,14 @@ function spellListItem(item: FoundryItemDoc): ListItem {
   if (properties.includes('concentration')) tags.push('concentration');
   if (properties.includes('ritual')) tags.push('ritual');
 
+  const detail = itemDetail(item);
   return {
     id: item._id,
     label: item.name,
     sub: subParts.join(' · '),
     ...(item.img !== undefined ? { img: item.img } : {}),
     ...(tags.length > 0 ? { tags } : {}),
+    ...(detail !== undefined ? { detail } : {}),
     actionId,
   };
 }
@@ -704,6 +771,17 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     if (isUsableFeature(item)) {
       out.push({ id: `feature.${item._id}.use`, label: item.name, kind: 'use' });
     }
+  }
+
+  // M8 actor-scoped commands (no item target). Rests are always available;
+  // concentration/death-save appear only when the actor's state calls for them.
+  out.push({ id: 'rest.short', label: 'Short Rest', kind: 'rest' });
+  out.push({ id: 'rest.long', label: 'Long Rest', kind: 'rest' });
+  if (parseEffects(actor).concentration) {
+    out.push({ id: 'concentration.end', label: 'End Concentration', kind: 'endconcentration' });
+  }
+  if ((numAt(actor.system, 'attributes.hp.value') ?? 0) <= 0) {
+    out.push({ id: 'deathsave.roll', label: 'Death Save', kind: 'deathsave' });
   }
   return out;
 }
@@ -778,6 +856,15 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         equipped: intent.equipped,
       };
     }
+    // M8 actor-scoped commands: no item target, no params. The descriptor
+    // lookup + kind check above already reject unknown/absent ids (e.g.
+    // deathsave.roll when the actor is not down).
+    case 'rest':
+      return { endpoint: intent.actionId === 'rest.long' ? 'long-rest' : 'short-rest' };
+    case 'deathsave':
+      return { endpoint: 'death-save' };
+    case 'endconcentration':
+      return { endpoint: 'break-concentration' };
     default:
       throw new IntentError(`unknown intent kind "${String((intent as { kind: unknown }).kind)}"`, 'INVALID');
   }
@@ -844,6 +931,8 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     resourceIds: CURRENCIES.map((c) => `currency.${c.id}`),
   });
 
+  const { concentration, conditions } = parseEffects(actor);
+
   return {
     actorId: actor._id,
     systemId: 'dnd5e',
@@ -853,6 +942,8 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     sections,
     resources,
     actions: buildActions(actor),
+    concentration,
+    ...(conditions.length > 0 ? { conditions } : {}),
   };
 }
 

@@ -45,7 +45,11 @@ actors.set('a-sariel', {
   img: '/icons/portrait-caster.svg',
   systemId: 'dnd5e',
   baseAc: 12,
+  // M8: sample active conditions + a concentrated spell (toggled off by End).
+  conditions: [{ id: 'poisoned', label: 'Poisoned' }],
+  concentration: { label: 'Haste' },
   resources: [
+    r('currency.pp', 'Platinum', 4, { group: 'currency' }),
     r('hp', 'Hit Points', 24, { max: 31, group: 'hp' }),
     r('hp.temp', 'Temp HP', 0, { group: 'hp' }),
     r('slots.1', '1st Level', 3, { max: 4, group: 'slots' }),
@@ -86,8 +90,8 @@ actors.set('a-sariel', {
     ],
     inventory: [
       { id: 'i-staff', label: 'Quarterstaff', sub: '1d6 bludgeoning', attackMod: 2, equip: { equipped: false, acBonus: 0 } },
-      { id: 'i-potion', label: 'Potion of Healing', sub: 'consumable', resourceId: 'item.i-potion.qty' },
-      { id: 'i-wand', label: 'Wand of Magic Missiles', sub: 'charges', resourceId: 'item.i-wand.uses', tags: ['attuned'] },
+      { id: 'i-potion', label: 'Potion of Healing', sub: 'consumable', resourceId: 'item.i-potion.qty', detail: '<p>A swirling crimson draught, warm to the touch. <strong>Drink</strong> it and feel your wounds knit closed as ruby light spreads through your veins.</p><p><em>Half a flask remains after each sip.</em></p>' },
+      { id: 'i-wand', label: 'Wand of Magic Missiles', sub: 'charges', resourceId: 'item.i-wand.uses', tags: ['attuned'], detail: '<p>A slender rod of pale ash, ringed with silver.</p><ul><li>Hums faintly when charges remain.</li><li>Grows cold and dull when spent.</li></ul>' },
       { id: 'i-book', label: 'Spellbook' },
       { id: 'i-pouch', label: 'Component Pouch' },
     ],
@@ -95,7 +99,7 @@ actors.set('a-sariel', {
       { id: 's-firebolt', label: 'Fire Bolt', sub: 'Cantrip · V,S', level: 0 },
       { id: 's-magearmor', label: 'Mage Armor', sub: '1st · V,S,M', tags: ['prepared'], level: 1 },
       { id: 's-mistystep', label: 'Misty Step', sub: '2nd · V', level: 2 },
-      { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'], level: 3 },
+      { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'], level: 3, detail: '<p>A bead of glowing amber streaks from your fingertip and blooms into roaring flame.</p><p><strong>The academy warns:</strong> mind your allies, and mind the drapes.</p>' },
     ],
     features: [
       { id: 'f-recovery', label: 'Arcane Recovery', sub: 'Wizard 1', use: true },
@@ -110,6 +114,8 @@ actors.set('a-brakk', {
   img: '/icons/portrait-martial.svg',
   systemId: 'dnd5e',
   baseAc: 16,
+  conditions: [{ id: 'prone', label: 'Prone' }],
+  concentration: null,
   resources: [
     r('hp', 'Hit Points', 39, { max: 45, group: 'hp' }),
     r('hp.temp', 'Temp HP', 0, { group: 'hp' }),
@@ -145,7 +151,7 @@ actors.set('a-brakk', {
       { id: 'dex', label: 'DEX Save', value: '+1' },
     ],
     inventory: [
-      { id: 'i-sword', label: 'Longsword', sub: '1d8 slashing', attackMod: 7, equip: { equipped: true, acBonus: 0 } },
+      { id: 'i-sword', label: 'Longsword', sub: '1d8 slashing', attackMod: 7, equip: { equipped: true, acBonus: 0 }, detail: '<p>A well-worn blade with a leather-wrapped grip, notched from a hundred skirmishes.</p><p><em>Balanced enough to wield in one hand or two.</em></p>' },
       { id: 'i-bow', label: 'Longbow', sub: '1d8 piercing', attackMod: 4, equip: { equipped: false, acBonus: 0 } },
       { id: 'i-arrows', label: 'Arrows', sub: 'ammunition', resourceId: 'item.i-arrows.qty' },
       { id: 'i-javelin', label: 'Javelins', sub: '1d6 piercing', resourceId: 'item.i-javelin.qty', attackMod: 7 },
@@ -199,6 +205,13 @@ function buildActions(actor) {
   for (const f of s.features) {
     if (f.use) actions.push({ id: `feature.${f.id}.use`, label: f.label, kind: 'use' })
   }
+  // M8 actor-scoped commands (no item target).
+  actions.push({ id: 'rest.short', label: 'Short Rest', kind: 'rest' })
+  actions.push({ id: 'rest.long', label: 'Long Rest', kind: 'rest' })
+  actions.push({ id: 'deathsave.roll', label: 'Death Save', kind: 'deathsave' })
+  if (actor.concentration) {
+    actions.push({ id: 'concentration.end', label: 'End Concentration', kind: 'endconcentration' })
+  }
   return actions
 }
 
@@ -211,6 +224,7 @@ function listItem(def, actionId, equipActionId) {
   if (def.sub) item.sub = def.sub
   if (def.img) item.img = def.img
   if (def.resourceId) item.resourceId = def.resourceId
+  if (def.detail) item.detail = def.detail
   const tags = [...(def.tags ?? [])]
   if (def.equip?.equipped) tags.push('equipped')
   if (tags.length > 0) item.tags = tags
@@ -317,6 +331,8 @@ function buildSheet(actor) {
     sections,
     resources: actor.resources.map((x) => ({ ...x })),
     actions: buildActions(actor),
+    conditions: (actor.conditions ?? []).map((c) => ({ ...c })),
+    concentration: actor.concentration ? { label: actor.concentration.label } : null,
   }
 }
 
@@ -436,7 +452,29 @@ function mockRoll(mode, mod) {
   }
 }
 
-const ACTION_KINDS = ['check', 'save', 'attack', 'cast', 'use', 'equip']
+const ACTION_KINDS = ['check', 'save', 'attack', 'cast', 'use', 'equip', 'rest', 'deathsave', 'endconcentration']
+
+/** Long rest fully recovers; short rest clears death saves (mock behavior). */
+function applyRest(actor, actionId) {
+  const restore = (id) => {
+    const res = actor.resources.find((x) => x.id === id)
+    if (res && res.max !== undefined) res.value = res.max
+  }
+  const zero = (id) => {
+    const res = actor.resources.find((x) => x.id === id)
+    if (res) res.value = 0
+  }
+  zero('deathsaves.success')
+  zero('deathsaves.failure')
+  if (actionId === 'rest.long') {
+    for (const res of actor.resources) {
+      if ((res.group === 'hp' && res.id === 'hp') || res.group === 'slots' || res.group === 'hitdice') {
+        restore(res.id)
+      }
+    }
+    zero('hp.temp')
+  }
+}
 
 function handleAction(actor, intent, res) {
   if (typeof intent !== 'object' || intent === null) {
@@ -484,6 +522,16 @@ function handleAction(actor, intent, res) {
     const itemId = actionId.split('.')[1]
     const it = actor.staticSections.inventory.find((x) => x.id === itemId)
     it.equip.equipped = intent.equipped
+  } else if (kind === 'rest') {
+    applyRest(actor, actionId)
+    // result stays null — the real command posts its own chat card.
+  } else if (kind === 'deathsave') {
+    // Foundry rolls and updates the trackers; the mock bumps a success so the
+    // panel visibly reacts. result stays null (no roll pill for this command).
+    const success = actor.resources.find((x) => x.id === 'deathsaves.success')
+    if (success) success.value = clamp(success.value + 1, success.min, success.max)
+  } else if (kind === 'endconcentration') {
+    actor.concentration = null
   }
 
   sendJson(res, 200, { result, sheet: buildSheet(actor) })

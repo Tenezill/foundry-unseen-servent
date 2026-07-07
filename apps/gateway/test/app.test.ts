@@ -358,6 +358,76 @@ describe('actions', () => {
     expect(body.sheet.actorId).toBe('a1');
   });
 
+  it('rest.short -> short-rest actor command, result null + fresh sheet', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'rest', actionId: 'rest.short' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.actorCommandCalls).toEqual([{ endpoint: 'short-rest', actorUuid: 'Actor.a1' }]);
+    const body = res.json();
+    expect(body.result).toBeNull();
+    expect(body.sheet.actorId).toBe('a1');
+  });
+
+  it('rest.long -> long-rest actor command', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'rest', actionId: 'rest.long' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.actorCommandCalls).toEqual([{ endpoint: 'long-rest', actorUuid: 'Actor.a1' }]);
+    expect(res.json().result).toBeNull();
+  });
+
+  it('deathsave.roll -> death-save actor command, result null (no roll total)', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'deathsave', actionId: 'deathsave.roll' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.actorCommandCalls).toEqual([{ endpoint: 'death-save', actorUuid: 'Actor.a1' }]);
+    expect(res.json().result).toBeNull();
+  });
+
+  it('concentration.end -> break-concentration actor command', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'endconcentration', actionId: 'concentration.end' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.actorCommandCalls).toEqual([{ endpoint: 'break-concentration', actorUuid: 'Actor.a1' }]);
+    const body = res.json();
+    expect(body.result).toBeNull();
+    expect(body.sheet.actorId).toBe('a1');
+  });
+
+  it('403 when an actor-command kind does not match its descriptor', async () => {
+    const { app, relay } = setup();
+    // rest.short exists but as kind 'rest', not 'deathsave'.
+    const res = await post(app, 'a1', { kind: 'deathsave', actionId: 'rest.short' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('FORBIDDEN_RESOURCE');
+    expect(relay.actorCommandCalls).toHaveLength(0);
+  });
+
+  it('actor commands count against the shared write rate limit', async () => {
+    const { app } = setup({ rateLimitMax: 2 });
+    expect((await post(app, 'a1', { kind: 'rest', actionId: 'rest.short' })).statusCode).toBe(200);
+    expect((await post(app, 'a1', { kind: 'deathsave', actionId: 'deathsave.roll' })).statusCode).toBe(200);
+    const res3 = await post(app, 'a1', { kind: 'rest', actionId: 'rest.long' });
+    expect(res3.statusCode).toBe(429);
+    expect(res3.json().error.code).toBe('RATE_LIMITED');
+  });
+
+  it('502 UPSTREAM on an actor-command relay failure without leaking secrets', async () => {
+    const { app, relay } = setup();
+    relay.actionError = true;
+    for (const payload of [
+      { kind: 'rest', actionId: 'rest.short' },
+      { kind: 'deathsave', actionId: 'deathsave.roll' },
+      { kind: 'endconcentration', actionId: 'concentration.end' },
+    ]) {
+      const res = await post(app, 'a1', payload);
+      expect(res.statusCode).toBe(502);
+      expect(res.json().error.code).toBe('UPSTREAM');
+      expect(res.body).not.toContain(FAKE_API_KEY);
+      expect(res.body).not.toContain(FAKE_RELAY_URL);
+    }
+  });
+
   it('shares the write rate limit with intents', async () => {
     const { app } = setup({ rateLimitMax: 5 });
     for (let i = 0; i < 3; i++) {

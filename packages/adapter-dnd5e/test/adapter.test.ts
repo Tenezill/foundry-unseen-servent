@@ -661,3 +661,110 @@ describe('captured fixtures — caster (Akra, Cleric 5)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// M8 — conditions + concentration from actor.effects, and item detail.
+
+describe('conditions + concentration (actor.effects)', () => {
+  const withEffects: FoundryActorDoc = {
+    ...martialCaptured,
+    effects: [
+      // Concentration marker: name prefix + statuses.
+      {
+        _id: 'effConc0000000001',
+        name: 'Concentrating: Bless',
+        icon: 'icons/svg/concentration.svg',
+        statuses: ['concentrating'],
+        disabled: false,
+      },
+      // A plain condition (statuses as a bare string).
+      {
+        _id: 'effPoison00000001',
+        name: 'Poisoned',
+        icon: 'icons/svg/poison.svg',
+        statuses: 'poisoned',
+        disabled: false,
+      },
+      // Disabled effect: must be ignored entirely.
+      {
+        _id: 'effDisabled000001',
+        name: 'Blinded',
+        icon: 'icons/svg/blind.svg',
+        statuses: ['blinded'],
+        disabled: true,
+      },
+    ],
+  };
+
+  it('extracts the concentrated spell (strips the "Concentrating: " prefix)', () => {
+    expect(dnd5eAdapter.toViewModel(withEffects).concentration).toEqual({ label: 'Bless' });
+  });
+
+  it('lists only the enabled non-concentration effects as conditions', () => {
+    const vm = dnd5eAdapter.toViewModel(withEffects);
+    expect(vm.conditions).toEqual([
+      { id: 'effPoison00000001', label: 'Poisoned', icon: 'icons/svg/poison.svg' },
+    ]);
+  });
+
+  it('exposes an End Concentration action while concentrating', () => {
+    const conc = dnd5eAdapter.actions?.(withEffects).find((a) => a.id === 'concentration.end');
+    expect(conc).toEqual({ id: 'concentration.end', label: 'End Concentration', kind: 'endconcentration' });
+  });
+
+  it('no effects -> concentration null, no conditions, no end-concentration action', () => {
+    const vm = dnd5eAdapter.toViewModel(martialCaptured);
+    expect(vm.concentration).toBeNull();
+    expect(vm.conditions).toBeUndefined();
+    expect(dnd5eAdapter.actions?.(martialCaptured).some((a) => a.id === 'concentration.end')).toBe(false);
+  });
+
+  it('an absent effects array is treated as no effects', () => {
+    const noArray: FoundryActorDoc = { ...martialCaptured, effects: undefined };
+    expect(dnd5eAdapter.toViewModel(noArray).concentration).toBeNull();
+    expect(dnd5eAdapter.toViewModel(noArray).conditions).toBeUndefined();
+  });
+
+  it('a concentration effect identified only by statuses still resolves (name fallback)', () => {
+    const byStatus: FoundryActorDoc = {
+      ...martialCaptured,
+      effects: [{ _id: 'e1', name: 'Haste', statuses: ['concentrating'], disabled: false }],
+    };
+    expect(dnd5eAdapter.toViewModel(byStatus).concentration).toEqual({ label: 'Haste' });
+  });
+});
+
+describe('item detail (system.description.value)', () => {
+  it('carries the feature description onto the list item (Grappler)', () => {
+    const s = section(martialCaptured, 'features');
+    if (s.kind !== 'list') throw new Error('features must be a list section');
+    const grappler = s.items.find((i) => i.label === 'Grappler');
+    expect(grappler?.detail).toContain('close-quarters grappling');
+  });
+
+  it('leaves detail undefined when the description is empty', () => {
+    const noDesc: FoundryActorDoc = {
+      ...martialCaptured,
+      items: (martialCaptured.items ?? []).map((i) =>
+        i.name === 'Grappler' ? { ...i, system: { ...i.system, description: { value: '' } } } : i,
+      ),
+    };
+    const s = dnd5eAdapter.toViewModel(noDesc).sections.find((x) => x.id === 'features');
+    if (s?.kind !== 'list') throw new Error('features must be a list section');
+    expect(s.items.find((i) => i.label === 'Grappler')?.detail).toBeUndefined();
+  });
+
+  it('carries an inline spell description onto a spell row', () => {
+    const withSpellDesc: FoundryActorDoc = {
+      ...casterCaptured,
+      items: (casterCaptured.items ?? []).map((i) =>
+        i.name === 'Bless'
+          ? { ...i, system: { ...i.system, description: { value: '<p>You bless up to three creatures.</p>' } } }
+          : i,
+      ),
+    };
+    const s = dnd5eAdapter.toViewModel(withSpellDesc).sections.find((x) => x.id === 'spells');
+    if (s?.kind !== 'list') throw new Error('spells must be a list section');
+    expect(s.items.find((i) => i.label === 'Bless')?.detail).toBe('<p>You bless up to three creatures.</p>');
+  });
+});

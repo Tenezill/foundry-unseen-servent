@@ -7,14 +7,17 @@
       aria-live="assertive"
       @click="emit('dismiss')"
     >
-      <span class="total">{{ result.total }}</span>
+      <span class="total-wrap">
+        <span v-if="result.isCritical || result.isFumble" class="burst" aria-hidden="true" />
+        <span class="total tabular">{{ result.total }}</span>
+      </span>
       <span class="body">
         <span class="label">
           {{ label }}
           <span v-if="result.isCritical" class="flag">Critical!</span>
           <span v-else-if="result.isFumble" class="flag">Fumble</span>
         </span>
-        <span class="formula">{{ result.formula }}</span>
+        <span class="formula tabular">{{ result.formula }}</span>
         <span class="note">Also posted to Foundry chat</span>
       </span>
     </button>
@@ -51,8 +54,18 @@ const emit = defineEmits<{ (e: 'dismiss'): void }>()
   border-radius: 18px;
   max-width: 100%;
   text-align: left;
-  box-shadow: var(--shadow);
+  box-shadow: 0 10px 30px var(--shadow);
   animation: pill-up 0.18s ease-out;
+}
+
+.pill.crit {
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--line));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gold) 16%, var(--panel)), var(--panel));
+}
+
+.pill.fumble {
+  border-color: color-mix(in srgb, var(--garnet) 55%, var(--line));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--garnet) 14%, var(--panel)), var(--panel));
 }
 
 @keyframes pill-up {
@@ -66,21 +79,50 @@ const emit = defineEmits<{ (e: 'dismiss'): void }>()
   }
 }
 
+.total-wrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+}
+
+.burst {
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--gold) 55%, transparent), transparent 68%);
+  animation: burst 0.5s ease-out both;
+}
+
+.pill.fumble .burst {
+  background: radial-gradient(circle, color-mix(in srgb, var(--garnet) 55%, transparent), transparent 68%);
+}
+
+@keyframes burst {
+  from {
+    transform: scale(0.4);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(1.15);
+    opacity: 0;
+  }
+}
+
 .total {
+  position: relative;
   font-size: 2rem;
   font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  color: var(--accent);
-  min-width: 44px;
+  color: var(--gold-bright);
   text-align: center;
 }
 
 .pill.crit .total {
-  color: var(--success);
+  color: var(--gold-bright);
 }
 
 .pill.fumble .total {
-  color: var(--danger);
+  color: var(--garnet);
 }
 
 .body {
@@ -107,21 +149,20 @@ const emit = defineEmits<{ (e: 'dismiss'): void }>()
 }
 
 .pill.crit .flag {
-  color: var(--success);
+  color: var(--gold-bright);
 }
 
 .pill.fumble .flag {
-  color: var(--danger);
+  color: var(--garnet);
 }
 
 .formula {
   font-size: 0.78rem;
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
 }
 
 .note {
   font-size: 0.7rem;
-  color: var(--text-dim);
+  color: var(--ink-faint);
 }
 </style>

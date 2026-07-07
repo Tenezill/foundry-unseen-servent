@@ -124,7 +124,8 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
   it('non-caster has no cast actions; total count is pinned', () => {
     expect(all.filter((a) => a.kind === 'cast')).toHaveLength(0);
     // 18 skills + 12 ability checks/saves + 3 attacks + 5 equips + 1 use
-    expect(all).toHaveLength(39);
+    // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
+    expect(all).toHaveLength(41);
   });
 });
 
@@ -142,7 +143,8 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     ]);
     expect(all.filter((a) => a.kind === 'use').map((a) => a.id)).toEqual(['feature.vWo0CO4uYJ8XRnRi.use']);
     // 18 skills + 12 ability checks/saves + 2 attacks + 4 equips + 18 casts + 1 use
-    expect(all).toHaveLength(55);
+    // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
+    expect(all).toHaveLength(57);
   });
 
   it('a leveled spell with a base-level slot is directly castable (no slotLevels — the bridge casts at base only)', () => {
@@ -377,6 +379,89 @@ describe('buildAction — rejections', () => {
   });
 });
 
+describe('M8 actor-command actions (rest / death save / concentration)', () => {
+  it('short + long rest are always present, regardless of state', () => {
+    for (const actor of [martialCaptured, casterCaptured]) {
+      const ids = actions(actor).map((a) => a.id);
+      expect(ids).toContain('rest.short');
+      expect(ids).toContain('rest.long');
+    }
+    expect(action(martialCaptured, 'rest.short')).toEqual({ id: 'rest.short', label: 'Short Rest', kind: 'rest' });
+    expect(action(martialCaptured, 'rest.long')).toEqual({ id: 'rest.long', label: 'Long Rest', kind: 'rest' });
+  });
+
+  it('death save appears only when hp <= 0', () => {
+    expect(actions(martialCaptured).some((a) => a.id === 'deathsave.roll')).toBe(false);
+    const down: FoundryActorDoc = {
+      ...martialCaptured,
+      system: {
+        ...martialCaptured.system,
+        attributes: {
+          ...(martialCaptured.system.attributes as Record<string, unknown>),
+          hp: { ...((martialCaptured.system.attributes as Record<string, unknown>).hp as Record<string, unknown>), value: 0 },
+        },
+      },
+    };
+    expect(action(down, 'deathsave.roll')).toEqual({ id: 'deathsave.roll', label: 'Death Save', kind: 'deathsave' });
+  });
+
+  it('concentration.end appears only while concentrating', () => {
+    expect(actions(casterCaptured).some((a) => a.id === 'concentration.end')).toBe(false);
+    const conc: FoundryActorDoc = {
+      ...casterCaptured,
+      effects: [{ _id: 'e1', name: 'Concentrating: Bless', statuses: ['concentrating'], disabled: false }],
+    };
+    expect(action(conc, 'concentration.end')).toEqual({
+      id: 'concentration.end',
+      label: 'End Concentration',
+      kind: 'endconcentration',
+    });
+  });
+
+  it('buildAction maps all four commands to the right relay endpoints', () => {
+    expect(build(martialCaptured, { kind: 'rest', actionId: 'rest.short' })).toEqual({ endpoint: 'short-rest' });
+    expect(build(martialCaptured, { kind: 'rest', actionId: 'rest.long' })).toEqual({ endpoint: 'long-rest' });
+
+    const down: FoundryActorDoc = {
+      ...martialCaptured,
+      system: {
+        ...martialCaptured.system,
+        attributes: {
+          ...(martialCaptured.system.attributes as Record<string, unknown>),
+          hp: { ...((martialCaptured.system.attributes as Record<string, unknown>).hp as Record<string, unknown>), value: 0 },
+        },
+      },
+    };
+    expect(build(down, { kind: 'deathsave', actionId: 'deathsave.roll' })).toEqual({ endpoint: 'death-save' });
+
+    const conc: FoundryActorDoc = {
+      ...casterCaptured,
+      effects: [{ _id: 'e1', name: 'Concentrating: Bless', statuses: ['concentrating'], disabled: false }],
+    };
+    expect(build(conc, { kind: 'endconcentration', actionId: 'concentration.end' })).toEqual({
+      endpoint: 'break-concentration',
+    });
+  });
+
+  it('rejects commands whose descriptor is absent for this actor state', () => {
+    // Not concentrating -> no concentration.end descriptor.
+    expectIntentError(
+      () => build(casterCaptured, { kind: 'endconcentration', actionId: 'concentration.end' }),
+      'UNKNOWN_RESOURCE',
+    );
+    // hp > 0 -> no death-save descriptor.
+    expectIntentError(
+      () => build(martialCaptured, { kind: 'deathsave', actionId: 'deathsave.roll' }),
+      'UNKNOWN_RESOURCE',
+    );
+    // kind mismatch against a present descriptor.
+    expectIntentError(
+      () => build(martialCaptured, { kind: 'check', actionId: 'rest.short' }),
+      'UNKNOWN_RESOURCE',
+    );
+  });
+});
+
 describe('view model wiring', () => {
   it('skill and ability stats carry actionIds', () => {
     const skills = section(martialCaptured, 'skills');
@@ -418,6 +503,6 @@ describe('view model wiring', () => {
 
   it('the sheet embeds the full action list', () => {
     expect(dnd5eAdapter.toViewModel(martialCaptured).actions).toEqual(actions(martialCaptured));
-    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(55);
+    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(57);
   });
 });

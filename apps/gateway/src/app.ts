@@ -52,6 +52,15 @@ export interface RelayPort {
   ): Promise<Record<string, unknown>>;
   /** POST /dnd5e/equip-item — toggle an item's equipped state (M6). */
   equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void>;
+  /**
+   * POST /dnd5e/{short-rest|long-rest|death-save|break-concentration} — an
+   * actor-scoped command with no item target (M8). Foundry applies the result
+   * and posts any chat card; the caller re-fetches the sheet.
+   */
+  actorCommand(
+    endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration',
+    actorUuid: string,
+  ): Promise<Record<string, unknown>>;
   /** World-level hooks SSE stream (the M0-verified push channel). */
   subscribeHooks(
     hooks: string[],
@@ -173,6 +182,11 @@ function parseActionIntent(
     case 'equip':
       if (typeof body.equipped !== 'boolean') return null;
       return { kind, actionId, equipped: body.equipped };
+    case 'rest':
+    case 'deathsave':
+    case 'endconcentration':
+      // Actor-scoped commands carry only {kind, actionId} — no extra fields.
+      return { kind, actionId };
   }
 }
 
@@ -520,6 +534,14 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           break;
         case 'equip-item':
           await relay.equipItem(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.equipped);
+          break;
+        case 'short-rest':
+        case 'long-rest':
+        case 'death-save':
+        case 'break-concentration':
+          // death-save returns a roll under `data`; the rest post their own
+          // card and carry no roll total -> extractRoll yields null.
+          result = extractRoll(await relay.actorCommand(action.endpoint, `Actor.${id}`));
           break;
       }
 

@@ -8,4 +8,7 @@
 
 <script setup lang="ts">
 // App shell: pages + global toast outlet. All state lives in pages/composables.
+onMounted(() => {
+  applyStoredTheme()
+})
 </script>

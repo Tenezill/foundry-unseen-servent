@@ -1,70 +1,118 @@
 <template>
   <div class="sheet-root">
     <template v-if="sheet">
-      <header class="sheet-head">
-        <div class="head-row">
-          <NuxtLink to="/" class="back" aria-label="Back to characters">
+      <div class="frame">
+        <div class="toolbar">
+          <NuxtLink to="/" class="tool back" aria-label="Back to characters">
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m14 6-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+              <path d="m14 6-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </NuxtLink>
-          <ActorAvatar :name="sheet.name" :img="sheet.img" :size="38" />
-          <h1 class="name">{{ sheet.name }}</h1>
-          <ConnectionPill :state="conn" />
+          <span class="tool-spacer" />
+          <button class="tool" type="button" aria-label="Roll history" @click="showLog = true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 8v4l3 2M4 12a8 8 0 1 0 2-5.3M4 4v3h3" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button class="tool" type="button" :aria-label="isDark ? 'Switch to light theme' : 'Switch to dark theme'" @click="theme.toggle()">
+            <svg v-if="isDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke-linecap="round" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" stroke-linejoin="round" />
+            </svg>
+          </button>
         </div>
-        <div class="chips-row">
-          <span v-for="stat in sheet.headline" :key="stat.id" class="chip">
-            <span class="chip-value">{{ stat.value }}</span>
-            <span class="chip-label">{{ stat.label }}</span>
-            <span v-if="stat.sub" class="chip-sub">{{ stat.sub }}</span>
-          </span>
-        </div>
+
+        <SheetHero :sheet="sheet" :conn="conn" :readonly="offline" @numpad="openNumpad" />
+
+        <ConcentrationBanner
+          v-if="sheet.concentration"
+          :label="sheet.concentration.label"
+          :busy="actionBusy === 'concentration.end'"
+          :readonly="offline"
+          @end="onEndConcentration"
+        />
+
+        <ConditionBadges v-if="sheet.conditions?.length" :conditions="sheet.conditions" />
+
         <div v-if="offline" class="offline-banner">
           Offline — showing your last known sheet, read-only.
         </div>
-      </header>
 
-      <main class="sheet-main">
-        <SectionActions
-          v-if="activeTab === 'actions'"
-          :actions="combatActions"
-          :action-busy="actionBusy"
-          :readonly="offline"
-          @action="onCombatAction"
-        />
-        <template v-for="section in activeSections" :key="section.id">
-          <SectionStats
-            v-if="section.kind === 'stats'"
-            :section="section"
-            :readonly="offline"
-            :busy="actionBusy"
-            @action="onAction"
-          />
-          <SectionTracks
-            v-else-if="section.kind === 'tracks'"
-            :section="section"
-            :resources="resMap"
-            :busy="busy"
-            :readonly="offline"
-            @step="stepResource"
-            @numpad="openNumpad"
-          />
-          <SectionList
-            v-else
-            :section="section"
-            :resources="resMap"
-            :actions="actionMap"
-            :busy="busy"
+        <main class="sheet-main">
+          <SectionActions
+            v-if="activeTab === 'actions'"
+            :actions="combatActions"
             :action-busy="actionBusy"
             :readonly="offline"
-            @step="stepResource"
-            @action="onAction"
+            @action="onCombatAction"
           />
-        </template>
-        <p v-if="activeTab !== 'actions' && activeSections.length === 0" class="tab-empty">
-          Nothing on this tab.
-        </p>
-      </main>
+
+          <template v-if="activeTab === 'resources'">
+            <RestControls
+              v-if="hasRest"
+              :has-short="!!actionMap['rest.short']"
+              :has-long="!!actionMap['rest.long']"
+              :busy="actionBusy"
+              :readonly="offline"
+              @rest="onRest"
+            />
+            <DeathSavePanel
+              v-if="dying && deathSuccess && deathFailure"
+              :success="deathSuccess"
+              :failure="deathFailure"
+              :busy="busy"
+              :action-busy="actionBusy === 'deathsave.roll'"
+              :readonly="offline"
+              @step="stepResource"
+              @roll="onDeathSave"
+            />
+          </template>
+
+          <template v-for="section in renderableSections" :key="section.id">
+            <SectionStats
+              v-if="section.kind === 'stats'"
+              :section="section"
+              :variant="section.id === 'abilities' ? 'gems' : 'cards'"
+              :readonly="offline"
+              :busy="actionBusy"
+              @action="onAction"
+            />
+            <SectionTracks
+              v-else-if="section.kind === 'tracks'"
+              :section="section"
+              :resources="resMap"
+              :busy="busy"
+              :readonly="offline"
+              @step="stepResource"
+              @numpad="openNumpad"
+            />
+            <SectionList
+              v-else
+              :section="section"
+              :resources="resMap"
+              :actions="actionMap"
+              :busy="busy"
+              :action-busy="actionBusy"
+              :readonly="offline"
+              @step="stepResource"
+              @action="onAction"
+              @detail="onDetail"
+            />
+          </template>
+
+          <CurrencyWallet
+            v-if="activeTab === 'resources' && walletResources.length"
+            :resources="walletResources"
+            :busy="busy"
+            :readonly="offline"
+            @step="stepResource"
+          />
+
+          <p v-if="tabEmpty" class="tab-empty">Nothing on this tab.</p>
+        </main>
+      </div>
 
       <nav class="tabbar" aria-label="Sheet sections">
         <button
@@ -76,7 +124,9 @@
           :aria-current="activeTab === tab.id ? 'page' : undefined"
           @click="activeTab = tab.id"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="tab.icon" /></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path :d="tab.icon" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
           <span>{{ tab.label }}</span>
         </button>
       </nav>
@@ -94,6 +144,13 @@
         @submit="onActionSubmit"
         @close="actionSheetFor = null"
       />
+      <DetailDialog
+        v-if="detailFor"
+        :title="detailFor.title"
+        :detail="detailFor.detail"
+        @close="detailFor = null"
+      />
+      <RollLog v-if="showLog" :entries="rollHistory" @close="showLog = false" />
       <RollResultPill
         v-if="lastRoll"
         :result="lastRoll.result"
@@ -124,14 +181,22 @@
 import type {
   ActionDescriptor,
   ActionIntent,
+  ListItem,
   ResourceDescriptor,
   ResourceIntent,
   SheetSection,
   SheetViewModel,
 } from '@companion/adapter-sdk'
-import type { ActionResponse, ActionRollResult, ApiErrorBody, SheetResponse } from '~/types/api'
+import type {
+  ActionResponse,
+  ActionRollResult,
+  ApiErrorBody,
+  RollLogEntry,
+  SheetResponse,
+} from '~/types/api'
 
 const LARGE_DELTA = 10
+const ROLL_HISTORY_MAX = 20
 
 type TabId = 'overview' | 'actions' | 'resources' | 'inventory' | 'spells'
 
@@ -142,37 +207,18 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
-  {
-    id: 'overview',
-    label: 'Overview',
-    icon: 'M12 3 3 8v13h6v-6h6v6h6V8Z',
-  },
-  {
-    id: 'actions',
-    label: 'Actions',
-    icon: 'M13 2 3 14h6.5L9 22l11-14h-6.5Z',
-  },
-  {
-    id: 'resources',
-    label: 'Resources',
-    icon: 'M12 21C7 16.5 3 13.2 3 9.3 3 6.4 5.2 4.5 7.7 4.5c1.7 0 3.3.9 4.3 2.4 1-1.5 2.6-2.4 4.3-2.4 2.5 0 4.7 1.9 4.7 4.8 0 3.9-4 7.2-9 11.7Z',
-  },
-  {
-    id: 'inventory',
-    label: 'Inventory',
-    icon: 'M7 7V5.5A2.5 2.5 0 0 1 9.5 3h5A2.5 2.5 0 0 1 17 5.5V7h3a1 1 0 0 1 1 1v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a1 1 0 0 1 1-1Zm2 0h6V5.5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0-.5.5Z',
-  },
-  {
-    id: 'spells',
-    label: 'Spells',
-    icon: 'M12 2l2.1 5.7L20 10l-5.9 2.3L12 18l-2.1-5.7L4 10l5.9-2.3Zm7 12 1.2 3 3 1.2-3 1.2-1.2 3-1.2-3-3-1.2 3-1.2Z',
-  },
+  { id: 'overview', label: 'Overview', icon: 'M3 11l9-8 9 8M5 10v10h14V10' },
+  { id: 'actions', label: 'Actions', icon: 'M13 2 4 14h6l-1 8 9-12h-6z' },
+  { id: 'resources', label: 'Vitals', icon: 'M12 21s-7-4.5-7-10a4 4 0 0 1 8-1 4 4 0 0 1 8 1c0 5.5-7 10-7 10z' },
+  { id: 'inventory', label: 'Gear', icon: 'M4 7h16v13H4zM9 7V4h6v3' },
+  { id: 'spells', label: 'Spells', icon: 'M12 3l2 5 5 .5-4 3.5 1.5 5-4.5-3-4.5 3 1.5-5-4-3.5 5-.5z' },
 ]
 
 const route = useRoute()
 const actorId = computed(() => String(route.params.id))
 const { api, base } = useApi()
 const toast = useToast()
+const theme = useTheme()
 
 const sheet = ref<SheetViewModel | null>(null)
 const loading = ref(true)
@@ -182,8 +228,15 @@ const activeTab = ref<TabId>('overview')
 const busy = ref<string | null>(null)
 const numpadFor = ref<string | null>(null)
 const confirmState = ref<{ message: string; resolve: (ok: boolean) => void } | null>(null)
+const detailFor = ref<{ title: string; detail: string } | null>(null)
+const showLog = ref(false)
 
 const offline = computed(() => conn.value === 'offline')
+
+const isDark = computed(() => {
+  void theme.choice.value // recompute when the override changes
+  return theme.effective() === 'dark'
+})
 
 const resMap = computed<Record<string, ResourceDescriptor>>(() => {
   const m: Record<string, ResourceDescriptor> = {}
@@ -208,7 +261,19 @@ const sheetAction = computed(() =>
   actionSheetFor.value ? (actionMap.value[actionSheetFor.value] ?? null) : null,
 )
 
-/** System-agnostic tab routing: tracks -> Resources; lists by id/label keyword. */
+/* ---- M8 derived vitals -------------------------------------------------- */
+
+const hpValue = computed(() => resMap.value.hp?.value ?? 1)
+const dying = computed(() => hpValue.value <= 0)
+const deathSuccess = computed(() => resMap.value['deathsaves.success'])
+const deathFailure = computed(() => resMap.value['deathsaves.failure'])
+const hasRest = computed(() => !!actionMap.value['rest.short'] || !!actionMap.value['rest.long'])
+const walletResources = computed(() =>
+  (sheet.value?.resources ?? []).filter((r) => r.group === 'currency'),
+)
+
+/* ---- tab routing -------------------------------------------------------- */
+
 function tabOf(section: SheetSection): TabId {
   if (section.kind === 'tracks') return 'resources'
   if (section.kind === 'stats') return 'overview'
@@ -230,7 +295,6 @@ const sectionsByTab = computed<Record<TabId, SheetSection[]>>(() => {
   return groups
 })
 
-/** Actions-tab source: attack/cast/use only (checks/saves stay on Overview, equip in Inventory). */
 const combatActions = computed(() =>
   (sheet.value?.actions ?? []).filter(
     (a) => a.kind === 'attack' || a.kind === 'cast' || a.kind === 'use',
@@ -246,6 +310,20 @@ const visibleTabs = computed(() =>
 )
 
 const activeSections = computed(() => sectionsByTab.value[activeTab.value])
+
+/** Death saves and currency are rendered by dedicated M8 panels, not inline. */
+const renderableSections = computed(() =>
+  activeSections.value.filter((s) => s.id !== 'deathsaves' && s.id !== 'currency'),
+)
+
+const tabEmpty = computed(() => {
+  if (activeTab.value === 'actions') return false
+  if (renderableSections.value.length > 0) return false
+  if (activeTab.value === 'resources' && (walletResources.value.length > 0 || hasRest.value || dying.value)) {
+    return false
+  }
+  return true
+})
 
 watch(visibleTabs, (tabs) => {
   if (!tabs.some((t) => t.id === activeTab.value)) activeTab.value = 'overview'
@@ -359,13 +437,42 @@ function applyNumpad(delta: number): void {
   )
 }
 
-/* ---- actions (M6) --------------------------------------------------------- */
+/* ---- roll results, history & haptics (M6/M8) ---------------------------- */
 
 const lastRoll = ref<{ result: ActionRollResult; label: string } | null>(null)
+const rollHistory = ref<RollLogEntry[]>([])
+let rollSeq = 0
 let rollTimer: ReturnType<typeof setTimeout> | undefined
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+}
+
+function haptics(result: ActionRollResult): void {
+  if (prefersReducedMotion() || typeof navigator === 'undefined' || !navigator.vibrate) return
+  try {
+    if (result.isCritical) navigator.vibrate([0, 40, 30, 40])
+    else if (result.isFumble) navigator.vibrate([0, 60])
+    else navigator.vibrate(12)
+  } catch {
+    /* vibration unsupported / blocked — ignore */
+  }
+}
 
 function showRoll(result: ActionRollResult, label: string): void {
   lastRoll.value = { result, label }
+  rollHistory.value.unshift({
+    id: ++rollSeq,
+    label,
+    total: result.total,
+    formula: result.formula,
+    isCritical: result.isCritical === true,
+    isFumble: result.isFumble === true,
+  })
+  if (rollHistory.value.length > ROLL_HISTORY_MAX) {
+    rollHistory.value = rollHistory.value.slice(0, ROLL_HISTORY_MAX)
+  }
+  haptics(result)
   if (rollTimer !== undefined) clearTimeout(rollTimer)
   rollTimer = setTimeout(() => (lastRoll.value = null), 6000)
 }
@@ -375,6 +482,8 @@ function dismissRoll(): void {
   rollTimer = undefined
   lastRoll.value = null
 }
+
+/* ---- actions (M6/M8) ---------------------------------------------------- */
 
 function onAction(actionId: string): void {
   if (offline.value || actionBusy.value) return
@@ -401,10 +510,6 @@ function onAction(actionId: string): void {
   }
 }
 
-/**
- * Actions-tab taps: same paths as onAction, except at-will/cantrip casts
- * (no slotLevels) skip the slot dialog and cast directly.
- */
 function onCombatAction(actionId: string): void {
   if (offline.value || actionBusy.value) return
   const action = actionMap.value[actionId]
@@ -425,6 +530,34 @@ function onActionSubmit(intent: ActionIntent): void {
   void submitAction(intent, label)
 }
 
+async function onRest(kind: 'short' | 'long'): Promise<void> {
+  if (offline.value || actionBusy.value) return
+  const actionId = kind === 'long' ? 'rest.long' : 'rest.short'
+  if (!actionMap.value[actionId]) return
+  if (kind === 'long') {
+    const ok = await askConfirm('Take a long rest? Restores HP, slots, and abilities.')
+    if (!ok) return
+  }
+  void submitAction({ kind: 'rest', actionId }, kind === 'long' ? 'Long Rest' : 'Short Rest')
+}
+
+function onDeathSave(): void {
+  if (offline.value || actionBusy.value) return
+  if (!actionMap.value['deathsave.roll']) return
+  void submitAction({ kind: 'deathsave', actionId: 'deathsave.roll' }, 'Death Save')
+}
+
+function onEndConcentration(): void {
+  if (offline.value || actionBusy.value) return
+  const label = sheet.value?.concentration?.label ?? 'Concentration'
+  void submitAction({ kind: 'endconcentration', actionId: 'concentration.end' }, `End ${label}`)
+}
+
+function onDetail(item: ListItem): void {
+  if (!item.detail) return
+  detailFor.value = { title: item.label, detail: item.detail }
+}
+
 async function submitAction(intent: ActionIntent, label: string): Promise<void> {
   if (offline.value || actionBusy.value) return
   actionBusy.value = intent.actionId
@@ -436,10 +569,23 @@ async function submitAction(intent: ActionIntent, label: string): Promise<void> 
     applySheet(res.sheet)
     if (res.result) {
       showRoll(res.result, label)
-    } else if (intent.kind === 'equip') {
-      toast.show(`${label} ${intent.equipped ? 'equipped' : 'unequipped'}`)
-    } else {
-      toast.show(`${label} done — see Foundry chat`)
+      return
+    }
+    switch (intent.kind) {
+      case 'equip':
+        toast.show(`${label} ${intent.equipped ? 'equipped' : 'unequipped'}`)
+        break
+      case 'rest':
+        toast.show(`${label} complete`)
+        break
+      case 'endconcentration':
+        toast.show('Concentration ended')
+        break
+      case 'deathsave':
+        toast.show('Death save rolled — see Foundry chat')
+        break
+      default:
+        toast.show(`${label} done — see Foundry chat`)
     }
   } catch (err) {
     const status = errorStatus(err)
@@ -560,98 +706,73 @@ onBeforeUnmount(() => {
 <style scoped>
 .sheet-root {
   min-height: 100dvh;
-  display: flex;
-  flex-direction: column;
 }
 
-/* ---- header ---- */
-
-.sheet-head {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--line);
-  padding: calc(10px + var(--safe-top)) 16px 10px;
+.frame {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: calc(10px + var(--safe-top)) 16px calc(100px + var(--safe-bottom));
 }
 
-.head-row {
+/* ---- top toolbar ---- */
+
+.toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  max-width: 560px;
-  margin: 0 auto;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
-.back {
-  flex: none;
+.tool {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
-  margin-left: -8px;
+  width: 40px;
+  height: 40px;
   border-radius: 12px;
-  color: var(--text-dim);
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
 }
 
-.back svg {
-  width: 22px;
-  height: 22px;
+.tool:active {
+  transform: scale(0.95);
+  color: var(--gold);
 }
 
-.name {
+.tool svg {
+  width: 20px;
+  height: 20px;
+}
+
+.back {
+  margin-left: -2px;
+}
+
+.tool-spacer {
   flex: 1;
-  min-width: 0;
-  font-size: 1.1rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chips-row {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding: 10px 0 2px;
-  max-width: 560px;
-  margin: 0 auto;
-  scrollbar-width: none;
-}
-
-.chips-row::-webkit-scrollbar {
-  display: none;
-}
-
-.offline-banner {
-  max-width: 560px;
-  margin: 10px auto 0;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--danger-soft);
-  color: var(--danger);
-  font-size: 0.78rem;
-  font-weight: 600;
-  text-align: center;
 }
 
 /* ---- content ---- */
 
 .sheet-main {
-  flex: 1;
   width: 100%;
-  max-width: 560px;
-  margin: 0 auto;
-  padding: 4px 16px calc(96px + var(--safe-bottom));
+}
+
+.offline-banner {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--garnet);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: center;
 }
 
 .tab-empty {
   text-align: center;
-  color: var(--text-dim);
+  color: var(--ink-dim);
   font-size: 0.88rem;
   padding: 48px 12px;
 }
@@ -666,17 +787,17 @@ onBeforeUnmount(() => {
   z-index: 40;
   display: flex;
   justify-content: center;
-  gap: 4px;
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  gap: 2px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-top: 1px solid var(--line);
-  padding: 6px 8px calc(6px + var(--safe-bottom));
+  padding: 8px 6px calc(8px + var(--safe-bottom));
 }
 
 .tab {
   flex: 1;
-  max-width: 132px;
+  max-width: 92px;
   min-height: 52px;
   display: flex;
   flex-direction: column;
@@ -684,21 +805,21 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 3px;
   border-radius: 12px;
-  color: var(--text-dim);
-  font-size: 0.66rem;
+  color: var(--ink-faint);
+  font-size: 0.62rem;
   font-weight: 700;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .tab svg {
-  width: 22px;
-  height: 22px;
-  fill: currentColor;
+  width: 20px;
+  height: 20px;
 }
 
 .tab.active {
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 12%, transparent);
 }
 
 /* ---- error state ---- */
@@ -718,12 +839,13 @@ onBeforeUnmount(() => {
 }
 
 .error-title {
-  font-weight: 800;
-  font-size: 1.05rem;
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 1.1rem;
 }
 
 .error-body {
-  color: var(--text-dim);
+  color: var(--ink-dim);
   font-size: 0.88rem;
 }
 </style>
