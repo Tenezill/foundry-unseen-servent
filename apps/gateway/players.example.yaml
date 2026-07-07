@@ -1,0 +1,9 @@
+# Example players file (PLAN.md §5, docs/API.md "Authentication").
+# Mount the real one as a secret and point PLAYERS_FILE at it.
+#
+# tokenHash = sha256 hex of the player's invite token, e.g.
+#   node -e "console.log(require('crypto').createHash('sha256').update('THE_TOKEN').digest('hex'))"
+players:
+  - name: Anna
+    tokenHash: "0000000000000000000000000000000000000000000000000000000000000000"
+    actorIds: ["kbXH9AbCdEfGhIjK"]

@@ -1,7 +1,17 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true
+    "noEmit": true,
+    // The workspace ships no @types/node; DOM lib supplies the web-standard
+    // globals (fetch, URL, AbortController, timers) this package and the
+    // imported foundry-client source rely on. Node-only built-ins are shimmed
+    // in src/node-shims.d.ts.
+    "lib": ["ES2022", "DOM"],
+    // The imported @companion/foundry-client source passes `body: string |
+    // undefined` to fetch(), which DOM's RequestInit rejects under
+    // exactOptionalPropertyTypes. We compile that source under this tsconfig
+    // and must not modify it, so relax the flag here.
+    "exactOptionalPropertyTypes": false
   },
   "include": ["src", "test"]
 }

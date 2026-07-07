@@ -137,6 +137,19 @@ export class FoundryRelayClient {
   }
 
   /**
+   * GET /<systemPath>/get-actor-details — system-specific derived data the
+   * plain /get does not serialize (e.g. dnd5e `details=["spells"]` returns
+   * real spell-slot maxima). Returns the endpoint's `data` payload.
+   */
+  async getSystemDetails(systemPath: string, actorUuid: string, details: string[]): Promise<unknown> {
+    const body = await this.request<Record<string, unknown>>('GET', `/${systemPath}/get-actor-details`, {
+      actorUuid,
+      details: JSON.stringify(details),
+    });
+    return body.data ?? body;
+  }
+
+  /**
    * PUT /update — apply a dot-notation update to an entity. The payload is
    * passed straight to Foundry's Document.update(), e.g.
    * `{ "system.attributes.hp.value": 25 }`.
