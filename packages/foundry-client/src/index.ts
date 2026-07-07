@@ -87,11 +87,12 @@ export class FoundryRelayClient {
     const endpoint = this.url(path, params);
     let res: Response;
     try {
-      res = await fetch(endpoint, {
+      const init: RequestInit = {
         method,
         headers: this.headers(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
+      };
+      if (body !== undefined) init.body = JSON.stringify(body);
+      res = await fetch(endpoint, init);
     } catch (err) {
       throw new RelayError(`relay unreachable: ${(err as Error).message}`, undefined, path);
     }
