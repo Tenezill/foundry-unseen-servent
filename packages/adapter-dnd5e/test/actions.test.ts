@@ -272,7 +272,8 @@ describe('buildAction — checks and saves', () => {
       const abilities = vm.sections.find((s) => s.id === 'abilities');
       if (abilities?.kind !== 'stats') throw new Error('abilities must be a stats section');
       for (const stat of abilities.stats) {
-        const shown = /^([+-])(\d+)$/.exec(String(stat.sub));
+        // Sub starts with the modifier; M14 may append ' · ● save' after it.
+        const shown = /^([+-])(\d+)(?: · |$)/.exec(String(stat.sub));
         if (!shown || stat.actionId === undefined) throw new Error(`bad ability stat ${stat.id}`);
         expect(formulaOf(actor, { kind: 'check', actionId: stat.actionId })).toBe(
           `1d20 ${shown[1]} ${shown[2]}`,

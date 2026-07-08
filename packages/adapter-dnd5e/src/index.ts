@@ -613,13 +613,20 @@ function speedLine(actor: FoundryActorDoc): string {
 }
 
 function abilityStats(actor: FoundryActorDoc): Stat[] {
-  return ABILITIES.map((a) => ({
-    id: `ability.${a.id}`,
-    label: a.label,
-    value: abilityScore(actor.system, a.id),
-    sub: signed(abilityMod(actor.system, a.id)),
-    actionId: `ability.${a.id}.check`,
-  }));
+  return ABILITIES.map((a) => {
+    // Save proficiency marker (M14) goes on the LABEL — the PWA's ability
+    // gems render `sub` as the large modifier text, so sub must stay a bare
+    // modifier. Threshold mirrors saveBonus (>= 1, not === 1): whatever
+    // rolls with proficiency must show the marker.
+    const saveProf = (numAt(actor.system, `abilities.${a.id}.proficient`) ?? 0) >= 1;
+    return {
+      id: `ability.${a.id}`,
+      label: saveProf ? `${a.label} ●` : a.label,
+      value: abilityScore(actor.system, a.id),
+      sub: signed(abilityMod(actor.system, a.id)),
+      actionId: `ability.${a.id}.check`,
+    };
+  });
 }
 
 /** Skill total + provenance shared by the view model and buildAction so the
@@ -806,9 +813,10 @@ function skillStats(actor: FoundryActorDoc): Stat[] {
   return SKILLS.map((s) => {
     const { total, ability, profMult } = skillInfo(actor, s);
     const subParts = [ability.toUpperCase()];
-    if (profMult >= 2) subParts.push('expertise');
-    else if (profMult >= 1) subParts.push('proficient');
-    else if (profMult > 0) subParts.push('half proficiency');
+    // Proficiency markers (M14): ◐ half / ● proficient / ◆ expertise.
+    if (profMult >= 2) subParts.push('◆ expertise');
+    else if (profMult >= 1) subParts.push('● proficient');
+    else if (profMult > 0) subParts.push('◐ half');
     return {
       id: `skill.${s.id}`,
       label: s.label,

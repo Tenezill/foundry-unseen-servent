@@ -67,10 +67,12 @@ describe('view model — martial (source-shaped data, fallback math)', () => {
     expect(s.stats).toHaveLength(6);
     const str = s.stats.find((x) => x.id === 'ability.str');
     expect(str?.value).toBe(16);
-    expect(str?.sub).toBe('+3');
+    expect(str?.sub).toBe('+3'); // sub stays the bare modifier (gems render it large)
+    expect(str?.label).toBe('Strength ●'); // save-proficient (M14) marks the label
     const cha = s.stats.find((x) => x.id === 'ability.cha');
     expect(cha?.value).toBe(8);
     expect(cha?.sub).toBe('-1');
+    expect(cha?.label).toBe('Charisma');
   });
 
   it('skills: all 18, computed total, proficient tag in sub', () => {
@@ -79,7 +81,7 @@ describe('view model — martial (source-shaped data, fallback math)', () => {
     expect(s.stats).toHaveLength(18);
     const ath = s.stats.find((x) => x.id === 'skill.ath');
     expect(ath?.value).toBe('+6'); // str +3 + prof +3
-    expect(ath?.sub).toBe('STR · proficient');
+    expect(ath?.sub).toBe('STR · ● proficient');
     const acr = s.stats.find((x) => x.id === 'skill.acr');
     expect(acr?.value).toBe('+2'); // dex +2, not proficient
     expect(acr?.sub).toBe('DEX');
@@ -174,6 +176,7 @@ describe('view model — caster (derived data preferred)', () => {
     const wis = s.stats.find((x) => x.id === 'ability.wis');
     expect(wis?.value).toBe(18);
     expect(wis?.sub).toBe('+4');
+    expect(wis?.label).toBe('Wisdom ●'); // save-proficient (M14)
   });
 
   it('skills prefer derived totals over the computed fallback', () => {
@@ -186,7 +189,7 @@ describe('view model — caster (derived data preferred)', () => {
     expect(rel?.value).toBe('+2');
     const ins = s.stats.find((x) => x.id === 'skill.ins');
     expect(ins?.value).toBe('+7');
-    expect(ins?.sub).toBe('WIS · proficient');
+    expect(ins?.sub).toBe('WIS · ● proficient');
   });
 
   it('slots section lists present slot levels only (no empty levels, no pact)', () => {
@@ -661,6 +664,101 @@ describe('captured fixtures — caster (Akra, Cleric 5)', () => {
     for (const stat of s.stats) {
       expect(String(stat.value)).toMatch(/^[+-]\d+$/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M14 — proficiency markers: skills (◐/●/◆ from skills.X.value) appended to
+// the sub text; saves (● suffix on the ability LABEL, from
+// abilities.X.proficient >= 1 — same threshold saveBonus rolls with). The
+// ability sub must stay a bare modifier: the PWA gems render it at 2rem.
+
+describe('M14 — skill and save proficiency markers', () => {
+  function stats(actor: FoundryActorDoc, sectionId: string) {
+    const s = section(actor, sectionId);
+    if (s.kind !== 'stats') throw new Error(`${sectionId} must be a stats section`);
+    return s.stats;
+  }
+  const skillSub = (actor: FoundryActorDoc, id: string) =>
+    stats(actor, 'skills').find((x) => x.id === `skill.${id}`)?.sub;
+  const abilitySub = (actor: FoundryActorDoc, id: string) =>
+    stats(actor, 'abilities').find((x) => x.id === `ability.${id}`)?.sub;
+
+  it('martial (Randal): ● proficient marker exactly on acr/ath/ins/itm/per, ability label preserved', () => {
+    const proficient: Record<string, string> = { acr: 'DEX', ath: 'STR', ins: 'WIS', itm: 'CHA', per: 'CHA' };
+    for (const [id, ability] of Object.entries(proficient)) {
+      expect(skillSub(martialCaptured, id)).toBe(`${ability} · ● proficient`);
+    }
+    // Every other skill carries only the governing ability label — no marker.
+    for (const stat of stats(martialCaptured, 'skills')) {
+      const id = stat.id.slice('skill.'.length);
+      if (!(id in proficient)) expect(stat.sub).toMatch(/^[A-Z]{3}$/);
+    }
+  });
+
+  it('caster (Akra): ● proficient marker exactly on his/ins/med/prc/rel', () => {
+    const proficient: Record<string, string> = { his: 'INT', ins: 'WIS', med: 'WIS', prc: 'WIS', rel: 'INT' };
+    for (const [id, ability] of Object.entries(proficient)) {
+      expect(skillSub(casterCaptured, id)).toBe(`${ability} · ● proficient`);
+    }
+    for (const stat of stats(casterCaptured, 'skills')) {
+      const id = stat.id.slice('skill.'.length);
+      if (!(id in proficient)) expect(stat.sub).toMatch(/^[A-Z]{3}$/);
+    }
+  });
+
+  it('half proficiency and expertise get ◐ / ◆ markers', () => {
+    const tweaked: FoundryActorDoc = {
+      ...martialCaptured,
+      system: {
+        ...martialCaptured.system,
+        skills: {
+          ...(martialCaptured.system.skills as Record<string, unknown>),
+          acr: { value: 0.5, ability: 'dex' },
+          ath: { value: 2, ability: 'str' },
+        },
+      },
+    };
+    expect(skillSub(tweaked, 'acr')).toBe('DEX · ◐ half');
+    expect(skillSub(tweaked, 'ath')).toBe('STR · ◆ expertise');
+  });
+
+  const abilityLabel = (actor: FoundryActorDoc, id: string) =>
+    stats(actor, 'abilities').find((x) => x.id === `ability.${id}`)?.label;
+
+  it('martial (Randal): str + con save proficiency marks the LABEL; sub stays the bare modifier', () => {
+    expect(abilityLabel(martialCaptured, 'str')).toBe('Strength ●');
+    expect(abilityLabel(martialCaptured, 'con')).toBe('Constitution ●');
+    expect(abilitySub(martialCaptured, 'str')).toBe('+3');
+    expect(abilitySub(martialCaptured, 'con')).toBe('+2');
+    // Non-proficient abilities: plain label, bare modifier.
+    expect(abilityLabel(martialCaptured, 'dex')).toBe('Dexterity');
+    expect(abilitySub(martialCaptured, 'dex')).toBe('+2');
+    expect(abilitySub(martialCaptured, 'int')).toBe('-1');
+    expect(abilitySub(martialCaptured, 'wis')).toBe('+1');
+    expect(abilitySub(martialCaptured, 'cha')).toBe('+0');
+  });
+
+  it('caster (Akra): wis + cha save proficiency marks the label', () => {
+    expect(abilityLabel(casterCaptured, 'wis')).toBe('Wisdom ●');
+    expect(abilityLabel(casterCaptured, 'cha')).toBe('Charisma ●');
+    expect(abilitySub(casterCaptured, 'wis')).toBe('+2');
+    expect(abilitySub(casterCaptured, 'cha')).toBe('-1');
+    expect(abilityLabel(casterCaptured, 'str')).toBe('Strength');
+  });
+
+  it('proficient values above 1 (active effects/modules) still show the marker — matches saveBonus', () => {
+    const doubled: FoundryActorDoc = {
+      ...martialCaptured,
+      system: {
+        ...martialCaptured.system,
+        abilities: {
+          ...(martialCaptured.system.abilities as Record<string, unknown>),
+          dex: { value: 14, proficient: 2 },
+        },
+      },
+    };
+    expect(abilityLabel(doubled, 'dex')).toBe('Dexterity ●');
   });
 });
 
