@@ -1,6 +1,9 @@
 # D&D Beyond Parity Roadmap — gap analysis + implementation plan
 
 Date: 2026-07-08
+**Status: COMPLETE (2026-07-08)** — M10 ✅ (live-verified, docs/M10-findings.md)
+· M11 ✅ · M12 ✅ (attune live-verified) · M13 ✅ · M14 ✅. All milestones
+shipped with adversarial review; confirmed findings fixed before merge.
 Source of truth for the gap analysis: D&D Beyond character 168078224
 (Dwarf Wizard 3, Chronurgy Magic, Volstrucker Agent background), read via
 `character-service.dndbeyond.com/character/v5/character/168078224`, compared
