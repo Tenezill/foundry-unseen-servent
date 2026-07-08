@@ -46,7 +46,7 @@ export default defineNuxtConfig({
 
   app: {
     head: {
-      title: 'Foundry Companion',
+      title: "Foundry's Unseen Servant",
       meta: [
         { name: 'viewport', content: 'width=device-width, initial-scale=1, viewport-fit=cover' },
         { name: 'theme-color', content: '#131017' },
@@ -63,8 +63,8 @@ export default defineNuxtConfig({
   pwa: {
     registerType: 'autoUpdate',
     manifest: {
-      name: 'Foundry Companion',
-      short_name: 'Companion',
+      name: "Foundry's Unseen Servant",
+      short_name: 'Unseen Servant',
       description: 'Your character sheet, live from the table.',
       theme_color: '#131017',
       background_color: '#131017',

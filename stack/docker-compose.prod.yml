@@ -1,4 +1,4 @@
-name: foundry-companion
+name: foundrys-unseen-servant
 
 # Production stack (PLAN.md M5). Public surface = Caddy only:
 #   https://vtt.<domain>  -> Foundry (normal play)

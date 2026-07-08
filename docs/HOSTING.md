@@ -1,4 +1,4 @@
-# Hosting & connecting the Foundry Companion
+# Hosting & connecting Foundry's Unseen Servant
 
 Two deployment shapes, described end to end:
 

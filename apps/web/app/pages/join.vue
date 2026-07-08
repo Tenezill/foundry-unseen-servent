@@ -5,7 +5,7 @@
         <path d="M24 4 42 15v18L24 44 6 33V15Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round" />
         <path d="M24 4v40M6 15l18 11 18-11M6 33l18-7 18 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" opacity="0.55" />
       </svg>
-      <h1>Foundry Companion</h1>
+      <h1>Foundry&rsquo;s Unseen Servant</h1>
       <p class="tagline">Your character sheet, live from the table.</p>
     </div>
 

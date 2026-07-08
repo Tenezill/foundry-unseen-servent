@@ -1,4 +1,4 @@
-# Foundry Companion PWA — Execution Plan (v2)
+# Foundry's Unseen Servant (PWA) — Execution Plan (v2)
 
 **Audience:** Claude Code (Opus) executing this plan milestone by milestone.
 **Owner:** Sebastian. **Status:** Planning complete, ready for M0.

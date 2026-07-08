@@ -1,4 +1,4 @@
-# Foundry Companion
+# Foundry's Unseen Servant
 
 A mobile-first PWA that lets players of a D&D 5e group view and manage their
 characters from a phone while the game runs in Foundry VTT. Foundry stays the
