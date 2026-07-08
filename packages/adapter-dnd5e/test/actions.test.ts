@@ -147,10 +147,11 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     ]);
     expect(all.filter((a) => a.kind === 'use' && a.group === 'items')).toHaveLength(6);
     // 18 skills + 12 ability checks/saves + 2 attacks + 4 equips + 18 casts
+    // + 13 prepare toggles (18 spells − 3 cantrips − 2 always-prepared)
     // + 1 feature use + 6 item uses (Waterskin, Torch, Common Clothes,
     // Rations, Rope, Vestments)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(63);
+    expect(all).toHaveLength(76);
   });
 
   it('a leveled spell with a base-level slot is directly castable (no slotLevels — the bridge casts at base only)', () => {
@@ -509,7 +510,7 @@ describe('view model wiring', () => {
 
   it('the sheet embeds the full action list', () => {
     expect(dnd5eAdapter.toViewModel(martialCaptured).actions).toEqual(actions(martialCaptured));
-    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(63);
+    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(76);
   });
 });
 
@@ -565,5 +566,98 @@ describe('item use actions (inventory/actions split)', () => {
     const inv = section(martialCaptured, 'inventory');
     if (inv.kind !== 'list') throw new Error('inventory must be a list section');
     for (const row of inv.items) expect(row.actionId).toBeUndefined();
+  });
+});
+
+describe('spellbook management', () => {
+  const all = actions(casterCaptured);
+  // caster-captured spells: Guiding Bolt pZMrJb3AXiRYO5E8 (L1, prepared: 1),
+  // Bless m6cRE9Skgcx1Rhcf (L1, prepared: 2 = always), Sacred Flame
+  // P97npemu7j70IZAQ (L0 cantrip), Bane (L1, prepared: 0).
+  const spellOf = (name: string) => {
+    const item = casterCaptured.items?.find((i) => i.type === 'spell' && i.name === name);
+    if (!item) throw new Error(`spell ${name} not found`);
+    return item;
+  };
+
+  it('offers a prepare toggle for leveled, not-always-prepared spells', () => {
+    const bolt = spellOf('Guiding Bolt');
+    expect(action(casterCaptured, `spell.${bolt._id}.prepare`)).toEqual({
+      id: `spell.${bolt._id}.prepare`,
+      label: 'Guiding Bolt',
+      kind: 'prepare',
+      prepared: true,
+    });
+    const bane = spellOf('Bane');
+    expect(action(casterCaptured, `spell.${bane._id}.prepare`).prepared).toBe(false);
+  });
+
+  it('offers no prepare toggle for cantrips or always-prepared spells', () => {
+    const cantrip = spellOf('Sacred Flame');
+    expect(all.some((a) => a.id === `spell.${cantrip._id}.prepare`)).toBe(false);
+    const always = spellOf('Bless');
+    expect(all.some((a) => a.id === `spell.${always._id}.prepare`)).toBe(false);
+  });
+
+  it('maps prepare intents to an update-item write on system.prepared', () => {
+    const bane = spellOf('Bane');
+    expect(build(casterCaptured, { kind: 'prepare', actionId: `spell.${bane._id}.prepare`, prepared: true })).toEqual({
+      endpoint: 'update-item',
+      itemId: bane._id,
+      data: { 'system.prepared': 1 },
+    });
+    expect(
+      build(casterCaptured, { kind: 'prepare', actionId: `spell.${bane._id}.prepare`, prepared: false }),
+    ).toEqual({ endpoint: 'update-item', itemId: bane._id, data: { 'system.prepared': 0 } });
+  });
+
+  it('spell rows carry toggleActionId and forgettable; the sheet flags spellbook support', () => {
+    const spells = section(casterCaptured, 'spells');
+    if (spells.kind !== 'list') throw new Error('spells must be a list section');
+    const bolt = spellOf('Guiding Bolt');
+    const row = spells.items.find((r) => r.id === bolt._id);
+    expect(row?.toggleActionId).toBe(`spell.${bolt._id}.prepare`);
+    expect(row?.forgettable).toBe(true);
+    const cantripRow = spells.items.find((r) => r.id === spellOf('Sacred Flame')._id);
+    expect(cantripRow?.toggleActionId).toBeUndefined();
+    expect(cantripRow?.forgettable).toBe(true);
+    expect(dnd5eAdapter.toViewModel(casterCaptured).hasSpellbook).toBe(true);
+  });
+
+  it('spellbook capability accepts spells and rejects everything else', () => {
+    const sb = dnd5eAdapter.spellbook;
+    if (!sb) throw new Error('adapter must expose spellbook');
+    expect(sb.searchFilter).toBe('documentType:Item,subType:spell');
+    expect(sb.canLearn({ type: 'spell' })).toBe(true);
+    expect(sb.canLearn({ type: 'weapon' })).toBe(false);
+    expect(sb.canForget(spellOf('Bane'))).toBe(true);
+    const nonSpell = casterCaptured.items?.find((i) => i.type !== 'spell');
+    if (!nonSpell) throw new Error('need a non-spell item');
+    expect(sb.canForget(nonSpell)).toBe(false);
+  });
+
+  it('describe renders a preview ListItem from a raw compendium doc', () => {
+    const sb = dnd5eAdapter.spellbook;
+    if (!sb) throw new Error('adapter must expose spellbook');
+    const li = sb.describe({
+      _id: 'x1',
+      name: 'Fireball',
+      type: 'spell',
+      img: 'icons/f.webp',
+      system: { level: 3, school: 'evo', description: { value: '<p>Boom</p>' } },
+    });
+    expect(li).toMatchObject({ id: 'x1', label: 'Fireball', img: 'icons/f.webp', detail: '<p>Boom</p>' });
+    expect(li.sub).toContain('3rd level');
+    expect(li.sub).toContain('Evocation');
+    const cantrip = sb.describe({ _id: 'x2', name: 'Light', type: 'spell', system: { level: 0 } });
+    expect(cantrip.sub).toContain('Cantrip');
+  });
+
+  it('rejects prepare intents for spells without a toggle', () => {
+    const always = spellOf('Bless');
+    expectIntentError(
+      () => build(casterCaptured, { kind: 'prepare', actionId: `spell.${always._id}.prepare`, prepared: false }),
+      'UNKNOWN_RESOURCE',
+    );
   });
 });

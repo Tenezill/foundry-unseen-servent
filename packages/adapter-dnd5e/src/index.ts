@@ -708,7 +708,42 @@ function spellListItem(item: FoundryItemDoc): ListItem {
     ...(item.img !== undefined ? { img: item.img } : {}),
     ...(tags.length > 0 ? { tags } : {}),
     ...(detail !== undefined ? { detail } : {}),
+    ...(isPreparableSpell(item) ? { toggleActionId: `spell.${item._id}.prepare` } : {}),
+    // Any spell on the sheet may be forgotten via the spellbook API.
+    forgettable: true,
     actionId,
+  };
+}
+
+/** Leveled, not-always-prepared spells may be toggled; cantrips and
+ * `prepared: 2` (always prepared, e.g. domain spells) may not. */
+function isPreparableSpell(item: FoundryItemDoc): boolean {
+  if (item.type !== 'spell') return false;
+  const level = numAt(item.system, 'level') ?? 0;
+  return level > 0 && getPath(item.system, 'prepared') !== 2;
+}
+
+/**
+ * Preview ListItem for a RAW spell document (compendium search hit, not an
+ * embedded item) — the learn-confirm sheet in the PWA renders it. Content
+ * comes from the user's own world/compendia; the client sanitizes.
+ */
+function spellPreview(doc: Rec): ListItem {
+  const system = rec(doc.system);
+  const level = numAt(system, 'level') ?? 0;
+  const school = strAt(system, 'school');
+  const subParts: string[] = [level === 0 ? 'Cantrip' : `${ordinal(level)} level`];
+  const schoolLabel = school !== undefined ? SPELL_SCHOOLS[school] : undefined;
+  if (schoolLabel !== undefined) subParts.push(schoolLabel);
+  const detail = getPath(system, 'description.value');
+  const name = typeof doc.name === 'string' && doc.name !== '' ? doc.name : 'Unknown spell';
+  const id = typeof doc._id === 'string' && doc._id !== '' ? doc._id : slug(name);
+  return {
+    id,
+    label: name,
+    sub: subParts.join(' · '),
+    ...(typeof doc.img === 'string' ? { img: doc.img } : {}),
+    ...(typeof detail === 'string' && detail !== '' ? { detail } : {}),
   };
 }
 
@@ -781,6 +816,15 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
         kind: 'cast',
         ...(level > 0 && !canCastAtBase(actor, level) ? { slotLevels: [] } : {}),
       });
+      if (isPreparableSpell(item)) {
+        const rawPrepared = getPath(item.system, 'prepared');
+        out.push({
+          id: `spell.${item._id}.prepare`,
+          label: item.name,
+          kind: 'prepare',
+          prepared: rawPrepared === 1 || rawPrepared === true,
+        });
+      }
     }
     if (isUsableFeature(item)) {
       out.push({ id: `feature.${item._id}.use`, label: item.name, kind: 'use' });
@@ -875,6 +919,20 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         equipped: intent.equipped,
       };
     }
+    case 'prepare': {
+      if (typeof intent.prepared !== 'boolean') {
+        throw new IntentError('prepare requires a boolean "prepared"', 'INVALID');
+      }
+      // dnd5e 5.3.3: numeric `system.prepared` (0/1/2). The module's own
+      // prepare-spell endpoint writes the pre-5.x `system.preparation.*`
+      // path and is dead on this system version — bypass it with a plain
+      // item-field update.
+      return {
+        endpoint: 'update-item',
+        itemId: intent.actionId.slice('spell.'.length, -'.prepare'.length),
+        data: { 'system.prepared': intent.prepared ? 1 : 0 },
+      };
+    }
     // M8 actor-scoped commands: no item target, no params. The descriptor
     // lookup + kind check above already reject unknown/absent ids (e.g.
     // deathsave.roll when the actor is not down).
@@ -963,6 +1021,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     actions: buildActions(actor),
     concentration,
     ...(conditions.length > 0 ? { conditions } : {}),
+    hasSpellbook: true,
   };
 }
 
@@ -1015,6 +1074,12 @@ export const dnd5eAdapter: SystemAdapter = {
   buildUpdate,
   actions: buildActions,
   buildAction,
+  spellbook: {
+    searchFilter: 'documentType:Item,subType:spell',
+    canLearn: (doc) => doc.type === 'spell',
+    canForget: (item) => item.type === 'spell',
+    describe: (doc) => spellPreview(doc),
+  },
 };
 
 export default dnd5eAdapter;
