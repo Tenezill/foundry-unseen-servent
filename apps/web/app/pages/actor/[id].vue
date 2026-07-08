@@ -86,7 +86,7 @@
             <SectionStats
               v-if="section.kind === 'stats'"
               :section="section"
-              :variant="section.id === 'abilities' ? 'gems' : 'cards'"
+              :variant="section.id === 'abilities' ? 'gems' : section.id === 'traits' ? 'rows' : 'cards'"
               :readonly="offline"
               :busy="actionBusy"
               @action="onAction"

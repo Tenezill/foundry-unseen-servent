@@ -26,6 +26,14 @@
       </template>
     </div>
 
+    <!-- Full-width label:value rows for prose-length values (traits, M11). -->
+    <div v-else-if="variant === 'rows'" class="rows card">
+      <div v-for="stat in section.stats" :key="stat.id" class="prose-row">
+        <span class="label">{{ stat.label }}</span>
+        <span class="prose-value">{{ stat.value }}</span>
+      </div>
+    </div>
+
     <!-- Default gilded stat cards (saves, skills…). -->
     <div v-else class="grid">
       <template v-for="stat in section.stats" :key="stat.id">
@@ -62,7 +70,7 @@ withDefaults(
     section: Extract<SheetSection, { kind: 'stats' }>
     readonly?: boolean
     busy?: string | null
-    variant?: 'cards' | 'gems'
+    variant?: 'cards' | 'gems' | 'rows'
   }>(),
   { readonly: false, busy: null, variant: 'cards' },
 )
@@ -132,6 +140,30 @@ function tap(stat: Stat): void {
   font-size: 0.72rem;
   color: var(--gold);
   font-weight: 600;
+}
+
+/* ---- prose rows (traits) ---- */
+.rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.prose-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+}
+
+.prose-row + .prose-row {
+  border-top: 1px solid var(--line);
+}
+
+.prose-value {
+  font-size: 0.88rem;
+  color: var(--ink);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 /* ---- ability gems ---- */
