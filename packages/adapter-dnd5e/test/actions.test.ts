@@ -649,35 +649,78 @@ describe('spellbook management', () => {
     ).toEqual({ endpoint: 'update-item', itemId: bane._id, data: { 'system.prepared': 0 } });
   });
 
-  it('spell rows carry toggleActionId and forgettable; the sheet flags spellbook support', () => {
+  it('spell rows carry toggleActionId and are removable from the spells collection; the sheet lists library collections', () => {
     const spells = section(casterCaptured, 'spells');
     if (spells.kind !== 'list') throw new Error('spells must be a list section');
     const bolt = spellOf('Guiding Bolt');
     const row = spells.items.find((r) => r.id === bolt._id);
     expect(row?.toggleActionId).toBe(`spell.${bolt._id}.prepare`);
-    expect(row?.forgettable).toBe(true);
+    expect(row?.removable).toBe('spells');
     const cantripRow = spells.items.find((r) => r.id === spellOf('Sacred Flame')._id);
     expect(cantripRow?.toggleActionId).toBeUndefined();
-    expect(cantripRow?.forgettable).toBe(true);
-    expect(dnd5eAdapter.toViewModel(casterCaptured).hasSpellbook).toBe(true);
+    expect(cantripRow?.removable).toBe('spells');
+    expect(dnd5eAdapter.toViewModel(casterCaptured).library).toEqual([
+      { id: 'spells', label: 'Learn spell' },
+      { id: 'feats', label: 'Add feat' },
+      { id: 'gear', label: 'Add item' },
+    ]);
   });
 
-  it('spellbook capability accepts spells and rejects everything else', () => {
-    const sb = dnd5eAdapter.spellbook;
-    if (!sb) throw new Error('adapter must expose spellbook');
-    expect(sb.searchFilter).toBe('documentType:Item,subType:spell');
-    expect(sb.canLearn({ type: 'spell' })).toBe(true);
-    expect(sb.canLearn({ type: 'weapon' })).toBe(false);
-    expect(sb.canForget(spellOf('Bane'))).toBe(true);
+  it('feature and inventory rows carry their removable collection id', () => {
+    const features = section(casterCaptured, 'features');
+    if (features.kind !== 'list') throw new Error('features must be a list section');
+    for (const row of features.items) expect(row.removable).toBe('feats');
+    const inventory = section(casterCaptured, 'inventory');
+    if (inventory.kind !== 'list') throw new Error('inventory must be a list section');
+    for (const row of inventory.items) expect(row.removable).toBe('gear');
+  });
+
+  it('exposes spells / feats / gear library collections', () => {
+    const lib = dnd5eAdapter.library;
+    if (!lib) throw new Error('adapter must expose library');
+    expect(lib.map((c) => c.id)).toEqual(['spells', 'feats', 'gear']);
+    expect(lib.map((c) => c.label)).toEqual(['Learn spell', 'Add feat', 'Add item']);
+
+    const byId = (id: string) => {
+      const c = lib.find((x) => x.id === id);
+      if (!c) throw new Error(`collection ${id} missing`);
+      return c;
+    };
+
+    const spells = byId('spells');
+    expect(spells.searchFilter).toBe('documentType:Item,subType:spell');
+    expect(spells.canAdd({ type: 'spell' })).toBe(true);
+    expect(spells.canAdd({ type: 'weapon' })).toBe(false);
+    expect(spells.canRemove(spellOf('Bane'))).toBe(true);
     const nonSpell = casterCaptured.items?.find((i) => i.type !== 'spell');
     if (!nonSpell) throw new Error('need a non-spell item');
-    expect(sb.canForget(nonSpell)).toBe(false);
+    expect(spells.canRemove(nonSpell)).toBe(false);
+
+    const feats = byId('feats');
+    expect(feats.searchFilter).toBe('documentType:Item,subType:feat');
+    expect(feats.canAdd({ type: 'feat' })).toBe(true);
+    expect(feats.canAdd({ type: 'spell' })).toBe(false);
+    const feat = casterCaptured.items?.find((i) => i.type === 'feat');
+    if (!feat) throw new Error('need a feat item');
+    expect(feats.canRemove(feat)).toBe(true);
+    expect(feats.canRemove(spellOf('Bane'))).toBe(false);
+
+    const gear = byId('gear');
+    expect(gear.searchFilter).toBe('documentType:Item');
+    expect(gear.canAdd({ type: 'weapon' })).toBe(true);
+    expect(gear.canAdd({ type: 'equipment' })).toBe(true);
+    expect(gear.canAdd({ type: 'spell' })).toBe(false);
+    expect(gear.canAdd({ type: 'feat' })).toBe(false);
+    const weapon = casterCaptured.items?.find((i) => i.type === 'weapon');
+    if (!weapon) throw new Error('need a weapon item');
+    expect(gear.canRemove(weapon)).toBe(true);
+    expect(gear.canRemove(spellOf('Bane'))).toBe(false);
   });
 
-  it('describe renders a preview ListItem from a raw compendium doc', () => {
-    const sb = dnd5eAdapter.spellbook;
-    if (!sb) throw new Error('adapter must expose spellbook');
-    const li = sb.describe({
+  it('spells collection describe renders a preview ListItem from a raw compendium doc', () => {
+    const spells = dnd5eAdapter.library?.find((c) => c.id === 'spells');
+    if (!spells) throw new Error('adapter must expose spells collection');
+    const li = spells.describe({
       _id: 'x1',
       name: 'Fireball',
       type: 'spell',
@@ -687,8 +730,36 @@ describe('spellbook management', () => {
     expect(li).toMatchObject({ id: 'x1', label: 'Fireball', img: 'icons/f.webp', detail: '<p>Boom</p>' });
     expect(li.sub).toContain('3rd level');
     expect(li.sub).toContain('Evocation');
-    const cantrip = sb.describe({ _id: 'x2', name: 'Light', type: 'spell', system: { level: 0 } });
+    const cantrip = spells.describe({ _id: 'x2', name: 'Light', type: 'spell', system: { level: 0 } });
     expect(cantrip.sub).toContain('Cantrip');
+  });
+
+  it('feats collection describe renders type label and detail', () => {
+    const feats = dnd5eAdapter.library?.find((c) => c.id === 'feats');
+    if (!feats) throw new Error('adapter must expose feats collection');
+    const classFeat = feats.describe({
+      _id: 'f1',
+      name: 'Second Wind',
+      type: 'feat',
+      img: 'icons/w.webp',
+      system: { type: { value: 'class' }, description: { value: '<p>Heal</p>' } },
+    });
+    expect(classFeat).toMatchObject({ id: 'f1', label: 'Second Wind', sub: 'Class feature', img: 'icons/w.webp', detail: '<p>Heal</p>' });
+    const plainFeat = feats.describe({ _id: 'f2', name: 'Grappler', type: 'feat', system: {} });
+    expect(plainFeat.sub).toBe('Feat');
+  });
+
+  it('gear collection describe renders item type and detail', () => {
+    const gear = dnd5eAdapter.library?.find((c) => c.id === 'gear');
+    if (!gear) throw new Error('adapter must expose gear collection');
+    const li = gear.describe({
+      _id: 'g1',
+      name: 'Potion of Healing',
+      type: 'consumable',
+      img: 'icons/p.webp',
+      system: { description: { value: '<p>Drink</p>' } },
+    });
+    expect(li).toMatchObject({ id: 'g1', label: 'Potion of Healing', sub: 'consumable', img: 'icons/p.webp', detail: '<p>Drink</p>' });
   });
 
   it('rejects prepare intents for spells without a toggle', () => {

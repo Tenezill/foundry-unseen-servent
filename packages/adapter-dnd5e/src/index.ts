@@ -31,6 +31,7 @@ import type {
   FoundryActorDoc,
   FoundryItemDoc,
   FoundryUpdate,
+  LibraryCollection,
   ListItem,
   RelayAction,
   ResourceDescriptor,
@@ -741,6 +742,8 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>): List
     // attacking live on the Actions tab.
     ...(isEquippable(item) ? { toggleActionId: `item.${item._id}.equip` } : {}),
     ...(detail !== undefined ? { detail } : {}),
+    // Physical items may be removed via the library API (M13).
+    removable: 'gear',
   };
 }
 
@@ -757,6 +760,8 @@ function featureListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListIt
     ...(resourceIds.has(usesId) ? { resourceId: usesId } : {}),
     ...(isUsableFeature(item) ? { actionId: `feature.${item._id}.use` } : {}),
     ...(detail !== undefined ? { detail } : {}),
+    // Feats may be removed via the library API (M13).
+    removable: 'feats',
   };
 }
 
@@ -794,8 +799,8 @@ function spellListItem(item: FoundryItemDoc): ListItem {
     ...(tags.length > 0 ? { tags } : {}),
     ...(detail !== undefined ? { detail } : {}),
     ...(isPreparableSpell(item) ? { toggleActionId: `spell.${item._id}.prepare` } : {}),
-    // Any spell on the sheet may be forgotten via the spellbook API.
-    forgettable: true,
+    // Any spell on the sheet may be removed via the library API.
+    removable: 'spells',
     actionId,
   };
 }
@@ -831,6 +836,80 @@ function spellPreview(doc: Rec): ListItem {
     ...(typeof detail === 'string' && detail !== '' ? { detail } : {}),
   };
 }
+
+/**
+ * Preview ListItem for a RAW feat document (compendium search hit) — the
+ * add-confirm sheet renders it. sub is the feat-type label, mirroring
+ * featureListItem ("Class feature" / "Feat").
+ */
+function featPreview(doc: Rec): ListItem {
+  const system = rec(doc.system);
+  const featType = strAt(system, 'type.value');
+  const sub = featType === 'class' ? 'Class feature' : 'Feat';
+  const detail = getPath(system, 'description.value');
+  const name = typeof doc.name === 'string' && doc.name !== '' ? doc.name : 'Unknown feat';
+  const id = typeof doc._id === 'string' && doc._id !== '' ? doc._id : slug(name);
+  return {
+    id,
+    label: name,
+    sub,
+    ...(typeof doc.img === 'string' ? { img: doc.img } : {}),
+    ...(typeof detail === 'string' && detail !== '' ? { detail } : {}),
+  };
+}
+
+/**
+ * Preview ListItem for a RAW physical-item document (compendium search hit) —
+ * the add-confirm sheet renders it. sub is the item's Foundry type
+ * (weapon/equipment/consumable…), mirroring inventoryListItem.
+ */
+function gearPreview(doc: Rec): ListItem {
+  const detail = getPath(rec(doc.system), 'description.value');
+  const name = typeof doc.name === 'string' && doc.name !== '' ? doc.name : 'Unknown item';
+  const id = typeof doc._id === 'string' && doc._id !== '' ? doc._id : slug(name);
+  const type = typeof doc.type === 'string' && doc.type !== '' ? doc.type : undefined;
+  return {
+    id,
+    label: name,
+    ...(type !== undefined ? { sub: type } : {}),
+    ...(typeof doc.img === 'string' ? { img: doc.img } : {}),
+    ...(typeof detail === 'string' && detail !== '' ? { detail } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Library collections (PLAN.md M13): search -> preview -> add / remove. The
+// adapter declares each addable/removable class of documents; the gateway
+// resolves a collection by id and relays give/delete. No rules engine — add
+// only copies a legal world doc onto the actor; remove only deletes an item
+// already on the actor. `describe` reuses the sheet preview builders.
+
+const LIBRARY: LibraryCollection[] = [
+  {
+    id: 'spells',
+    label: 'Learn spell',
+    searchFilter: 'documentType:Item,subType:spell',
+    canAdd: (doc) => doc.type === 'spell',
+    canRemove: (item) => item.type === 'spell',
+    describe: (doc) => spellPreview(doc),
+  },
+  {
+    id: 'feats',
+    label: 'Add feat',
+    searchFilter: 'documentType:Item,subType:feat',
+    canAdd: (doc) => doc.type === 'feat',
+    canRemove: (item) => item.type === 'feat',
+    describe: (doc) => featPreview(doc),
+  },
+  {
+    id: 'gear',
+    label: 'Add item',
+    searchFilter: 'documentType:Item',
+    canAdd: (doc) => typeof doc.type === 'string' && PHYSICAL_ITEM_TYPES.has(doc.type),
+    canRemove: (item) => PHYSICAL_ITEM_TYPES.has(item.type),
+    describe: (doc) => gearPreview(doc),
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Actions (PLAN.md M6) — descriptors + intent -> relay call. The adapter only
@@ -1118,7 +1197,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     actions: buildActions(actor),
     concentration,
     ...(conditions.length > 0 ? { conditions } : {}),
-    hasSpellbook: true,
+    library: LIBRARY.map((c) => ({ id: c.id, label: c.label })),
   };
 }
 
@@ -1171,12 +1250,7 @@ export const dnd5eAdapter: SystemAdapter = {
   buildUpdate,
   actions: buildActions,
   buildAction,
-  spellbook: {
-    searchFilter: 'documentType:Item,subType:spell',
-    canLearn: (doc) => doc.type === 'spell',
-    canForget: (item) => item.type === 'spell',
-    describe: (doc) => spellPreview(doc),
-  },
+  library: LIBRARY,
 };
 
 export default dnd5eAdapter;

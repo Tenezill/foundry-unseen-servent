@@ -97,9 +97,10 @@ export interface ListItem {
   /** Secondary toggle action (equip/unequip, prepare/unprepare), when
    *  applicable. The pill label follows the action's kind. */
   toggleActionId?: string;
-  /** May be deleted via the spellbook API (renders a destructive detail
-   *  action, e.g. "Forget spell"). */
-  forgettable?: boolean;
+  /** The library collection id this item can be removed from, e.g. 'spells' |
+   *  'feats' | 'gear' (renders a destructive detail action and lets the PWA
+   *  hit DELETE /library/:collection/:itemId). Absent = not removable. */
+  removable?: string;
   /**
    * Rich description for a detail view (M8). This is content from the user's
    * OWN world (the item's own description) — the app only ever renders what
@@ -155,8 +156,10 @@ export interface SheetViewModel {
   conditions?: Condition[];
   /** The spell being concentrated on, if any (M8, dnd5e: from effects). */
   concentration?: { label: string } | null;
-  /** True when the actor's adapter supports spellbook search/learn/forget. */
-  hasSpellbook?: boolean;
+  /** Library collections the actor's adapter supports (M13): search ->
+   *  preview -> add / remove. Each entry is a button hint for the PWA: the
+   *  `id` routes to /library/:id/*, the `label` names the add button. */
+  library?: Array<{ id: string; label: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,27 +233,35 @@ export interface AdapterIO {
 }
 
 /**
- * Optional spellbook capability: search the world's compendia for learnable
- * spells, learn a found one (relay `give` copies it onto the actor), forget
- * a known one (relay `delete` on the embedded item). All system knowledge
- * (filter strings, document types, preview labels) stays in the adapter.
+ * A library collection (M13): one searchable, addable/removable class of
+ * documents (spells, feats, gear…) the adapter declares. Generalizes the
+ * spells-only spellbook so feats and gear reuse the exact search -> preview
+ * -> add / remove flow. Adding relays a `give` (copies the doc onto the
+ * actor); removing relays a `delete` on the embedded item. All system
+ * knowledge (filter strings, document types, preview labels) stays in the
+ * adapter — no rules engine.
  */
-export interface SpellbookSupport {
-  /** relay /search filter for learnable entries, e.g. "documentType:Item,subType:spell". */
+export interface LibraryCollection {
+  /** stable collection id, e.g. 'spells' | 'feats' | 'gear'. */
+  id: string;
+  /** the add-button label, e.g. "Learn spell" / "Add feat" / "Add item". */
+  label: string;
+  /** relay /search filter, e.g. "documentType:Item,subType:spell". */
   searchFilter: string;
-  /** fetched compendium doc is a learnable spell. */
-  canLearn(doc: Record<string, unknown>): boolean;
-  /** embedded item may be deleted via the spellbook API. */
-  canForget(item: FoundryItemDoc): boolean;
-  /** preview for the learn-confirm sheet: label, "3rd level · Evocation", detail HTML. */
+  /** fetched compendium doc belongs in this collection (add is allowed). */
+  canAdd(doc: Record<string, unknown>): boolean;
+  /** embedded item belongs in this collection (remove is allowed). */
+  canRemove(item: FoundryItemDoc): boolean;
+  /** preview for the add-confirm sheet: label, "3rd level · Evocation", detail HTML. */
   describe(doc: Record<string, unknown>): ListItem;
 }
 
 export interface SystemAdapter {
   /** Foundry system id this adapter handles, e.g. "dnd5e". */
   systemId: string;
-  /** Optional: spellbook search/learn/forget support (gateway 404s without it). */
-  spellbook?: SpellbookSupport;
+  /** Optional: library collections (M13) for search/add/remove (the gateway
+   *  404s for a collection id the adapter does not declare). */
+  library?: LibraryCollection[];
   /**
    * Optional: merge derived data the relay's plain /get does not serialize
    * (e.g. dnd5e spell-slot maxima) into the document before rendering.
