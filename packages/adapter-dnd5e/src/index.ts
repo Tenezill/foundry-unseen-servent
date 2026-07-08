@@ -170,6 +170,46 @@ const WEAPON_PROFICIENCIES: Record<string, string> = {
   mar: 'Martial Weapons',
 };
 
+/**
+ * dnd5e 5.3.3 `system.tools` record keys whose id doesn't capitalize into a
+ * readable name (truncations and possessives); everything else falls back to
+ * capitalize(). Tools do NOT live under traits.toolProf on 5.x.
+ */
+const TOOL_LABELS: Record<string, string> = {
+  alchemist: "Alchemist's Supplies",
+  brewer: "Brewer's Supplies",
+  calligrapher: "Calligrapher's Supplies",
+  carpenter: "Carpenter's Tools",
+  cartographer: "Cartographer's Tools",
+  cobbler: "Cobbler's Tools",
+  cook: "Cook's Utensils",
+  glassblower: "Glassblower's Tools",
+  jeweler: "Jeweler's Tools",
+  leatherworker: "Leatherworker's Tools",
+  mason: "Mason's Tools",
+  painter: "Painter's Supplies",
+  potter: "Potter's Tools",
+  smith: "Smith's Tools",
+  tinker: "Tinker's Tools",
+  weaver: "Weaver's Tools",
+  woodcarver: "Woodcarver's Tools",
+  disg: 'Disguise Kit',
+  forg: 'Forgery Kit',
+  herb: 'Herbalism Kit',
+  navg: "Navigator's Tools",
+  pois: "Poisoner's Kit",
+  thief: "Thieves' Tools",
+  card: 'Playing Card Set',
+  dice: 'Dice Set',
+};
+
+/** `traits.dr/di/dv.bypasses` weapon-property ids that void the defense. */
+const BYPASS_LABELS: Record<string, string> = {
+  mgc: 'magical',
+  ada: 'adamantine',
+  sil: 'silvered',
+};
+
 const PHYSICAL_ITEM_TYPES = new Set(['weapon', 'equipment', 'consumable', 'tool', 'container', 'loot']);
 
 /** dnd5e equipment `system.type.value`s that are armor/shield (equippable). */
@@ -679,21 +719,49 @@ function traitLabels(
   return out;
 }
 
+/**
+ * Tool proficiencies (M11): dnd5e 5.x stores them at top-level
+ * `system.tools`, a record keyed by tool id with a proficiency multiplier
+ * `value` — NOT under traits.toolProf (pre-2.x path that no longer exists).
+ */
+function toolLabels(actor: FoundryActorDoc): string[] {
+  const tools = rec(getPath(actor.system, 'tools'));
+  return Object.entries(tools)
+    .filter(([, entry]) => (typeof rec(entry).value === 'number' ? (rec(entry).value as number) > 0 : true))
+    .map(([id]) => TOOL_LABELS[id] ?? capitalize(id))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/** " (except magical, silvered)" when a defense carries bypasses. */
+function bypassSuffix(actor: FoundryActorDoc, key: string): string {
+  const raw = getPath(actor.system, `traits.${key}.bypasses`);
+  const ids = Array.isArray(raw) ? raw.filter((b): b is string => typeof b === 'string' && b !== '') : [];
+  if (ids.length === 0) return '';
+  return ` (except ${ids.map((b) => BYPASS_LABELS[b] ?? capitalize(b)).join(', ')})`;
+}
+
 /** One Stat per non-empty proficiency/trait category (M11); read-only. */
 function traitStats(actor: FoundryActorDoc): Stat[] {
-  const categories: Array<{ id: string; label: string; values: string[] }> = [
-    { id: 'languages', label: 'Languages', values: traitLabels(actor, 'languages', LANGUAGES) },
-    { id: 'armor', label: 'Armor', values: traitLabels(actor, 'armorProf', ARMOR_PROFICIENCIES) },
-    { id: 'weapons', label: 'Weapons', values: traitLabels(actor, 'weaponProf', WEAPON_PROFICIENCIES) },
-    { id: 'tools', label: 'Tools', values: traitLabels(actor, 'toolProf') },
-    { id: 'dr', label: 'Resistances', values: traitLabels(actor, 'dr', {}, true) },
-    { id: 'di', label: 'Immunities', values: traitLabels(actor, 'di', {}, true) },
-    { id: 'dv', label: 'Vulnerabilities', values: traitLabels(actor, 'dv', {}, true) },
+  // Every category includes its free-text `.custom` — homebrew languages and
+  // proficiencies typed into the Foundry sheet must not vanish on the phone.
+  const categories: Array<{ id: string; label: string; values: string[]; suffix?: string }> = [
+    { id: 'languages', label: 'Languages', values: traitLabels(actor, 'languages', LANGUAGES, true) },
+    { id: 'armor', label: 'Armor', values: traitLabels(actor, 'armorProf', ARMOR_PROFICIENCIES, true) },
+    { id: 'weapons', label: 'Weapons', values: traitLabels(actor, 'weaponProf', WEAPON_PROFICIENCIES, true) },
+    { id: 'tools', label: 'Tools', values: toolLabels(actor) },
+    { id: 'dr', label: 'Resistances', values: traitLabels(actor, 'dr', {}, true), suffix: bypassSuffix(actor, 'dr') },
+    { id: 'di', label: 'Immunities', values: traitLabels(actor, 'di', {}, true), suffix: bypassSuffix(actor, 'di') },
+    {
+      id: 'dv',
+      label: 'Vulnerabilities',
+      values: traitLabels(actor, 'dv', {}, true),
+      suffix: bypassSuffix(actor, 'dv'),
+    },
     { id: 'ci', label: 'Condition Immunities', values: traitLabels(actor, 'ci', {}, true) },
   ];
   return categories
     .filter((c) => c.values.length > 0)
-    .map((c) => ({ id: `trait.${c.id}`, label: c.label, value: c.values.join(', ') }));
+    .map((c) => ({ id: `trait.${c.id}`, label: c.label, value: c.values.join(', ') + (c.suffix ?? '') }));
 }
 
 /** The five personality one-liners rendered under the biography (M11). */
@@ -715,7 +783,10 @@ const PERSONALITY_FIELDS = [
 function biographyItems(actor: FoundryActorDoc): ListItem[] {
   const out: ListItem[] = [];
   const bio = strAt(actor.system, 'details.biography.value');
-  if (bio !== undefined && bio.trim() !== '') {
+  // Editor-empty HTML ("<p></p>", stray &nbsp;) is not content — strip
+  // markup before deciding whether there is anything to read.
+  const bioText = (bio ?? '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+  if (bio !== undefined && bioText !== '') {
     out.push({ id: 'bio', label: 'Biography', sub: 'Tap to read', detail: bio });
   }
   for (const f of PERSONALITY_FIELDS) {

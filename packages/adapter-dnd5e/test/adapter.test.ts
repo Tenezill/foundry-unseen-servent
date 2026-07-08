@@ -1085,15 +1085,62 @@ describe('proficiencies & traits (M11)', () => {
     );
   });
 
-  it('tool proficiencies appear when present (unknown ids capitalized)', () => {
-    const tinker = withTraits(martialCaptured, { toolProf: { value: ['thief', 'herb'], custom: '' } });
+  it('tool proficiencies come from system.tools (5.x record) — traits.toolProf does not exist', () => {
+    // Real 5.3.3 wire shape: top-level system.tools keyed by tool id with a
+    // proficiency multiplier; both captured fixtures carry it (empty here).
+    const tinker: FoundryActorDoc = {
+      ...martialCaptured,
+      system: {
+        ...martialCaptured.system,
+        tools: {
+          thief: { value: 1, ability: 'dex' },
+          herb: { value: 1, ability: 'int' },
+          flute: { value: 1, ability: 'cha' },
+        },
+      },
+    };
     const s = section(tinker, 'traits');
     if (s.kind !== 'stats') throw new Error('traits must be a stats section');
     expect(s.stats.find((x) => x.id === 'trait.tools')).toEqual({
       id: 'trait.tools',
       label: 'Tools',
-      value: 'Thief, Herb',
+      // vocab for truncated/possessive ids, capitalize fallback, sorted
+      value: "Flute, Herbalism Kit, Thieves' Tools",
     });
+  });
+
+  it('zero-multiplier tool entries do not count as proficiency', () => {
+    const dabbler: FoundryActorDoc = {
+      ...martialCaptured,
+      system: { ...martialCaptured.system, tools: { thief: { value: 0, ability: 'dex' } } },
+    };
+    const s = section(dabbler, 'traits');
+    if (s.kind !== 'stats') throw new Error('traits must be a stats section');
+    expect(s.stats.find((x) => x.id === 'trait.tools')).toBeUndefined();
+  });
+
+  it('custom free-text entries render for languages/armor/weapons too', () => {
+    const homebrew = withTraits(martialCaptured, {
+      languages: { value: ['common'], custom: 'Aarakocra' },
+    });
+    const s = section(homebrew, 'traits');
+    if (s.kind !== 'stats') throw new Error('traits must be a stats section');
+    expect(s.stats.find((x) => x.id === 'trait.languages')?.value).toBe('Common, Aarakocra');
+  });
+
+  it('damage-defense bypasses render as an "(except …)" qualifier', () => {
+    const stony = withTraits(martialCaptured, {
+      dr: { value: ['blud', 'pier', 'slas'], bypasses: ['mgc'], custom: '' },
+    });
+    const s = section(stony, 'traits');
+    if (s.kind !== 'stats') throw new Error('traits must be a stats section');
+    expect(s.stats.find((x) => x.id === 'trait.dr')?.value).toBe('Blud, Pier, Slas (except magical)');
+  });
+
+  it('editor-empty biography HTML ("<p></p>") produces no Biography row', () => {
+    const blank = withDetails(martialCaptured, { biography: { value: '<p>&nbsp;</p><p></p>', public: '' } });
+    const s = dnd5eAdapter.toViewModel(blank).sections.find((x) => x.id === 'biography');
+    expect(s === undefined || (s.kind === 'list' && !s.items.some((i) => i.id === 'bio'))).toBe(true);
   });
 
   it('di/dv/ci render when set; .custom strings are appended', () => {
