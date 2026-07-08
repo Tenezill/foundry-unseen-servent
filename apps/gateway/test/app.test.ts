@@ -619,13 +619,13 @@ describe('adapter enrichment', () => {
   });
 });
 
-describe('spellbook endpoints', () => {
-  it('searches with the adapter filter and maps results', async () => {
+describe('library endpoints', () => {
+  it('searches a collection with the adapter filter and maps results', async () => {
     const { app, relay } = setup();
     relay.searchResults = [
-      { uuid: 'Compendium.x.Item.f1', id: 'f1', name: 'Fireball', img: 'f.webp', documentType: 'Item', packageName: 'dnd5e.spells' },
+      { uuid: 'Compendium.x.Item.f1', id: 'f1', name: 'Fireball', img: 'f.webp', documentType: 'Item', subType: 'spell', packageName: 'dnd5e.spells' },
     ];
-    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/search?q=fire', headers: asAnna });
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/library/spells/search?q=fire', headers: asAnna });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       results: [{ uuid: 'Compendium.x.Item.f1', name: 'Fireball', img: 'f.webp', pack: 'dnd5e.spells' }],
@@ -633,31 +633,72 @@ describe('spellbook endpoints', () => {
     expect(relay.searchCalls[0]).toMatchObject({ query: 'fire', filter: 'documentType:Item,subType:spell' });
   });
 
+  it('uses the feats collection filter for the feats route', async () => {
+    const { app, relay } = setup();
+    relay.searchResults = [
+      { uuid: 'Compendium.x.Item.l1', id: 'l1', name: 'Lucky', documentType: 'Item', subType: 'feat' },
+    ];
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/library/feats/search?q=luck', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ results: [{ uuid: 'Compendium.x.Item.l1', name: 'Lucky' }] });
+    expect(relay.searchCalls[0]).toMatchObject({ query: 'luck', filter: 'documentType:Item,subType:feat' });
+  });
+
+  it('drops non-members from a broad (gear) search so only addable hits survive', async () => {
+    const { app, relay } = setup();
+    // The gear filter is the bare `documentType:Item`, so the relay returns
+    // spells and feats alongside real gear; only the physical items may be added.
+    relay.searchResults = [
+      { uuid: 'Compendium.x.Item.fb', id: 'fb', name: 'Fireball', documentType: 'Item', subType: 'spell' },
+      { uuid: 'Compendium.x.Item.sw', id: 'sw', name: 'Firebrand Sword', documentType: 'Item', subType: 'weapon', packageName: 'dnd5e.items' },
+      { uuid: 'Compendium.x.Item.lk', id: 'lk', name: 'Lucky', documentType: 'Item', subType: 'feat' },
+      { uuid: 'Compendium.x.Item.po', id: 'po', name: 'Fire Potion', documentType: 'Item', subType: 'consumable' },
+    ];
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/library/gear/search?q=fire', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      results: [
+        { uuid: 'Compendium.x.Item.sw', name: 'Firebrand Sword', pack: 'dnd5e.items' },
+        { uuid: 'Compendium.x.Item.po', name: 'Fire Potion' },
+      ],
+    });
+    // The broad filter is still sent verbatim; narrowing happens server-side here.
+    expect(relay.searchCalls[0]).toMatchObject({ query: 'fire', filter: 'documentType:Item' });
+  });
+
+  it('404s an unknown collection id', async () => {
+    const { app, relay } = setup();
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/library/potions/search?q=x', headers: asAnna });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('NOT_FOUND');
+    expect(relay.searchCalls).toHaveLength(0);
+  });
+
   it('returns empty results for a blank query without hitting the relay', async () => {
     const { app, relay } = setup();
-    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/search?q=%20', headers: asAnna });
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/library/spells/search?q=%20', headers: asAnna });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ results: [] });
     expect(relay.searchCalls).toHaveLength(0);
   });
 
-  it('previews a learnable spell and rejects non-spells with 422', async () => {
+  it('previews an addable spell and rejects non-members with 422', async () => {
     const { app, relay } = setup();
     relay.entities.set('Compendium.x.Item.f1', { _id: 'f1', name: 'Fireball', type: 'spell', system: {} });
     relay.entities.set('Compendium.x.Item.w1', { _id: 'w1', name: 'Sword', type: 'weapon', system: {} });
-    const ok = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/preview?uuid=Compendium.x.Item.f1', headers: asAnna });
+    const ok = await app.inject({ method: 'GET', url: '/api/actors/a1/library/spells/preview?uuid=Compendium.x.Item.f1', headers: asAnna });
     expect(ok.statusCode).toBe(200);
     expect(ok.json().preview).toMatchObject({ label: 'Fireball' });
-    const bad = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/preview?uuid=Compendium.x.Item.w1', headers: asAnna });
+    const bad = await app.inject({ method: 'GET', url: '/api/actors/a1/library/spells/preview?uuid=Compendium.x.Item.w1', headers: asAnna });
     expect(bad.statusCode).toBe(422);
   });
 
-  it('learns a spell via relay give and returns a fresh sheet', async () => {
+  it('adds a spell via relay give and returns a fresh sheet', async () => {
     const { app, relay } = setup();
     relay.entities.set('Compendium.x.Item.f1', { _id: 'f1', name: 'Fireball', type: 'spell', system: {} });
     const res = await app.inject({
       method: 'POST',
-      url: '/api/actors/a1/spellbook/learn',
+      url: '/api/actors/a1/library/spells/add',
       headers: asAnna,
       payload: { uuid: 'Compendium.x.Item.f1' },
     });
@@ -666,12 +707,12 @@ describe('spellbook endpoints', () => {
     expect(res.json().sheet).toBeDefined();
   });
 
-  it('rejects learning a non-spell with 422 and no give call', async () => {
+  it('rejects adding a non-member with 422 and no give call', async () => {
     const { app, relay } = setup();
     relay.entities.set('Compendium.x.Item.w1', { _id: 'w1', name: 'Sword', type: 'weapon', system: {} });
     const res = await app.inject({
       method: 'POST',
-      url: '/api/actors/a1/spellbook/learn',
+      url: '/api/actors/a1/library/spells/add',
       headers: asAnna,
       payload: { uuid: 'Compendium.x.Item.w1' },
     });
@@ -679,45 +720,81 @@ describe('spellbook endpoints', () => {
     expect(relay.giveCalls).toEqual([]);
   });
 
-  it('forgets a spell via relay delete; non-spells and unknown items are 403', async () => {
+  it('adds a feat via the feats collection and validates against the feats filter', async () => {
     const { app, relay } = setup();
-    const ok = await app.inject({ method: 'DELETE', url: '/api/actors/a1/spells/s1', headers: asAnna });
+    relay.entities.set('Compendium.x.Item.l1', { _id: 'l1', name: 'Lucky', type: 'feat', system: {} });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/library/feats/add',
+      headers: asAnna,
+      payload: { uuid: 'Compendium.x.Item.l1' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(relay.giveCalls).toEqual([{ toUuid: 'Actor.a1', itemUuid: 'Compendium.x.Item.l1' }]);
+    expect(res.json().sheet).toBeDefined();
+    // a spell is not a feat -> the feats collection rejects it.
+    relay.entities.set('Compendium.x.Item.f1', { _id: 'f1', name: 'Fireball', type: 'spell', system: {} });
+    const wrong = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/library/feats/add',
+      headers: asAnna,
+      payload: { uuid: 'Compendium.x.Item.f1' },
+    });
+    expect(wrong.statusCode).toBe(422);
+    expect(relay.giveCalls).toHaveLength(1);
+  });
+
+  it('removes a spell via relay delete; non-members and unknown items are 403', async () => {
+    const { app, relay } = setup();
+    const ok = await app.inject({ method: 'DELETE', url: '/api/actors/a1/library/spells/s1', headers: asAnna });
     expect(ok.statusCode).toBe(200);
     expect(relay.deleteCalls).toEqual(['Actor.a1.Item.s1']);
     expect(ok.json().sheet).toBeDefined();
-    const nonSpell = await app.inject({ method: 'DELETE', url: '/api/actors/a1/spells/i1', headers: asAnna });
+    const nonSpell = await app.inject({ method: 'DELETE', url: '/api/actors/a1/library/spells/i1', headers: asAnna });
     expect(nonSpell.statusCode).toBe(403);
-    const missing = await app.inject({ method: 'DELETE', url: '/api/actors/a1/spells/nope', headers: asAnna });
+    const missing = await app.inject({ method: 'DELETE', url: '/api/actors/a1/library/spells/nope', headers: asAnna });
     expect(missing.statusCode).toBe(403);
     expect(relay.deleteCalls).toHaveLength(1);
   });
 
-  it('hides spellbook routes for unowned actors (404) and unauthenticated callers (401)', async () => {
+  it('removes a feat via the feats collection; a spell is not removable there (403)', async () => {
+    const { app, relay } = setup();
+    const ok = await app.inject({ method: 'DELETE', url: '/api/actors/a1/library/feats/ft1', headers: asAnna });
+    expect(ok.statusCode).toBe(200);
+    expect(relay.deleteCalls).toEqual(['Actor.a1.Item.ft1']);
+    expect(ok.json().sheet).toBeDefined();
+    // s1 is a spell, not a feat -> not removable via the feats collection.
+    const wrong = await app.inject({ method: 'DELETE', url: '/api/actors/a1/library/feats/s1', headers: asAnna });
+    expect(wrong.statusCode).toBe(403);
+    expect(relay.deleteCalls).toHaveLength(1);
+  });
+
+  it('hides library routes for unowned actors (404) and unauthenticated callers (401)', async () => {
     const { app } = setup();
-    const unowned = await app.inject({ method: 'GET', url: '/api/actors/b1/spellbook/search?q=x', headers: asAnna });
+    const unowned = await app.inject({ method: 'GET', url: '/api/actors/b1/library/spells/search?q=x', headers: asAnna });
     expect(unowned.statusCode).toBe(404);
-    const anon = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/search?q=x' });
+    const anon = await app.inject({ method: 'GET', url: '/api/actors/a1/library/spells/search?q=x' });
     expect(anon.statusCode).toBe(401);
   });
 
-  it('404s every spellbook route when the adapter has no spellbook support', async () => {
+  it('404s every library route when the adapter has no library support', async () => {
     const relay = new FakeRelay();
     relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
-    const { spellbook: _spellbook, ...spellbookless } = fakeAdapter;
+    const { library: _library, ...libraryless } = fakeAdapter;
     const bare = buildApp({
       relay,
       players: makePlayers(),
-      registry: createRegistry([spellbookless]),
+      registry: createRegistry([libraryless]),
       defaultSystemId: 'fake',
       livePollMs: 10_000,
       pingMs: 60_000,
     });
     try {
       for (const [method, url] of [
-        ['GET', '/api/actors/a1/spellbook/search?q=x'],
-        ['GET', '/api/actors/a1/spellbook/preview?uuid=y'],
-        ['POST', '/api/actors/a1/spellbook/learn'],
-        ['DELETE', '/api/actors/a1/spells/s1'],
+        ['GET', '/api/actors/a1/library/spells/search?q=x'],
+        ['GET', '/api/actors/a1/library/spells/preview?uuid=y'],
+        ['POST', '/api/actors/a1/library/spells/add'],
+        ['DELETE', '/api/actors/a1/library/spells/s1'],
       ] as const) {
         const res = await bare.inject({ method, url, headers: asAnna, ...(method === 'POST' ? { payload: { uuid: 'y' } } : {}) });
         expect(res.statusCode).toBe(404);
@@ -739,10 +816,10 @@ describe('spellbook endpoints', () => {
     expect(relay.updates.at(-1)).toEqual({ uuid: 'Actor.a1.Item.s1', data: { 'system.prepared': 1 } });
   });
 
-  it('never leaks relay secrets through spellbook errors', async () => {
+  it('never leaks relay secrets through library errors', async () => {
     const { app, relay } = setup();
     relay.actionError = true;
-    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/search?q=fire', headers: asAnna });
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/library/spells/search?q=fire', headers: asAnna });
     expect(res.statusCode).toBe(502);
     expect(res.body).not.toContain(FAKE_API_KEY);
     expect(res.body).not.toContain(FAKE_RELAY_URL);

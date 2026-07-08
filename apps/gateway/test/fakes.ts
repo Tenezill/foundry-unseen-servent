@@ -152,7 +152,7 @@ export class FakeRelay implements RelayPort {
     return structuredClone(this.actorCommandResult);
   }
 
-  // ---- spellbook (search / give / delete) ----------------------------------
+  // ---- library (search / give / delete) ------------------------------------
 
   /** Entries returned by search(); tests seed this. */
   searchResults: Array<{
@@ -305,12 +305,34 @@ function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
 
 export const fakeAdapter: SystemAdapter = {
   systemId: 'fake',
-  spellbook: {
-    searchFilter: 'documentType:Item,subType:spell',
-    canLearn: (doc) => doc.type === 'spell',
-    canForget: (item) => item.type === 'spell',
-    describe: (doc) => ({ id: String(doc._id ?? 'preview'), label: String(doc.name ?? '?'), sub: 'spell' }),
-  },
+  library: [
+    {
+      id: 'spells',
+      label: 'Learn spell',
+      searchFilter: 'documentType:Item,subType:spell',
+      canAdd: (doc) => doc.type === 'spell',
+      canRemove: (item) => item.type === 'spell',
+      describe: (doc) => ({ id: String(doc._id ?? 'preview'), label: String(doc.name ?? '?'), sub: 'spell' }),
+    },
+    {
+      id: 'feats',
+      label: 'Add feat',
+      searchFilter: 'documentType:Item,subType:feat',
+      canAdd: (doc) => doc.type === 'feat',
+      canRemove: (item) => item.type === 'feat',
+      describe: (doc) => ({ id: String(doc._id ?? 'preview'), label: String(doc.name ?? '?'), sub: 'feat' }),
+    },
+    {
+      id: 'gear',
+      label: 'Add item',
+      // No single subType covers physical items -> broad Item filter; the
+      // search route relies on canAdd to drop spells/feats from the hits.
+      searchFilter: 'documentType:Item',
+      canAdd: (doc) => doc.type === 'weapon' || doc.type === 'consumable' || doc.type === 'equipment',
+      canRemove: (item) => item.type === 'weapon' || item.type === 'consumable' || item.type === 'equipment',
+      describe: (doc) => ({ id: String(doc._id ?? 'preview'), label: String(doc.name ?? '?'), sub: String(doc.type ?? 'item') }),
+    },
+  ],
   toViewModel(actor: FoundryActorDoc): SheetViewModel {
     return {
       actorId: actor._id,
@@ -319,7 +341,10 @@ export const fakeAdapter: SystemAdapter = {
       headline: [],
       sections: [],
       resources: descriptors(actor),
-      hasSpellbook: true,
+      library: [
+        { id: 'spells', label: 'Learn spell' },
+        { id: 'feats', label: 'Add feat' },
+      ],
     };
   },
   resources: descriptors,
@@ -389,6 +414,7 @@ export function actorDoc(id: string, name: string, hp: number, hpMax: number): R
     items: [
       { _id: 'i1', name: 'Arrows', type: 'consumable', system: { quantity: 20 } },
       { _id: 's1', name: 'Zap', type: 'spell', system: {} },
+      { _id: 'ft1', name: 'Lucky', type: 'feat', system: {} },
     ],
   };
 }

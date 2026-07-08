@@ -661,20 +661,24 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
     },
   );
 
-  // ---- spellbook (search / preview / learn / forget) -------------------------
-  // Available only when the actor's adapter exposes `spellbook`; everything
-  // else 404s so the routes do not leak which systems support it.
+  // ---- library (search / preview / add / remove) ----------------------------
+  // A collection-parameterized capability (M13): spells, feats, gear share one
+  // search -> preview -> add / remove flow. Available only when the actor's
+  // adapter declares `library`; a missing library OR an unknown :collection id
+  // 404s so the routes never leak which systems/collections support it.
 
-  /** Ownership + adapter + spellbook preamble shared by the spellbook routes.
-   *  Sends the error response and returns null when any check fails. */
-  const spellbookCtx = async (
+  /** Ownership + adapter + collection preamble shared by the library routes.
+   *  Resolves the :collection id against adapter.library. Sends the error
+   *  response and returns null when any check fails. */
+  const libraryCtx = async (
     req: FastifyRequest,
     reply: FastifyReply,
     id: string,
+    collectionId: string,
   ): Promise<{
     actor: FoundryActorDoc;
     adapter: SystemAdapter;
-    spellbook: NonNullable<SystemAdapter['spellbook']>;
+    collection: NonNullable<SystemAdapter['library']>[number];
   } | null> => {
     const player = req.player as Player;
     if (!player.actorIds.includes(id)) {
@@ -691,58 +695,72 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       sendError(reply, 502, 'UPSTREAM', 'no adapter for actor system');
       return null;
     }
-    if (!adapter.spellbook) {
+    const collection = adapter.library?.find((c) => c.id === collectionId);
+    if (!collection) {
       sendError(reply, 404, 'NOT_FOUND', 'not found');
       return null;
     }
-    return { actor, adapter, spellbook: adapter.spellbook };
+    return { actor, adapter, collection };
   };
 
-  app.get<{ Params: { id: string }; Querystring: { q?: string } }>(
-    '/api/actors/:id/spellbook/search',
+  app.get<{ Params: { id: string; collection: string }; Querystring: { q?: string } }>(
+    '/api/actors/:id/library/:collection/search',
     { preHandler: auth(false) },
     async (req, reply) => {
-      const ctx = await spellbookCtx(req, reply, req.params.id);
+      const ctx = await libraryCtx(req, reply, req.params.id, req.params.collection);
       if (!ctx) return reply;
       const q = (req.query.q ?? '').trim();
       if (q === '') return reply.code(200).send({ results: [] });
-      const entries = await relay.search({ query: q, filter: ctx.spellbook.searchFilter, limit: 20 });
-      const results = entries.map((e) => ({
-        uuid: e.uuid,
-        name: e.name,
-        ...(typeof e.img === 'string' ? { img: e.img } : {}),
-        ...(typeof e.packageName === 'string' ? { pack: e.packageName } : {}),
-      }));
+      const entries = await relay.search({ query: q, filter: ctx.collection.searchFilter, limit: 20 });
+      // A single relay `subType` filter cannot express the OR of physical-item
+      // subtypes, so the broad `documentType:Item` gear filter also returns
+      // spells and feats. Drop any hit the collection would reject on add so
+      // search never surfaces a non-member that would 422 on preview/add.
+      // Relay SEARCH entries carry the item type as `subType` (full documents
+      // carry `type` — M13-live-verified), so synthesize `type` for canAdd.
+      // Entries with neither (rare minified/limited hits) already matched the
+      // server-side filter and pass through.
+      const results = entries
+        .filter((e) => {
+          const t = typeof e.subType === 'string' ? e.subType : typeof e.type === 'string' ? e.type : undefined;
+          return t === undefined ? true : ctx.collection.canAdd({ ...e, type: t });
+        })
+        .map((e) => ({
+          uuid: e.uuid,
+          name: e.name,
+          ...(typeof e.img === 'string' ? { img: e.img } : {}),
+          ...(typeof e.packageName === 'string' ? { pack: e.packageName } : {}),
+        }));
       return reply.code(200).send({ results });
     },
   );
 
-  app.get<{ Params: { id: string }; Querystring: { uuid?: string } }>(
-    '/api/actors/:id/spellbook/preview',
+  app.get<{ Params: { id: string; collection: string }; Querystring: { uuid?: string } }>(
+    '/api/actors/:id/library/:collection/preview',
     { preHandler: auth(false) },
     async (req, reply) => {
-      const ctx = await spellbookCtx(req, reply, req.params.id);
+      const ctx = await libraryCtx(req, reply, req.params.id, req.params.collection);
       if (!ctx) return reply;
       const uuid = req.query.uuid ?? '';
       if (uuid === '') return sendError(reply, 422, 'INVALID_INTENT', 'uuid is required');
       const doc = await relay.getEntity(uuid);
       if (!doc) return sendError(reply, 404, 'NOT_FOUND', 'entry not found');
-      if (!ctx.spellbook.canLearn(doc)) {
-        return sendError(reply, 422, 'INVALID_INTENT', 'entry is not a learnable spell');
+      if (!ctx.collection.canAdd(doc)) {
+        return sendError(reply, 422, 'INVALID_INTENT', 'entry cannot be added to this collection');
       }
-      return reply.code(200).send({ preview: ctx.spellbook.describe(doc) });
+      return reply.code(200).send({ preview: ctx.collection.describe(doc) });
     },
   );
 
-  app.post<{ Params: { id: string } }>(
-    '/api/actors/:id/spellbook/learn',
+  app.post<{ Params: { id: string; collection: string } }>(
+    '/api/actors/:id/library/:collection/add',
     { preHandler: auth(false) },
     async (req, reply) => {
       const player = req.player as Player;
       if (!limiter.allow(player.tokenHash)) {
         return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
       }
-      const ctx = await spellbookCtx(req, reply, req.params.id);
+      const ctx = await libraryCtx(req, reply, req.params.id, req.params.collection);
       if (!ctx) return reply;
       const raw = (req.body ?? {}) as Record<string, unknown>;
       if (typeof raw.uuid !== 'string' || raw.uuid === '') {
@@ -750,8 +768,8 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       }
       const doc = await relay.getEntity(raw.uuid);
       if (!doc) return sendError(reply, 404, 'NOT_FOUND', 'entry not found');
-      if (!ctx.spellbook.canLearn(doc)) {
-        return sendError(reply, 422, 'INVALID_INTENT', 'entry is not a learnable spell');
+      if (!ctx.collection.canAdd(doc)) {
+        return sendError(reply, 422, 'INVALID_INTENT', 'entry cannot be added to this collection');
       }
       await relay.giveItem(`Actor.${req.params.id}`, raw.uuid);
       const fresh = await fetchActor(req.params.id);
@@ -761,19 +779,19 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
     },
   );
 
-  app.delete<{ Params: { id: string; itemId: string } }>(
-    '/api/actors/:id/spells/:itemId',
+  app.delete<{ Params: { id: string; collection: string; itemId: string } }>(
+    '/api/actors/:id/library/:collection/:itemId',
     { preHandler: auth(false) },
     async (req, reply) => {
       const player = req.player as Player;
       if (!limiter.allow(player.tokenHash)) {
         return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
       }
-      const ctx = await spellbookCtx(req, reply, req.params.id);
+      const ctx = await libraryCtx(req, reply, req.params.id, req.params.collection);
       if (!ctx) return reply;
       const item = (ctx.actor.items ?? []).find((i) => i._id === req.params.itemId);
-      if (!item || !ctx.spellbook.canForget(item)) {
-        return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'item does not exist or cannot be forgotten');
+      if (!item || !ctx.collection.canRemove(item)) {
+        return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'item does not exist or cannot be removed');
       }
       await relay.deleteEntity(`Actor.${req.params.id}.Item.${req.params.itemId}`);
       const fresh = await fetchActor(req.params.id);
