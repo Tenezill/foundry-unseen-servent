@@ -241,6 +241,18 @@ export class FoundryRelayClient {
   }
 
   /**
+   * POST /dnd5e/attune-item — set an embedded item's attuned state
+   * (M12-live-verified). Errors arrive as HTTP 200 bodies with an `error`
+   * field, so status alone cannot signal failure.
+   */
+  async attuneItem(actorUuid: string, itemUuid: string, attuned: boolean): Promise<void> {
+    const body = await this.request<{ error?: string }>('POST', '/dnd5e/attune-item', {}, { actorUuid, itemUuid, attuned });
+    if (typeof body.error === 'string' && body.error !== '') {
+      throw new RelayError(`relay /dnd5e/attune-item: ${body.error}`, 200, '/dnd5e/attune-item');
+    }
+  }
+
+  /**
    * POST /dnd5e/{short-rest|long-rest|death-save|break-concentration} — an
    * actor-scoped command (no item). M8-verified: `actorUuid` goes in the
    * query, no body needed; Foundry applies the result and posts any card.

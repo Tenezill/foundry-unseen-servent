@@ -295,6 +295,8 @@ describe('actions', () => {
       { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 'two' }, // non-number
       { kind: 'equip', actionId: 'item.i1.equip' }, // equipped missing
       { kind: 'equip', actionId: 'item.i1.equip', equipped: 'yes' }, // non-boolean
+      { kind: 'attune', actionId: 'item.i1.attune' }, // attuned missing
+      { kind: 'attune', actionId: 'item.i1.attune', attuned: 'yes' }, // non-boolean
     ]) {
       const res = await post(app, 'a1', payload);
       expect(res.statusCode).toBe(422);
@@ -303,6 +305,7 @@ describe('actions', () => {
     expect(relay.rollCalls).toHaveLength(0);
     expect(relay.useAbilityCalls).toHaveLength(0);
     expect(relay.equipCalls).toHaveLength(0);
+    expect(relay.attuneCalls).toHaveLength(0);
   });
 
   it('422 INVALID_INTENT when the adapter rejects an illegal slot level', async () => {
@@ -353,6 +356,16 @@ describe('actions', () => {
     const res = await post(app, 'a1', { kind: 'equip', actionId: 'item.i1.equip', equipped: true });
     expect(res.statusCode).toBe(200);
     expect(relay.equipCalls).toEqual([{ actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.i1', equipped: true }]);
+    const body = res.json();
+    expect(body.result).toBeNull();
+    expect(body.sheet.actorId).toBe('a1');
+  });
+
+  it('attune -> attune-item with the desired state, result null', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'attune', actionId: 'item.i1.attune', attuned: true });
+    expect(res.statusCode).toBe(200);
+    expect(relay.attuneCalls).toEqual([{ actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.i1', attuned: true }]);
     const body = res.json();
     expect(body.result).toBeNull();
     expect(body.sheet.actorId).toBe('a1');
@@ -455,6 +468,7 @@ describe('actions', () => {
       { kind: 'check', actionId: 'skill.ath' },
       { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 1 },
       { kind: 'equip', actionId: 'item.i1.equip', equipped: true },
+      { kind: 'attune', actionId: 'item.i1.attune', attuned: true },
     ]) {
       const res = await post(app, 'a1', payload);
       expect(res.statusCode).toBe(502);

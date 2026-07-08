@@ -54,6 +54,8 @@ export interface RelayPort {
   ): Promise<Record<string, unknown>>;
   /** POST /dnd5e/equip-item — toggle an item's equipped state (M6). */
   equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void>;
+  /** POST /dnd5e/attune-item — set an item's attuned state (M12). */
+  attuneItem(actorUuid: string, itemUuid: string, attuned: boolean): Promise<void>;
   /** GET /search — find entities; compendia are included by default. */
   search(opts: { query?: string; filter?: string; limit?: number }): Promise<
     Array<{ uuid: string; id: string; name: string; img?: string; documentType: string; [key: string]: unknown }>
@@ -199,6 +201,9 @@ function parseActionIntent(
     case 'prepare':
       if (typeof body.prepared !== 'boolean') return null;
       return { kind, actionId, prepared: body.prepared };
+    case 'attune':
+      if (typeof body.attuned !== 'boolean') return null;
+      return { kind, actionId, attuned: body.attuned };
     case 'rest':
     case 'deathsave':
     case 'endconcentration':
@@ -638,6 +643,9 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           break;
         case 'equip-item':
           await relay.equipItem(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.equipped);
+          break;
+        case 'attune-item':
+          await relay.attuneItem(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.attuned);
           break;
         case 'update-item':
           // Generic item-field write (e.g. prepared state) — same entity-update

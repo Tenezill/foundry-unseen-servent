@@ -136,6 +136,13 @@ export class FakeRelay implements RelayPort {
     if (this.actionError) this.throwActionError('dnd5e/equip-item');
   }
 
+  readonly attuneCalls: Array<{ actorUuid: string; itemUuid: string; attuned: boolean }> = [];
+
+  async attuneItem(actorUuid: string, itemUuid: string, attuned: boolean): Promise<void> {
+    this.attuneCalls.push({ actorUuid, itemUuid, attuned });
+    if (this.actionError) this.throwActionError('dnd5e/attune-item');
+  }
+
   readonly actorCommandCalls: Array<{
     endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration';
     actorUuid: string;
@@ -288,13 +295,14 @@ function descriptors(actor: FoundryActorDoc): ResourceDescriptor[] {
   return out;
 }
 
-/** Fixed action list (M6): one check, one attack item, one leveled cast, one equip. */
+/** Fixed action list (M6): one check, one attack item, one leveled cast, one equip, one attune. */
 function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
   return [
     { id: 'skill.ath', label: 'Athletics', kind: 'check' },
     { id: 'item.i1.attack', label: 'Arrows', kind: 'attack' },
     { id: 'spell.s1.cast', label: 'Zap', kind: 'cast', slotLevels: [1, 2] },
     { id: 'item.i1.equip', label: 'Arrows', kind: 'equip', equipped: false },
+    { id: 'item.i1.attune', label: 'Arrows', kind: 'attune', attuned: false },
     { id: 'spell.s1.prepare', label: 'Zap', kind: 'prepare', prepared: false },
     { id: 'rest.short', label: 'Short Rest', kind: 'rest' },
     { id: 'rest.long', label: 'Long Rest', kind: 'rest' },
@@ -384,6 +392,8 @@ export const fakeAdapter: SystemAdapter = {
         };
       case 'equip':
         return { endpoint: 'equip-item', itemId: 'i1', equipped: intent.equipped };
+      case 'attune':
+        return { endpoint: 'attune-item', itemId: 'i1', attuned: intent.attuned };
       case 'prepare':
         return { endpoint: 'update-item', itemId: 's1', data: { 'system.prepared': intent.prepared ? 1 : 0 } };
       case 'rest':
