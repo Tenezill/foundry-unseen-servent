@@ -534,15 +534,16 @@ function speedLine(actor: FoundryActorDoc): string {
 
 function abilityStats(actor: FoundryActorDoc): Stat[] {
   return ABILITIES.map((a) => {
-    const subParts = [signed(abilityMod(actor.system, a.id))];
-    // Save proficiency marker (M14): abilities.<id>.proficient is 1 when the
-    // actor is proficient in that saving throw.
-    if (getPath(actor.system, `abilities.${a.id}.proficient`) === 1) subParts.push('● save');
+    // Save proficiency marker (M14) goes on the LABEL — the PWA's ability
+    // gems render `sub` as the large modifier text, so sub must stay a bare
+    // modifier. Threshold mirrors saveBonus (>= 1, not === 1): whatever
+    // rolls with proficiency must show the marker.
+    const saveProf = (numAt(actor.system, `abilities.${a.id}.proficient`) ?? 0) >= 1;
     return {
       id: `ability.${a.id}`,
-      label: a.label,
+      label: saveProf ? `${a.label} ●` : a.label,
       value: abilityScore(actor.system, a.id),
-      sub: subParts.join(' · '),
+      sub: signed(abilityMod(actor.system, a.id)),
       actionId: `ability.${a.id}.check`,
     };
   });
