@@ -123,9 +123,10 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
 
   it('non-caster has no cast actions; total count is pinned', () => {
     expect(all.filter((a) => a.kind === 'cast')).toHaveLength(0);
-    // 18 skills + 12 ability checks/saves + 3 attacks + 5 equips + 1 use
+    // 18 skills + 12 ability checks/saves + 3 attacks + 5 equips + 1 feature
+    // use + 6 item uses (Waterskin, Torch, Rations, Piton, Rope, Horn)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(41);
+    expect(all).toHaveLength(47);
   });
 });
 
@@ -141,10 +142,15 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
       'item.iLKpfoGF7rGpvNWD.equip',
       'item.tnoOhcw37wWUhWzd.equip', // Shield
     ]);
-    expect(all.filter((a) => a.kind === 'use').map((a) => a.id)).toEqual(['feature.vWo0CO4uYJ8XRnRi.use']);
-    // 18 skills + 12 ability checks/saves + 2 attacks + 4 equips + 18 casts + 1 use
+    expect(all.filter((a) => a.kind === 'use' && a.group === undefined).map((a) => a.id)).toEqual([
+      'feature.vWo0CO4uYJ8XRnRi.use',
+    ]);
+    expect(all.filter((a) => a.kind === 'use' && a.group === 'items')).toHaveLength(6);
+    // 18 skills + 12 ability checks/saves + 2 attacks + 4 equips + 18 casts
+    // + 1 feature use + 6 item uses (Waterskin, Torch, Common Clothes,
+    // Rations, Rope, Vestments)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(57);
+    expect(all).toHaveLength(63);
   });
 
   it('a leveled spell with a base-level slot is directly castable (no slotLevels — the bridge casts at base only)', () => {
@@ -473,11 +479,11 @@ describe('view model wiring', () => {
     expect(abilities.stats.find((s) => s.id === 'ability.str')?.actionId).toBe('ability.str.check');
   });
 
-  it('weapon rows carry attack + equip actions; armor/shield rows carry equip only', () => {
+  it('inventory rows manage only: equip toggles where applicable, never a primary action', () => {
     const inv = section(martialCaptured, 'inventory');
     if (inv.kind !== 'list') throw new Error('inventory must be a list section');
     const sword = inv.items.find((i) => i.label === 'Longsword');
-    expect(sword?.actionId).toBe('item.gta26ORvqC323k3r.attack');
+    expect(sword?.actionId).toBeUndefined();
     expect(sword?.equipActionId).toBe('item.gta26ORvqC323k3r.equip');
     const mail = inv.items.find((i) => i.label === 'Chain Mail');
     expect(mail?.actionId).toBeUndefined();
@@ -503,6 +509,61 @@ describe('view model wiring', () => {
 
   it('the sheet embeds the full action list', () => {
     expect(dnd5eAdapter.toViewModel(martialCaptured).actions).toEqual(actions(martialCaptured));
-    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(57);
+    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(63);
+  });
+});
+
+describe('item use actions (inventory/actions split)', () => {
+  const all = actions(martialCaptured);
+  const itemOf = (name: string) => {
+    const item = martialCaptured.items?.find((i) => i.name === name);
+    if (!item) throw new Error(`item ${name} not found`);
+    return item;
+  };
+
+  it('offers use (group items) for physical items with activities', () => {
+    const torch = itemOf('Torch');
+    const a = all.find((x) => x.id === `item.${torch._id}.use`);
+    expect(a).toMatchObject({ kind: 'use', group: 'items', label: 'Torch' });
+    // Rations (autoDestroy) and the Horn (tool) are usable too.
+    expect(all.some((x) => x.id === `item.${itemOf('Rations')._id}.use`)).toBe(true);
+    expect(all.some((x) => x.id === `item.${itemOf('Horn')._id}.use`)).toBe(true);
+  });
+
+  it('offers no use action for passive items without activities', () => {
+    for (const name of ['Hammer', 'Arrow', 'Chain Mail', 'Backpack']) {
+      expect(all.some((x) => x.id === `item.${itemOf(name)._id}.use`)).toBe(false);
+    }
+  });
+
+  it('weapons keep attack and gain no item use action', () => {
+    const sword = itemOf('Longsword');
+    expect(all.some((x) => x.id === `item.${sword._id}.attack`)).toBe(true);
+    expect(all.some((x) => x.id === `item.${sword._id}.use`)).toBe(false);
+  });
+
+  it('feature use actions carry no group', () => {
+    expect(action(martialCaptured, 'feature.7r63kurEAM3GdEec.use').group).toBeUndefined();
+  });
+
+  it('maps item use intents to the use-item endpoint', () => {
+    const torch = itemOf('Torch');
+    expect(build(martialCaptured, { kind: 'use', actionId: `item.${torch._id}.use` })).toEqual({
+      endpoint: 'use-item',
+      itemId: torch._id,
+    });
+  });
+
+  it('still maps feature use intents to use-feature', () => {
+    expect(build(martialCaptured, { kind: 'use', actionId: 'feature.7r63kurEAM3GdEec.use' })).toEqual({
+      endpoint: 'use-feature',
+      itemId: '7r63kurEAM3GdEec',
+    });
+  });
+
+  it('inventory rows carry no primary actionId (manage-only)', () => {
+    const inv = section(martialCaptured, 'inventory');
+    if (inv.kind !== 'list') throw new Error('inventory must be a list section');
+    for (const row of inv.items) expect(row.actionId).toBeUndefined();
   });
 });

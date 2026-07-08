@@ -562,6 +562,14 @@ function isEquippable(item: FoundryItemDoc): boolean {
   return typeVal !== undefined && ARMOR_EQUIPMENT_TYPES.has(typeVal);
 }
 
+/** A physical, non-weapon item is usable when its data carries activities
+ * (dnd5e 5.x usage rules: potions, torches, rations…). Weapons keep their
+ * attack action instead. */
+function isUsableInventoryItem(item: FoundryItemDoc): boolean {
+  if (!PHYSICAL_ITEM_TYPES.has(item.type) || item.type === 'weapon') return false;
+  return Object.keys(rec(getPath(item.system, 'activities'))).length > 0;
+}
+
 /** A feature is usable when it has activities to run or limited uses; a
  * passive feat (no activities, no uses) gets no action. */
 function isUsableFeature(item: FoundryItemDoc): boolean {
@@ -644,7 +652,8 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>): List
     ...(item.img !== undefined ? { img: item.img } : {}),
     ...(resourceId !== undefined ? { resourceId } : {}),
     ...(tags.length > 0 ? { tags } : {}),
-    ...(item.type === 'weapon' ? { actionId: `item.${item._id}.attack` } : {}),
+    // No primary actionId: inventory rows manage (quantity, equip); using and
+    // attacking live on the Actions tab.
     ...(isEquippable(item) ? { equipActionId: `item.${item._id}.equip` } : {}),
     ...(detail !== undefined ? { detail } : {}),
   };
@@ -740,6 +749,11 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     if (item.type === 'weapon') {
       out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack' });
     }
+    if (isUsableInventoryItem(item)) {
+      // Offered even at 0 uses/quantity — Foundry owns the rules and refuses
+      // when empty (same philosophy as unprepared spells).
+      out.push({ id: `item.${item._id}.use`, label: item.name, kind: 'use', group: 'items' });
+    }
     if (isEquippable(item)) {
       out.push({
         id: `item.${item._id}.equip`,
@@ -834,8 +848,13 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
     }
     case 'attack':
       return { endpoint: 'use-item', itemId: intent.actionId.slice('item.'.length, -'.attack'.length) };
-    case 'use':
+    case 'use': {
+      // Items and features share the kind; the id prefix picks the endpoint.
+      if (intent.actionId.startsWith('item.')) {
+        return { endpoint: 'use-item', itemId: intent.actionId.slice('item.'.length, -'.use'.length) };
+      }
       return { endpoint: 'use-feature', itemId: intent.actionId.slice('feature.'.length, -'.use'.length) };
+    }
     case 'cast': {
       const itemId = intent.actionId.slice('spell.'.length, -'.cast'.length);
       // slotLevels === [] means no slot is available at the spell's base
