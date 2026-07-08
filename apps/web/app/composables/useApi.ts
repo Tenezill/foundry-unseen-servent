@@ -1,7 +1,7 @@
 /** Thin $fetch wrapper: gateway base URL + bearer token on every request. */
 
 export interface ApiRequestOptions {
-  method?: 'GET' | 'POST'
+  method?: 'GET' | 'POST' | 'DELETE'
   body?: unknown
 }
 

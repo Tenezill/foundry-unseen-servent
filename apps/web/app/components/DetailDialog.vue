@@ -7,13 +7,29 @@
       </div>
       <!-- eslint-disable-next-line vue/no-v-html -- sanitized world content -->
       <div class="body" v-html="clean" />
+      <button
+        v-if="danger"
+        class="danger-btn"
+        type="button"
+        :class="{ pending: dangerBusy }"
+        :disabled="dangerBusy"
+        @click="emit('danger')"
+      >
+        {{ danger }}
+      </button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-const props = defineProps<{ title: string; detail: string }>()
-const emit = defineEmits<{ (e: 'close'): void }>()
+const props = defineProps<{
+  title: string
+  detail: string
+  /** Label of an optional destructive action (e.g. "Forget spell"). */
+  danger?: string
+  dangerBusy?: boolean
+}>()
+const emit = defineEmits<{ (e: 'close'): void; (e: 'danger'): void }>()
 
 const clean = computed(() => sanitizeHtml(props.detail))
 </script>
@@ -106,5 +122,25 @@ const clean = computed(() => sanitizeHtml(props.detail))
   max-width: 100%;
   height: auto;
   border-radius: 8px;
+}
+
+.danger-btn {
+  width: 100%;
+  margin-top: 16px;
+  min-height: 42px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--garnet);
+  background: color-mix(in srgb, var(--garnet) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--garnet) 34%, transparent);
+}
+
+.danger-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.danger-btn.pending {
+  opacity: 0.55;
 }
 </style>

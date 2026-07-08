@@ -1,5 +1,5 @@
 /** Gateway API response shapes (docs/API.md). */
-import type { SheetViewModel } from '@companion/adapter-sdk'
+import type { ListItem, SheetViewModel } from '@companion/adapter-sdk'
 
 export interface MeResponse {
   player: { name: string; actorIds: string[] }
@@ -47,4 +47,21 @@ export interface ApiErrorBody {
   error?: { code?: string; message?: string }
   /** 409 CONFLICT responses carry the fresh sheet. */
   sheet?: SheetViewModel
+}
+
+/** One hit from GET /api/actors/:id/spellbook/search. */
+export interface SpellSearchEntry {
+  uuid: string
+  name: string
+  img?: string
+  pack?: string
+}
+
+export interface SpellSearchResponse {
+  results: SpellSearchEntry[]
+}
+
+/** GET /api/actors/:id/spellbook/preview — adapter-described spell. */
+export interface SpellPreviewResponse {
+  preview: ListItem
 }

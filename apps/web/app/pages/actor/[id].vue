@@ -70,6 +70,18 @@
             />
           </template>
 
+          <button
+            v-if="activeTab === 'spells' && sheet.hasSpellbook && !offline"
+            class="learn-spell"
+            type="button"
+            @click="openSpellSearch"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" stroke-linecap="round" />
+            </svg>
+            Learn spell
+          </button>
+
           <template v-for="section in renderableSections" :key="section.id">
             <SectionStats
               v-if="section.kind === 'stats'"
@@ -148,7 +160,24 @@
         v-if="detailFor"
         :title="detailFor.title"
         :detail="detailFor.detail"
+        :danger="detailFor.forgettable && !offline ? 'Forget spell' : undefined"
+        :danger-busy="forgetBusy"
+        @danger="onForget"
         @close="detailFor = null"
+      />
+      <SpellbookSearch
+        v-if="spellSearchOpen"
+        :results="spellResults"
+        :preview="spellPreview"
+        :preview-uuid="spellPreviewUuid"
+        :known-names="knownSpellNames"
+        :busy="spellBusy"
+        :searching="spellSearching"
+        @search="onSpellSearch"
+        @preview="onSpellPreview"
+        @learn="onSpellLearn"
+        @back="spellPreview = null"
+        @close="closeSpellSearch"
       />
       <RollLog v-if="showLog" :entries="rollHistory" @close="showLog = false" />
       <RollResultPill
@@ -193,6 +222,9 @@ import type {
   ApiErrorBody,
   RollLogEntry,
   SheetResponse,
+  SpellPreviewResponse,
+  SpellSearchEntry,
+  SpellSearchResponse,
 } from '~/types/api'
 
 const LARGE_DELTA = 10
@@ -228,7 +260,7 @@ const activeTab = ref<TabId>('overview')
 const busy = ref<string | null>(null)
 const numpadFor = ref<string | null>(null)
 const confirmState = ref<{ message: string; resolve: (ok: boolean) => void } | null>(null)
-const detailFor = ref<{ title: string; detail: string } | null>(null)
+const detailFor = ref<{ title: string; detail: string; itemId?: string; forgettable?: boolean } | null>(null)
 const showLog = ref(false)
 
 const offline = computed(() => conn.value === 'offline')
@@ -507,6 +539,12 @@ function onAction(actionId: string): void {
         action.label,
       )
       break
+    case 'prepare':
+      void submitAction(
+        { kind: 'prepare', actionId, prepared: !(action.prepared ?? false) },
+        action.label,
+      )
+      break
   }
 }
 
@@ -555,7 +593,110 @@ function onEndConcentration(): void {
 
 function onDetail(item: ListItem): void {
   if (!item.detail) return
-  detailFor.value = { title: item.label, detail: item.detail }
+  detailFor.value = {
+    title: item.label,
+    detail: item.detail,
+    itemId: item.id,
+    ...(item.forgettable === true ? { forgettable: true } : {}),
+  }
+}
+
+/* ---- spellbook: learn + forget ------------------------------------------ */
+
+const spellSearchOpen = ref(false)
+const spellResults = ref<SpellSearchEntry[]>([])
+const spellPreview = ref<ListItem | null>(null)
+const spellPreviewUuid = ref<string | null>(null)
+const spellBusy = ref(false)
+const spellSearching = ref(false)
+const forgetBusy = ref(false)
+
+const knownSpellNames = computed(() =>
+  sectionsByTab.value.spells.flatMap((s) => (s.kind === 'list' ? s.items.map((i) => i.label) : [])),
+)
+
+function openSpellSearch(): void {
+  spellResults.value = []
+  spellPreview.value = null
+  spellPreviewUuid.value = null
+  spellSearchOpen.value = true
+}
+
+function closeSpellSearch(): void {
+  spellSearchOpen.value = false
+  spellPreview.value = null
+  spellPreviewUuid.value = null
+}
+
+async function onSpellSearch(q: string): Promise<void> {
+  if (q.trim() === '') {
+    spellResults.value = []
+    return
+  }
+  spellSearching.value = true
+  try {
+    const res = await api<SpellSearchResponse>(
+      `/api/actors/${actorId.value}/spellbook/search?q=${encodeURIComponent(q.trim())}`,
+    )
+    spellResults.value = res.results
+  } catch {
+    toast.show('Search failed. Try again.')
+  } finally {
+    spellSearching.value = false
+  }
+}
+
+async function onSpellPreview(uuid: string): Promise<void> {
+  spellBusy.value = true
+  try {
+    const res = await api<SpellPreviewResponse>(
+      `/api/actors/${actorId.value}/spellbook/preview?uuid=${encodeURIComponent(uuid)}`,
+    )
+    spellPreview.value = res.preview
+    spellPreviewUuid.value = uuid
+  } catch {
+    toast.show('Couldn’t load that spell.')
+  } finally {
+    spellBusy.value = false
+  }
+}
+
+async function onSpellLearn(uuid: string): Promise<void> {
+  spellBusy.value = true
+  const name = spellPreview.value?.label ?? 'spell'
+  try {
+    const res = await api<SheetResponse>(`/api/actors/${actorId.value}/spellbook/learn`, {
+      method: 'POST',
+      body: { uuid },
+    })
+    applySheet(res.sheet)
+    toast.show(`Learned ${name}`)
+    closeSpellSearch()
+  } catch {
+    toast.show('Learning didn’t go through. Try again.')
+  } finally {
+    spellBusy.value = false
+  }
+}
+
+async function onForget(): Promise<void> {
+  const target = detailFor.value
+  if (!target?.itemId || !target.forgettable || forgetBusy.value) return
+  const ok = await askConfirm(`Forget ${target.title}? This removes it from the spellbook.`)
+  if (!ok) return
+  forgetBusy.value = true
+  try {
+    const res = await api<SheetResponse>(`/api/actors/${actorId.value}/spells/${target.itemId}`, {
+      method: 'DELETE',
+    })
+    applySheet(res.sheet)
+    detailFor.value = null
+    toast.show(`Forgot ${target.title}`)
+  } catch {
+    toast.show('Couldn’t forget that spell.')
+  } finally {
+    forgetBusy.value = false
+  }
 }
 
 async function submitAction(intent: ActionIntent, label: string): Promise<void> {
@@ -775,6 +916,31 @@ onBeforeUnmount(() => {
   color: var(--ink-dim);
   font-size: 0.88rem;
   padding: 48px 12px;
+}
+
+.learn-spell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 14px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--gold-bright);
+  background: color-mix(in srgb, var(--gold) 10%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--gold) 40%, transparent);
+}
+
+.learn-spell svg {
+  width: 16px;
+  height: 16px;
+}
+
+.learn-spell:active {
+  transform: scale(0.98);
 }
 
 /* ---- bottom tabs ---- */
