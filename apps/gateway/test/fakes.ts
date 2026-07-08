@@ -11,6 +11,7 @@ import type {
   SystemAdapter,
 } from '@companion/adapter-sdk';
 import { clamp, IntentError } from '@companion/adapter-sdk';
+import type { RawRoll } from '@companion/foundry-client';
 import type { RelayPort } from '../src/app.js';
 
 /** Secret strings that must NEVER show up in any response body. */
@@ -149,6 +150,39 @@ export class FakeRelay implements RelayPort {
     this.actorCommandCalls.push({ endpoint, actorUuid });
     if (this.actionError) this.throwActionError(`dnd5e/${endpoint}`);
     return structuredClone(this.actorCommandResult);
+  }
+
+  // ---- GM roll feed (M9) ---------------------------------------------------
+
+  /** Rolls returned by getRolls, newest first. */
+  rolls: RawRoll[] = [];
+  readonly getRollsCalls: number[] = [];
+  /** Active roll-stream subscriptions (one per open stream). */
+  readonly rollSubscribers = new Set<(roll: RawRoll) => void>();
+
+  async getRolls(limit = 50): Promise<RawRoll[]> {
+    this.getRollsCalls.push(limit);
+    if (this.actionError) this.throwActionError('rolls');
+    return structuredClone(this.rolls.slice(0, limit));
+  }
+
+  async subscribeRolls(onRoll: (roll: RawRoll) => void, signal: AbortSignal): Promise<void> {
+    this.rollSubscribers.add(onRoll);
+    return new Promise<void>((resolve) => {
+      signal.addEventListener(
+        'abort',
+        () => {
+          this.rollSubscribers.delete(onRoll);
+          resolve();
+        },
+        { once: true },
+      );
+    });
+  }
+
+  /** Simulate the relay pushing one live roll to every open roll stream. */
+  emitRoll(roll: RawRoll): void {
+    for (const onRoll of this.rollSubscribers) onRoll(structuredClone(roll));
   }
 
   async subscribeHooks(

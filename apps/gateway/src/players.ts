@@ -15,6 +15,8 @@ export interface Player {
   tokenHash: string;
   /** Foundry actor ids this player may read/write. */
   actorIds: string[];
+  /** When true, may read the world-wide GM roll feed (M9). */
+  gm?: boolean;
 }
 
 const HEX64 = /^[0-9a-fA-F]{64}$/;
@@ -39,7 +41,15 @@ export function parsePlayers(yamlText: string): Player[] {
     if (!Array.isArray(e.actorIds) || !e.actorIds.every((a) => typeof a === 'string' && a !== '')) {
       throw new Error(`players[${i}].actorIds must be a list of non-empty strings`);
     }
-    return { name: e.name, tokenHash: e.tokenHash.toLowerCase(), actorIds: e.actorIds as string[] };
+    if (e.gm !== undefined && typeof e.gm !== 'boolean') {
+      throw new Error(`players[${i}].gm must be a boolean`);
+    }
+    return {
+      name: e.name,
+      tokenHash: e.tokenHash.toLowerCase(),
+      actorIds: e.actorIds as string[],
+      ...(e.gm === true ? { gm: true } : {}),
+    };
   });
 }
 

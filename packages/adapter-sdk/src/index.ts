@@ -113,6 +113,21 @@ export interface Condition {
   icon?: string;
 }
 
+/** One roll in the world, for the GM roll feed (M9). System-agnostic. */
+export interface RollEntry {
+  id: string;
+  /** Who rolled — speaker alias (character name) or the user's name. */
+  by: string;
+  /** e.g. "Athletics Check", "Longbow - Attack Roll" (may be empty). */
+  flavor: string;
+  total: number;
+  formula: string;
+  isCritical: boolean;
+  isFumble: boolean;
+  /** epoch ms; stamped by Foundry. */
+  timestamp: number;
+}
+
 export type SheetSection =
   | { kind: 'stats'; id: string; label: string; stats: Stat[] }
   | { kind: 'list'; id: string; label: string; items: ListItem[] }

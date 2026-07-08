@@ -21,11 +21,13 @@ import type {
   FoundryUpdate,
   RelayAction,
   ResourceIntent,
+  RollEntry,
   SheetActionKind,
   SheetViewModel,
   SystemAdapter,
 } from '@companion/adapter-sdk';
 import { IntentError } from '@companion/adapter-sdk';
+import type { RawRoll } from '@companion/foundry-client';
 import { verifyToken, type Player } from './players.js';
 import { LiveManager } from './live.js';
 import type { AdapterRegistry } from './registry.js';
@@ -61,6 +63,10 @@ export interface RelayPort {
     endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration',
     actorUuid: string,
   ): Promise<Record<string, unknown>>;
+  /** GET /rolls — recent rolls across the whole world, newest first (M9). */
+  getRolls(limit?: number): Promise<RawRoll[]>;
+  /** GET /rolls/subscribe — live world-roll SSE stream (M9). */
+  subscribeRolls(onRoll: (roll: RawRoll) => void, signal: AbortSignal): Promise<void>;
   /** World-level hooks SSE stream (the M0-verified push channel). */
   subscribeHooks(
     hooks: string[],
@@ -338,8 +344,95 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
 
   app.get('/api/me', { preHandler: auth(false) }, async (req, reply) => {
     const player = req.player as Player;
-    return reply.code(200).send({ player: { name: player.name, actorIds: player.actorIds } });
+    return reply.code(200).send({
+      player: { name: player.name, actorIds: player.actorIds, gm: player.gm === true },
+    });
   });
+
+  /** Map a raw relay roll to the client-facing RollEntry (M9). */
+  const toRollEntry = (r: RawRoll): RollEntry => ({
+    id: typeof r.id === 'string' ? r.id : typeof r.messageId === 'string' ? r.messageId : String(r.timestamp ?? ''),
+    by: r.speaker?.alias ?? r.user?.name ?? 'Someone',
+    flavor: typeof r.flavor === 'string' ? r.flavor : '',
+    total: typeof r.rollTotal === 'number' ? r.rollTotal : Number.NaN,
+    formula: typeof r.formula === 'string' ? r.formula : '',
+    isCritical: r.isCritical === true,
+    isFumble: r.isFumble === true,
+    timestamp: typeof r.timestamp === 'number' ? r.timestamp : 0,
+  });
+
+  // GM roll feed (M9). GM-only; non-GM tokens get 404 (do not leak the route).
+  app.get<{ Querystring: { limit?: string } }>(
+    '/api/gm/rolls',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const player = req.player as Player;
+      if (player.gm !== true) return sendError(reply, 404, 'NOT_FOUND', 'not found');
+      const limit = Math.min(200, Math.max(1, Number.parseInt(req.query.limit ?? '50', 10) || 50));
+      const rolls = (await relay.getRolls(limit)).map(toRollEntry);
+      return reply.code(200).send({ rolls });
+    },
+  );
+
+  app.get<{ Querystring: { token?: string } }>(
+    '/api/gm/rolls/events',
+    { preHandler: auth(true) },
+    async (req, reply) => {
+      const player = req.player as Player;
+      if (player.gm !== true) return sendError(reply, 404, 'NOT_FOUND', 'not found');
+
+      reply.hijack();
+      const rawRes = reply.raw;
+      rawRes.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      });
+
+      const ac = new AbortController();
+      let ping: ReturnType<typeof setInterval> | undefined;
+      let done = false;
+      const cleanup = (): void => {
+        if (done) return;
+        done = true;
+        if (ping) clearInterval(ping);
+        ac.abort();
+        rawRes.end();
+      };
+      const send = (event: string, data: string): void => {
+        if (done) return;
+        try {
+          rawRes.write(`event: ${event}\ndata: ${data}\n\n`);
+        } catch {
+          cleanup();
+        }
+      };
+
+      // Seed with recent history so the feed isn't empty on open.
+      try {
+        const recent = (await relay.getRolls(30)).map(toRollEntry);
+        for (const r of recent.reverse()) send('roll', JSON.stringify(r));
+      } catch (err) {
+        app.log.warn({ err }, 'gm rolls: initial history failed');
+      }
+
+      ping = setInterval(() => send('ping', '{}'), pingMs);
+      rawRes.on('error', cleanup);
+      rawRes.on('close', cleanup);
+      if (req.raw.destroyed || rawRes.destroyed || rawRes.writableEnded) {
+        cleanup();
+        return;
+      }
+
+      relay
+        .subscribeRolls((raw) => send('roll', JSON.stringify(toRollEntry(raw))), ac.signal)
+        .catch((err) => {
+          if (!ac.signal.aborted) app.log.warn({ err }, 'gm rolls: relay stream ended');
+        })
+        .finally(cleanup);
+    },
+  );
 
   app.get('/api/actors', { preHandler: auth(false) }, async (req, reply) => {
     const player = req.player as Player;

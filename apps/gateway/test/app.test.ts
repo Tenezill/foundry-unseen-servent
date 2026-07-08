@@ -75,7 +75,7 @@ describe('auth', () => {
     const { app } = setup();
     const res = await app.inject({ method: 'GET', url: '/api/me', headers: asAnna });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ player: { name: 'Anna', actorIds: ['a1', 'a2', 'ghost'] } });
+    expect(res.json()).toEqual({ player: { name: 'Anna', actorIds: ['a1', 'a2', 'ghost'], gm: false } });
   });
 });
 

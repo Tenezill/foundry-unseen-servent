@@ -59,6 +59,21 @@ export interface ActorEvent {
   data: unknown;
 }
 
+/** A raw roll record from GET /rolls or the /rolls/subscribe stream. */
+export interface RawRoll {
+  id: string;
+  messageId?: string;
+  speaker?: { actor?: string; alias?: string };
+  user?: { id?: string; name?: string } | null;
+  flavor?: string;
+  rollTotal?: number;
+  formula?: string;
+  isCritical?: boolean;
+  isFumble?: boolean;
+  timestamp?: number;
+  [key: string]: unknown;
+}
+
 /** Result of a /roll or /dnd5e use-* roll, as returned by the relay. */
 export interface RollResult {
   formula: string;
@@ -110,6 +125,30 @@ export class FoundryRelayClient {
       throw new RelayError(`relay ${path} -> ${res.status}: ${text.slice(0, 300)}`, res.status, path);
     }
     return (await res.json()) as T;
+  }
+
+  /**
+   * GET /rolls — recent rolls across the whole world (M9, needs roll:read).
+   * Newest first. Shape (M9-verified): {data:[{id, speaker:{actor,alias},
+   * flavor, rollTotal, formula, isCritical, isFumble, timestamp, user}]}.
+   */
+  async getRolls(limit = 50): Promise<RawRoll[]> {
+    const body = await this.request<{ data?: RawRoll[] }>('GET', '/rolls', { limit });
+    return Array.isArray(body.data) ? body.data : [];
+  }
+
+  /**
+   * GET /rolls/subscribe (SSE) — live world rolls (M9). Emits `event: roll`
+   * frames whose `data.data` is a RawRoll. Calls onRoll per roll until the
+   * signal aborts or the stream closes; caller owns reconnection.
+   */
+  async subscribeRolls(onRoll: (roll: RawRoll) => void, signal: AbortSignal): Promise<void> {
+    await this.readSse('/rolls/subscribe', {}, signal, (ev) => {
+      if (ev.event !== 'roll') return;
+      const payload = ev.data;
+      const inner = payload && typeof payload === 'object' ? (payload as Record<string, unknown>).data : undefined;
+      if (inner && typeof inner === 'object') onRoll(inner as RawRoll);
+    });
   }
 
   /** GET /clients — worlds currently connected to the relay. */
