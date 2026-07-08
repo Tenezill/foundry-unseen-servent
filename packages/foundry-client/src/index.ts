@@ -264,6 +264,33 @@ export class FoundryRelayClient {
   }
 
   /**
+   * POST /give — copy an item onto a target actor. `itemUuid` may be ANY
+   * uuid Foundry's fromUuid resolves, including compendium uuids
+   * (`Compendium.<pack>.Item.<id>`) — that is how "learn spell" works.
+   * Module 3.4.1 source-verified; route + player-key scope pending live
+   * verification (record findings in docs/ before production use).
+   */
+  async giveItem(toUuid: string, itemUuid: string): Promise<void> {
+    const body = await this.request<{ error?: string }>('POST', '/give', {}, { toUuid, itemUuid, quantity: 1 });
+    if (typeof body.error === 'string' && body.error !== '') {
+      throw new RelayError(`relay /give: ${body.error}`, 200, '/give');
+    }
+  }
+
+  /**
+   * DELETE /delete — delete an entity by uuid; embedded item uuids
+   * (`Actor.<id>.Item.<id>`) resolve via fromUuid, so this deletes a single
+   * item off an actor. Module 3.4.1 source-verified; route pending live
+   * verification.
+   */
+  async deleteEntity(uuid: string): Promise<void> {
+    const body = await this.request<{ error?: string }>('DELETE', '/delete', { uuid });
+    if (typeof body.error === 'string' && body.error !== '') {
+      throw new RelayError(`relay /delete: ${body.error}`, 200, '/delete');
+    }
+  }
+
+  /**
    * PUT /update — apply a dot-notation update to an entity. The payload is
    * passed straight to Foundry's Document.update(), e.g.
    * `{ "system.attributes.hp.value": 25 }`.
