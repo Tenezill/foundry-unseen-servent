@@ -177,6 +177,9 @@ export interface ActionDescriptor {
   id: string;
   label: string;
   kind: SheetActionKind;
+  /** UI grouping hint for actions sharing a kind, e.g. "items" separates
+   *  item-use from feature-use on the Actions tab. */
+  group?: string;
   /** cast only: slot levels currently legal (empty/absent = at-will/cantrip). */
   slotLevels?: number[];
   /** equip only: current state (the intent carries the desired state). */
