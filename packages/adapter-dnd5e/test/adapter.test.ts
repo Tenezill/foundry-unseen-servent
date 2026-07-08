@@ -130,7 +130,7 @@ describe('view model — martial (source-shaped data, fallback math)', () => {
       'Chain Mail',
     ]);
     const arrows = s.items.find((i) => i.label === 'Arrows');
-    expect(arrows?.sub).toBe('×20 · consumable');
+    expect(arrows?.sub).toBe('×20 · consumable · 20 × 0.05 lb');
     expect(arrows?.resourceId).toBe('item.itmArrows0000001.qty');
     const kit = s.items.find((i) => i.label === "Healer's Kit");
     expect(kit?.resourceId).toBe('item.itmHealersKit001.uses'); // uses preferred over qty
@@ -560,7 +560,7 @@ describe('captured fixtures — martial (Randal, Fighter 5)', () => {
     const inv = section(martialCaptured, 'inventory');
     if (inv.kind !== 'list') throw new Error('inventory must be a list section');
     const torch = inv.items.find((i) => i.label === 'Torch');
-    expect(torch?.sub).toBe('×10 · consumable');
+    expect(torch?.sub).toBe('×10 · consumable · 10 × 1 lb');
   });
 
   it('item uses: Torch has uses.max "1" (string formula) -> uses resource 1/1', () => {

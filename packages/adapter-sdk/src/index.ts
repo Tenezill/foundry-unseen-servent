@@ -97,6 +97,13 @@ export interface ListItem {
   /** Secondary toggle action (equip/unequip, prepare/unprepare), when
    *  applicable. The pill label follows the action's kind. */
   toggleActionId?: string;
+  /** Attune toggle action (M12), rendered as a second pill next to the
+   *  equip pill — attune never competes for toggleActionId. */
+  attuneActionId?: string;
+  /** Id of the container row this item sits inside (M12); the PWA groups
+   *  inventory rows under their container. Only set when it matches another
+   *  row in the same list — dangling refs render flat. */
+  containerId?: string;
   /** The library collection id this item can be removed from, e.g. 'spells' |
    *  'feats' | 'gear' (renders a destructive detail action and lets the PWA
    *  hit DELETE /library/:collection/:itemId). Absent = not removable. */
@@ -176,6 +183,8 @@ export type SheetActionKind =
   | 'equip'
   /** toggle a spell's prepared state (item-field write, no chat card). */
   | 'prepare'
+  /** toggle an item's attuned state (M12; mirrors equip/prepare). */
+  | 'attune'
   // M8 actor-scoped commands (no item target):
   | 'rest'
   | 'deathsave'
@@ -197,6 +206,8 @@ export interface ActionDescriptor {
   equipped?: boolean;
   /** prepare only: current state (the intent carries the desired state). */
   prepared?: boolean;
+  /** attune only: current state (the intent carries the desired state). */
+  attuned?: boolean;
 }
 
 export type ActionIntent =
@@ -205,6 +216,7 @@ export type ActionIntent =
   | { kind: 'cast'; actionId: string; slotLevel?: number }
   | { kind: 'equip'; actionId: string; equipped: boolean }
   | { kind: 'prepare'; actionId: string; prepared: boolean }
+  | { kind: 'attune'; actionId: string; attuned: boolean }
   | { kind: 'rest' | 'deathsave' | 'endconcentration'; actionId: string };
 
 /**
@@ -217,6 +229,10 @@ export type RelayAction =
   | { endpoint: 'roll'; formula: string; flavor: string }
   | { endpoint: 'use-item' | 'use-spell' | 'use-feature'; itemId: string; slotLevel?: number }
   | { endpoint: 'equip-item'; itemId: string; equipped: boolean }
+  /** M12: the relay module's dedicated attune endpoint (validates params and
+   *  carries a Foundry-v12 legacy fallback; it does NOT enforce the actor's
+   *  attunement cap). Gateway RelayPort + foundry-client must implement it. */
+  | { endpoint: 'attune-item'; itemId: string; attuned: boolean }
   /** Generic embedded-item field write (e.g. prepared state); executed via
    *  the same entity-update path as quantity/uses. */
   | { endpoint: 'update-item'; itemId: string; data: Record<string, number | string | boolean> }

@@ -648,6 +648,25 @@ function isEquippable(item: FoundryItemDoc): boolean {
   return typeVal !== undefined && ARMOR_EQUIPMENT_TYPES.has(typeVal);
 }
 
+/** Attunement-required physical items get an attune toggle. dnd5e 5.x:
+ * `system.attunement` is a string enum "" | "required" | "optional"
+ * (live-verified on 5.3.3); pre-5.x numeric values (1 = required,
+ * 2 = attuned) are accepted defensively. */
+function isAttuneable(item: FoundryItemDoc): boolean {
+  if (!PHYSICAL_ITEM_TYPES.has(item.type)) return false;
+  const att = getPath(item.system, 'attunement');
+  // 'optional' items attune in Foundry too — they need the toggle just like
+  // 'required' ones (they already show the tag and count against the cap).
+  return att === 'required' || att === 'optional' || att === 1 || att === 2;
+}
+
+/** Current attuned state — 5.x boolean, with the pre-5.x numeric fallback
+ * (attunement 2 = attuned) so legacy documents don't render inverted. Single
+ * source of truth for the descriptor, the row tag, and the gear counter. */
+function isAttuned(item: FoundryItemDoc): boolean {
+  return getPath(item.system, 'attuned') === true || getPath(item.system, 'attunement') === 2;
+}
+
 /** A physical, non-weapon item is usable when its data carries activities
  * (dnd5e 5.x usage rules: potions, torches, rations…). Weapons keep their
  * attack action instead. */
@@ -720,16 +739,31 @@ function parseEffects(actor: FoundryActorDoc): EffectSummary {
   return { concentration, conditions };
 }
 
-function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListItem {
+function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>, physicalIds: Set<string>): ListItem {
   const qty = numAt(item.system, 'quantity') ?? 1;
   const subParts: string[] = [];
   if (qty !== 1) subParts.push(`×${qty}`);
   subParts.push(item.type);
+  // Presentation-only per-row weight: "<n> <unit>", "<qty> × <n> <unit>" for
+  // stacks. Units come from the item itself (metric worlds serialize kg).
+  const weight = numAt(item.system, 'weight.value');
+  if (weight !== undefined && weight > 0) {
+    const unit = strAt(item.system, 'weight.units') || 'lb';
+    subParts.push(qty > 1 ? `${qty} × ${weight} ${unit}` : `${weight} ${unit}`);
+  }
   const usesId = `item.${item._id}.uses`;
   const qtyId = `item.${item._id}.qty`;
   const resourceId = resourceIds.has(usesId) ? usesId : resourceIds.has(qtyId) ? qtyId : undefined;
   const tags: string[] = [];
   if (getPath(item.system, 'equipped') === true) tags.push('equipped');
+  if (isAttuned(item)) tags.push('attuned');
+  // Group under a container row only when the ref resolves on this sheet —
+  // captured worlds carry dangling compendium-source refs, which render flat.
+  const container = strAt(item.system, 'container');
+  const containerId =
+    container !== undefined && container !== '' && container !== item._id && physicalIds.has(container)
+      ? container
+      : undefined;
   const detail = itemDetail(item);
   return {
     id: item._id,
@@ -741,6 +775,8 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>): List
     // No primary actionId: inventory rows manage (quantity, equip); using and
     // attacking live on the Actions tab.
     ...(isEquippable(item) ? { toggleActionId: `item.${item._id}.equip` } : {}),
+    ...(isAttuneable(item) ? { attuneActionId: `item.${item._id}.attune` } : {}),
+    ...(containerId !== undefined ? { containerId } : {}),
     ...(detail !== undefined ? { detail } : {}),
     // Physical items may be removed via the library API (M13).
     removable: 'gear',
@@ -962,6 +998,14 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
         equipped: getPath(item.system, 'equipped') === true,
       });
     }
+    if (isAttuneable(item)) {
+      out.push({
+        id: `item.${item._id}.attune`,
+        label: item.name,
+        kind: 'attune',
+        attuned: isAttuned(item),
+      });
+    }
     if (item.type === 'spell') {
       // Deliberately offer EVERY spell on the sheet, prepared or not
       // (mirrors spellListItem, which always sets actionId): dnd5e casts
@@ -1087,6 +1131,19 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         equipped: intent.equipped,
       };
     }
+    case 'attune': {
+      if (typeof intent.attuned !== 'boolean') {
+        throw new IntentError('attune requires a boolean "attuned"', 'INVALID');
+      }
+      // The attunement cap is deliberately NOT enforced here (the relay
+      // module does not enforce it either) — Foundry/GM owns rules; the
+      // sheet only surfaces the count via the gearstats section.
+      return {
+        endpoint: 'attune-item',
+        itemId: intent.actionId.slice('item.'.length, -'.attune'.length),
+        attuned: intent.attuned,
+      };
+    }
     case 'prepare': {
       if (typeof intent.prepared !== 'boolean') {
         throw new IntentError('prepare requires a boolean "prepared"', 'INVALID');
@@ -1113,6 +1170,38 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
     default:
       throw new IntentError(`unknown intent kind "${String((intent as { kind: unknown }).kind)}"`, 'INVALID');
   }
+}
+
+/** Read-only inventory counters (M12): attuned count vs the actor's cap, and
+ * carried weight. Presentation only — nothing here gates any action. */
+function gearStats(actor: FoundryActorDoc): Stat[] {
+  const physical = (actor.items ?? []).filter((i) => PHYSICAL_ITEM_TYPES.has(i.type));
+  const attunedCount = physical.filter(isAttuned).length;
+  const attunementMax = numAt(actor.system, 'attributes.attunement.max') ?? 3;
+  // Sum per unit — a world is normally uniform (imperial or metric), but a
+  // mixed bag must not silently add kg to lb under one label.
+  const sums = new Map<string, number>();
+  for (const item of physical) {
+    const weight = numAt(item.system, 'weight.value');
+    if (weight === undefined || weight <= 0) continue;
+    const unit = strAt(item.system, 'weight.units') || 'lb';
+    sums.set(unit, (sums.get(unit) ?? 0) + weight * (numAt(item.system, 'quantity') ?? 1));
+  }
+  const round1 = (n: number): number => Math.round(n * 10) / 10;
+  const localSum = [...sums.entries()].map(([unit, n]) => `${round1(n)} ${unit}`).join(' + ') || '0 lb';
+  // Prefer the derived encumbrance the enriched doc carries (value/max); its
+  // unit follows the world setting, best inferred from the items themselves.
+  const encUnit = sums.size === 1 ? [...sums.keys()][0] : 'lb';
+  const encValue = numAt(actor.system, 'attributes.encumbrance.value');
+  const encMax = numAt(actor.system, 'attributes.encumbrance.max');
+  const weightValue =
+    encValue !== undefined && encMax !== undefined
+      ? `${round1(encValue)}/${round1(encMax)} ${encUnit}`
+      : localSum;
+  return [
+    { id: 'attunement', label: 'Attunement', value: `${attunedCount}/${attunementMax}` },
+    { id: 'weight', label: 'Carried weight', value: weightValue },
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -1142,8 +1231,9 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   const inventory: ListItem[] = [];
   const features: ListItem[] = [];
   const spells: ListItem[] = [];
+  const physicalIds = new Set((actor.items ?? []).filter((i) => PHYSICAL_ITEM_TYPES.has(i.type)).map((i) => i._id));
   for (const item of actor.items ?? []) {
-    if (PHYSICAL_ITEM_TYPES.has(item.type)) inventory.push(inventoryListItem(item, resourceIds));
+    if (PHYSICAL_ITEM_TYPES.has(item.type)) inventory.push(inventoryListItem(item, resourceIds, physicalIds));
     else if (item.type === 'feat') features.push(featureListItem(item, resourceIds));
     else if (item.type === 'spell') spells.push(spellListItem(item));
   }
@@ -1173,6 +1263,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     sections.push({ kind: 'tracks', id: 'slots', label: 'Spell Slots', resourceIds: slotIds });
   }
   sections.push({ kind: 'list', id: 'inventory', label: 'Inventory', items: inventory });
+  sections.push({ kind: 'stats', id: 'gearstats', label: 'Gear', stats: gearStats(actor) });
   sections.push({ kind: 'list', id: 'features', label: 'Features', items: features });
   if (spells.length > 0) {
     sections.push({ kind: 'list', id: 'spells', label: 'Spells', items: spells });
@@ -1209,37 +1300,62 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
  * dnd5e endpoint (`details=["spells"]`) returns the real derived slots, e.g.
  * `{ spellSlots: { spell3: { value: 0, max: 2 } } }` (M0-verified). Merge
  * value+max into the document so bounds are correct and empty slots do not
- * vanish from the sheet. IO failure returns the actor unchanged.
+ * vanish from the sheet. The `stats` detail (M10-verified) additionally
+ * exposes derived encumbrance, merged under `system.attributes.encumbrance`
+ * for the carried-weight counter — one call covers both details. IO failure
+ * returns the actor unchanged.
  */
 async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryActorDoc> {
-  // Only casters benefit; skip the extra relay round-trip for others.
+  // Everyone gets `stats` (encumbrance); only casters need `spells`.
   const hasSpellcasting =
     (actor.items ?? []).some((i) => i.type === 'spell') ||
     Object.keys(rec(getPath(actor.system, 'spells'))).length > 0;
-  if (!hasSpellcasting) return actor;
   let details: unknown;
   try {
-    details = await io.getSystemDetails(['spells']);
+    details = await io.getSystemDetails(hasSpellcasting ? ['spells', 'stats'] : ['stats']);
   } catch {
     return actor;
   }
-  const slots = rec(rec(details).spellSlots);
-  const slotKeys = Object.keys(slots);
-  if (slotKeys.length === 0) return actor;
+  const body = rec(details);
   const system = rec(actor.system);
-  const spells = { ...rec(system.spells) };
-  for (const key of slotKeys) {
-    const derived = rec(slots[key]);
-    const max = typeof derived.max === 'number' && Number.isFinite(derived.max) ? derived.max : undefined;
-    const value = typeof derived.value === 'number' && Number.isFinite(derived.value) ? derived.value : undefined;
-    if (max === undefined && value === undefined) continue;
-    spells[key] = {
-      ...rec(spells[key]),
-      ...(value !== undefined ? { value } : {}),
-      ...(max !== undefined ? { max } : {}),
-    };
+  let merged: Rec | undefined;
+
+  const slots = rec(body.spellSlots);
+  const slotKeys = Object.keys(slots);
+  if (slotKeys.length > 0) {
+    const spells = { ...rec(system.spells) };
+    for (const key of slotKeys) {
+      const derived = rec(slots[key]);
+      const max = typeof derived.max === 'number' && Number.isFinite(derived.max) ? derived.max : undefined;
+      const value = typeof derived.value === 'number' && Number.isFinite(derived.value) ? derived.value : undefined;
+      if (max === undefined && value === undefined) continue;
+      spells[key] = {
+        ...rec(spells[key]),
+        ...(value !== undefined ? { value } : {}),
+        ...(max !== undefined ? { max } : {}),
+      };
+    }
+    merged = { ...system, spells };
   }
-  return { ...actor, system: { ...system, spells } };
+
+  const encumbrance = rec(rec(body.stats).encumbrance);
+  const encValue = typeof encumbrance.value === 'number' && Number.isFinite(encumbrance.value) ? encumbrance.value : undefined;
+  const encMax = typeof encumbrance.max === 'number' && Number.isFinite(encumbrance.max) ? encumbrance.max : undefined;
+  if (encValue !== undefined || encMax !== undefined) {
+    const base = merged ?? { ...system };
+    const attributes = rec(base.attributes);
+    base.attributes = {
+      ...attributes,
+      encumbrance: {
+        ...rec(attributes.encumbrance),
+        ...(encValue !== undefined ? { value: encValue } : {}),
+        ...(encMax !== undefined ? { max: encMax } : {}),
+      },
+    };
+    merged = base;
+  }
+
+  return merged === undefined ? actor : { ...actor, system: merged };
 }
 
 export const dnd5eAdapter: SystemAdapter = {
