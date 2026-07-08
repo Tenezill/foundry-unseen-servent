@@ -618,3 +618,133 @@ describe('adapter enrichment', () => {
     expect(res.body).not.toContain(FAKE_RELAY_URL);
   });
 });
+
+describe('spellbook endpoints', () => {
+  it('searches with the adapter filter and maps results', async () => {
+    const { app, relay } = setup();
+    relay.searchResults = [
+      { uuid: 'Compendium.x.Item.f1', id: 'f1', name: 'Fireball', img: 'f.webp', documentType: 'Item', packageName: 'dnd5e.spells' },
+    ];
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/search?q=fire', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      results: [{ uuid: 'Compendium.x.Item.f1', name: 'Fireball', img: 'f.webp', pack: 'dnd5e.spells' }],
+    });
+    expect(relay.searchCalls[0]).toMatchObject({ query: 'fire', filter: 'documentType:Item,subType:spell' });
+  });
+
+  it('returns empty results for a blank query without hitting the relay', async () => {
+    const { app, relay } = setup();
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/search?q=%20', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ results: [] });
+    expect(relay.searchCalls).toHaveLength(0);
+  });
+
+  it('previews a learnable spell and rejects non-spells with 422', async () => {
+    const { app, relay } = setup();
+    relay.entities.set('Compendium.x.Item.f1', { _id: 'f1', name: 'Fireball', type: 'spell', system: {} });
+    relay.entities.set('Compendium.x.Item.w1', { _id: 'w1', name: 'Sword', type: 'weapon', system: {} });
+    const ok = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/preview?uuid=Compendium.x.Item.f1', headers: asAnna });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().preview).toMatchObject({ label: 'Fireball' });
+    const bad = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/preview?uuid=Compendium.x.Item.w1', headers: asAnna });
+    expect(bad.statusCode).toBe(422);
+  });
+
+  it('learns a spell via relay give and returns a fresh sheet', async () => {
+    const { app, relay } = setup();
+    relay.entities.set('Compendium.x.Item.f1', { _id: 'f1', name: 'Fireball', type: 'spell', system: {} });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/spellbook/learn',
+      headers: asAnna,
+      payload: { uuid: 'Compendium.x.Item.f1' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(relay.giveCalls).toEqual([{ toUuid: 'Actor.a1', itemUuid: 'Compendium.x.Item.f1' }]);
+    expect(res.json().sheet).toBeDefined();
+  });
+
+  it('rejects learning a non-spell with 422 and no give call', async () => {
+    const { app, relay } = setup();
+    relay.entities.set('Compendium.x.Item.w1', { _id: 'w1', name: 'Sword', type: 'weapon', system: {} });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/spellbook/learn',
+      headers: asAnna,
+      payload: { uuid: 'Compendium.x.Item.w1' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(relay.giveCalls).toEqual([]);
+  });
+
+  it('forgets a spell via relay delete; non-spells and unknown items are 403', async () => {
+    const { app, relay } = setup();
+    const ok = await app.inject({ method: 'DELETE', url: '/api/actors/a1/spells/s1', headers: asAnna });
+    expect(ok.statusCode).toBe(200);
+    expect(relay.deleteCalls).toEqual(['Actor.a1.Item.s1']);
+    expect(ok.json().sheet).toBeDefined();
+    const nonSpell = await app.inject({ method: 'DELETE', url: '/api/actors/a1/spells/i1', headers: asAnna });
+    expect(nonSpell.statusCode).toBe(403);
+    const missing = await app.inject({ method: 'DELETE', url: '/api/actors/a1/spells/nope', headers: asAnna });
+    expect(missing.statusCode).toBe(403);
+    expect(relay.deleteCalls).toHaveLength(1);
+  });
+
+  it('hides spellbook routes for unowned actors (404) and unauthenticated callers (401)', async () => {
+    const { app } = setup();
+    const unowned = await app.inject({ method: 'GET', url: '/api/actors/b1/spellbook/search?q=x', headers: asAnna });
+    expect(unowned.statusCode).toBe(404);
+    const anon = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/search?q=x' });
+    expect(anon.statusCode).toBe(401);
+  });
+
+  it('404s every spellbook route when the adapter has no spellbook support', async () => {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
+    const { spellbook: _spellbook, ...spellbookless } = fakeAdapter;
+    const bare = buildApp({
+      relay,
+      players: makePlayers(),
+      registry: createRegistry([spellbookless]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+    });
+    try {
+      for (const [method, url] of [
+        ['GET', '/api/actors/a1/spellbook/search?q=x'],
+        ['GET', '/api/actors/a1/spellbook/preview?uuid=y'],
+        ['POST', '/api/actors/a1/spellbook/learn'],
+        ['DELETE', '/api/actors/a1/spells/s1'],
+      ] as const) {
+        const res = await bare.inject({ method, url, headers: asAnna, ...(method === 'POST' ? { payload: { uuid: 'y' } } : {}) });
+        expect(res.statusCode).toBe(404);
+      }
+    } finally {
+      await bare.close();
+    }
+  });
+
+  it('executes prepare actions as an item-field update', async () => {
+    const { app, relay } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/actions',
+      headers: asAnna,
+      payload: { kind: 'prepare', actionId: 'spell.s1.prepare', prepared: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(relay.updates.at(-1)).toEqual({ uuid: 'Actor.a1.Item.s1', data: { 'system.prepared': 1 } });
+  });
+
+  it('never leaks relay secrets through spellbook errors', async () => {
+    const { app, relay } = setup();
+    relay.actionError = true;
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/spellbook/search?q=fire', headers: asAnna });
+    expect(res.statusCode).toBe(502);
+    expect(res.body).not.toContain(FAKE_API_KEY);
+    expect(res.body).not.toContain(FAKE_RELAY_URL);
+  });
+});

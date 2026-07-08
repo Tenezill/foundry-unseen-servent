@@ -152,6 +152,51 @@ export class FakeRelay implements RelayPort {
     return structuredClone(this.actorCommandResult);
   }
 
+  // ---- spellbook (search / give / delete) ----------------------------------
+
+  /** Entries returned by search(); tests seed this. */
+  searchResults: Array<{
+    uuid: string;
+    id: string;
+    name: string;
+    img?: string;
+    documentType: string;
+    [key: string]: unknown;
+  }> = [];
+  readonly searchCalls: Array<{ query?: string; filter?: string; limit?: number }> = [];
+
+  async search(opts: { query?: string; filter?: string; limit?: number }): Promise<typeof this.searchResults> {
+    this.searchCalls.push({ ...opts });
+    if (this.actionError) this.throwActionError('search');
+    return structuredClone(this.searchResults);
+  }
+
+  readonly giveCalls: Array<{ toUuid: string; itemUuid: string }> = [];
+
+  /** Copies the referenced entity's doc into the target actor's items. */
+  async giveItem(toUuid: string, itemUuid: string): Promise<void> {
+    this.giveCalls.push({ toUuid, itemUuid });
+    if (this.actionError) this.throwActionError('give');
+    const src = this.entities.get(itemUuid);
+    const target = this.entities.get(toUuid);
+    if (!src || !target) throw new Error(`give: missing ${!src ? itemUuid : toUuid}`);
+    const items = (target.items ?? []) as Array<Record<string, unknown>>;
+    items.push({ ...structuredClone(src), _id: `given-${this.giveCalls.length}` });
+    target.items = items;
+  }
+
+  readonly deleteCalls: string[] = [];
+
+  async deleteEntity(uuid: string): Promise<void> {
+    this.deleteCalls.push(uuid);
+    if (this.actionError) this.throwActionError('delete');
+    const m = /^Actor\.([^.]+)\.Item\.([^.]+)$/.exec(uuid);
+    if (!m) throw new Error(`delete: unsupported uuid ${uuid}`);
+    const actor = this.entities.get(`Actor.${m[1]}`);
+    if (!actor) throw new Error(`delete: no entity ${uuid}`);
+    actor.items = ((actor.items ?? []) as Array<Record<string, unknown>>).filter((i) => i._id !== m[2]);
+  }
+
   // ---- GM roll feed (M9) ---------------------------------------------------
 
   /** Rolls returned by getRolls, newest first. */
@@ -260,6 +305,12 @@ function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
 
 export const fakeAdapter: SystemAdapter = {
   systemId: 'fake',
+  spellbook: {
+    searchFilter: 'documentType:Item,subType:spell',
+    canLearn: (doc) => doc.type === 'spell',
+    canForget: (item) => item.type === 'spell',
+    describe: (doc) => ({ id: String(doc._id ?? 'preview'), label: String(doc.name ?? '?'), sub: 'spell' }),
+  },
   toViewModel(actor: FoundryActorDoc): SheetViewModel {
     return {
       actorId: actor._id,
@@ -268,6 +319,7 @@ export const fakeAdapter: SystemAdapter = {
       headline: [],
       sections: [],
       resources: descriptors(actor),
+      hasSpellbook: true,
     };
   },
   resources: descriptors,
@@ -334,6 +386,9 @@ export function actorDoc(id: string, name: string, hp: number, hpMax: number): R
     img: `icons/${id}.webp`,
     systemId: 'fake',
     system: { hp: { value: hp, max: hpMax }, ac: 15 },
-    items: [{ _id: 'i1', name: 'Arrows', type: 'consumable', system: { quantity: 20 } }],
+    items: [
+      { _id: 'i1', name: 'Arrows', type: 'consumable', system: { quantity: 20 } },
+      { _id: 's1', name: 'Zap', type: 'spell', system: {} },
+    ],
   };
 }

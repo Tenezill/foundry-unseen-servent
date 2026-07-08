@@ -54,6 +54,14 @@ export interface RelayPort {
   ): Promise<Record<string, unknown>>;
   /** POST /dnd5e/equip-item — toggle an item's equipped state (M6). */
   equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void>;
+  /** GET /search — find entities; compendia are included by default. */
+  search(opts: { query?: string; filter?: string; limit?: number }): Promise<
+    Array<{ uuid: string; id: string; name: string; img?: string; documentType: string; [key: string]: unknown }>
+  >;
+  /** POST /give — copy an item (compendium uuid ok) onto a target actor. */
+  giveItem(toUuid: string, itemUuid: string): Promise<void>;
+  /** DELETE /delete — delete an entity (embedded item uuid ok). */
+  deleteEntity(uuid: string): Promise<void>;
   /**
    * POST /dnd5e/{short-rest|long-rest|death-save|break-concentration} — an
    * actor-scoped command with no item target (M8). Foundry applies the result
@@ -302,7 +310,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       const token = extractToken(req, allowQueryToken);
       const player = token === null ? null : verifyToken(players, token);
       if (!player) {
-        await sendError(reply, 401, 'UNAUTHORIZED', 'missing or unknown token');
+        sendError(reply, 401, 'UNAUTHORIZED', 'missing or unknown token');
         return;
       }
       req.player = player;
@@ -650,6 +658,128 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const freshAdapter = adapterFor(fresh) ?? adapter;
       return reply.code(200).send({ result, sheet: buildSheet(freshAdapter, fresh) });
+    },
+  );
+
+  // ---- spellbook (search / preview / learn / forget) -------------------------
+  // Available only when the actor's adapter exposes `spellbook`; everything
+  // else 404s so the routes do not leak which systems support it.
+
+  /** Ownership + adapter + spellbook preamble shared by the spellbook routes.
+   *  Sends the error response and returns null when any check fails. */
+  const spellbookCtx = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    id: string,
+  ): Promise<{
+    actor: FoundryActorDoc;
+    adapter: SystemAdapter;
+    spellbook: NonNullable<SystemAdapter['spellbook']>;
+  } | null> => {
+    const player = req.player as Player;
+    if (!player.actorIds.includes(id)) {
+      sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      return null;
+    }
+    const actor = await fetchActor(id);
+    if (!actor) {
+      sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      return null;
+    }
+    const adapter = adapterFor(actor);
+    if (!adapter) {
+      sendError(reply, 502, 'UPSTREAM', 'no adapter for actor system');
+      return null;
+    }
+    if (!adapter.spellbook) {
+      sendError(reply, 404, 'NOT_FOUND', 'not found');
+      return null;
+    }
+    return { actor, adapter, spellbook: adapter.spellbook };
+  };
+
+  app.get<{ Params: { id: string }; Querystring: { q?: string } }>(
+    '/api/actors/:id/spellbook/search',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const ctx = await spellbookCtx(req, reply, req.params.id);
+      if (!ctx) return reply;
+      const q = (req.query.q ?? '').trim();
+      if (q === '') return reply.code(200).send({ results: [] });
+      const entries = await relay.search({ query: q, filter: ctx.spellbook.searchFilter, limit: 20 });
+      const results = entries.map((e) => ({
+        uuid: e.uuid,
+        name: e.name,
+        ...(typeof e.img === 'string' ? { img: e.img } : {}),
+        ...(typeof e.packageName === 'string' ? { pack: e.packageName } : {}),
+      }));
+      return reply.code(200).send({ results });
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { uuid?: string } }>(
+    '/api/actors/:id/spellbook/preview',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const ctx = await spellbookCtx(req, reply, req.params.id);
+      if (!ctx) return reply;
+      const uuid = req.query.uuid ?? '';
+      if (uuid === '') return sendError(reply, 422, 'INVALID_INTENT', 'uuid is required');
+      const doc = await relay.getEntity(uuid);
+      if (!doc) return sendError(reply, 404, 'NOT_FOUND', 'entry not found');
+      if (!ctx.spellbook.canLearn(doc)) {
+        return sendError(reply, 422, 'INVALID_INTENT', 'entry is not a learnable spell');
+      }
+      return reply.code(200).send({ preview: ctx.spellbook.describe(doc) });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/actors/:id/spellbook/learn',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const player = req.player as Player;
+      if (!limiter.allow(player.tokenHash)) {
+        return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
+      }
+      const ctx = await spellbookCtx(req, reply, req.params.id);
+      if (!ctx) return reply;
+      const raw = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof raw.uuid !== 'string' || raw.uuid === '') {
+        return sendError(reply, 422, 'INVALID_INTENT', 'uuid is required');
+      }
+      const doc = await relay.getEntity(raw.uuid);
+      if (!doc) return sendError(reply, 404, 'NOT_FOUND', 'entry not found');
+      if (!ctx.spellbook.canLearn(doc)) {
+        return sendError(reply, 422, 'INVALID_INTENT', 'entry is not a learnable spell');
+      }
+      await relay.giveItem(`Actor.${req.params.id}`, raw.uuid);
+      const fresh = await fetchActor(req.params.id);
+      if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+      const freshAdapter = adapterFor(fresh) ?? ctx.adapter;
+      return reply.code(200).send({ sheet: buildSheet(freshAdapter, fresh) });
+    },
+  );
+
+  app.delete<{ Params: { id: string; itemId: string } }>(
+    '/api/actors/:id/spells/:itemId',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const player = req.player as Player;
+      if (!limiter.allow(player.tokenHash)) {
+        return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
+      }
+      const ctx = await spellbookCtx(req, reply, req.params.id);
+      if (!ctx) return reply;
+      const item = (ctx.actor.items ?? []).find((i) => i._id === req.params.itemId);
+      if (!item || !ctx.spellbook.canForget(item)) {
+        return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'item does not exist or cannot be forgotten');
+      }
+      await relay.deleteEntity(`Actor.${req.params.id}.Item.${req.params.itemId}`);
+      const fresh = await fetchActor(req.params.id);
+      if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+      const freshAdapter = adapterFor(fresh) ?? ctx.adapter;
+      return reply.code(200).send({ sheet: buildSheet(freshAdapter, fresh) });
     },
   );
 
