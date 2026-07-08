@@ -71,15 +71,15 @@
           </template>
 
           <button
-            v-if="activeTab === 'spells' && sheet.hasSpellbook && !offline"
-            class="learn-spell"
+            v-if="tabAddEntry && !offline"
+            class="lib-add"
             type="button"
-            @click="openSpellSearch"
+            @click="openLibrary(tabAddEntry.id)"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M12 5v14M5 12h14" stroke-linecap="round" />
             </svg>
-            Learn spell
+            {{ tabAddEntry.label }}
           </button>
 
           <template v-for="section in renderableSections" :key="section.id">
@@ -160,24 +160,25 @@
         v-if="detailFor"
         :title="detailFor.title"
         :detail="detailFor.detail"
-        :danger="detailFor.forgettable && !offline ? 'Forget spell' : undefined"
-        :danger-busy="forgetBusy"
-        @danger="onForget"
+        :danger="detailFor.removable && !offline ? REMOVE_LABELS[detailFor.removable] ?? 'Remove' : undefined"
+        :danger-busy="removeBusy"
+        @danger="onRemove"
         @close="detailFor = null"
       />
-      <SpellbookSearch
-        v-if="spellSearchOpen"
-        :results="spellResults"
-        :preview="spellPreview"
-        :preview-uuid="spellPreviewUuid"
-        :known-names="knownSpellNames"
-        :busy="spellBusy"
-        :searching="spellSearching"
-        @search="onSpellSearch"
-        @preview="onSpellPreview"
-        @learn="onSpellLearn"
-        @back="spellPreview = null"
-        @close="closeSpellSearch"
+      <LibrarySearch
+        v-if="libraryCollection"
+        :add-label="libraryAddLabel"
+        :results="libResults"
+        :preview="libPreview"
+        :preview-uuid="libPreviewUuid"
+        :known-names="knownNames"
+        :busy="libBusy"
+        :searching="libSearching"
+        @search="onLibrarySearch"
+        @preview="onLibraryPreview"
+        @add="onLibraryAdd"
+        @back="libPreview = null"
+        @close="closeLibrary"
       />
       <RollLog v-if="showLog" :entries="rollHistory" @close="showLog = false" />
       <RollResultPill
@@ -220,11 +221,11 @@ import type {
   ActionResponse,
   ActionRollResult,
   ApiErrorBody,
+  LibraryPreviewResponse,
+  LibrarySearchEntry,
+  LibrarySearchResponse,
   RollLogEntry,
   SheetResponse,
-  SpellPreviewResponse,
-  SpellSearchEntry,
-  SpellSearchResponse,
 } from '~/types/api'
 
 const LARGE_DELTA = 10
@@ -246,6 +247,20 @@ const TABS: TabDef[] = [
   { id: 'spells', label: 'Spells', icon: 'M12 3l2 5 5 .5-4 3.5 1.5 5-4.5-3-4.5 3 1.5-5-4-3.5 5-.5z' },
 ]
 
+/** Which tab surfaces the "add" button for each library collection. */
+const COLLECTION_TAB: Record<string, TabId> = {
+  spells: 'spells',
+  feats: 'overview',
+  gear: 'inventory',
+}
+
+/** Destructive detail-action label per collection (labels-only vocab). */
+const REMOVE_LABELS: Record<string, string> = {
+  spells: 'Forget spell',
+  feats: 'Remove feat',
+  gear: 'Remove item',
+}
+
 const route = useRoute()
 const actorId = computed(() => String(route.params.id))
 const { api, base } = useApi()
@@ -260,7 +275,7 @@ const activeTab = ref<TabId>('overview')
 const busy = ref<string | null>(null)
 const numpadFor = ref<string | null>(null)
 const confirmState = ref<{ message: string; resolve: (ok: boolean) => void } | null>(null)
-const detailFor = ref<{ title: string; detail: string; itemId?: string; forgettable?: boolean } | null>(null)
+const detailFor = ref<{ title: string; detail: string; itemId?: string; removable?: string } | null>(null)
 const showLog = ref(false)
 
 const offline = computed(() => conn.value === 'offline')
@@ -342,6 +357,11 @@ const visibleTabs = computed(() =>
 )
 
 const activeSections = computed(() => sectionsByTab.value[activeTab.value])
+
+/** The library collection whose add-button belongs on the active tab, if any. */
+const tabAddEntry = computed(() =>
+  (sheet.value?.library ?? []).find((c) => COLLECTION_TAB[c.id] === activeTab.value),
+)
 
 /** Death saves and currency are rendered by dedicated M8 panels, not inline. */
 const renderableSections = computed(() =>
@@ -592,110 +612,131 @@ function onEndConcentration(): void {
 }
 
 function onDetail(item: ListItem): void {
-  if (!item.detail) return
+  // Open the sheet when there is a description to read OR a reachable remove
+  // action to host — description-less gear/feats are still removable (M13).
+  if (!item.detail && !(item.removable && !offline.value)) return
   detailFor.value = {
     title: item.label,
-    detail: item.detail,
+    detail: item.detail ?? '',
     itemId: item.id,
-    ...(item.forgettable === true ? { forgettable: true } : {}),
+    ...(item.removable ? { removable: item.removable } : {}),
   }
 }
 
-/* ---- spellbook: learn + forget ------------------------------------------ */
+/* ---- library: search -> preview -> add / remove ------------------------- */
 
-const spellSearchOpen = ref(false)
-const spellResults = ref<SpellSearchEntry[]>([])
-const spellPreview = ref<ListItem | null>(null)
-const spellPreviewUuid = ref<string | null>(null)
-const spellBusy = ref(false)
-const spellSearching = ref(false)
-const forgetBusy = ref(false)
+/** Active library collection id (null = search sheet closed). */
+const libraryCollection = ref<string | null>(null)
+const libResults = ref<LibrarySearchEntry[]>([])
+const libPreview = ref<ListItem | null>(null)
+const libPreviewUuid = ref<string | null>(null)
+const libBusy = ref(false)
+const libSearching = ref(false)
+const removeBusy = ref(false)
 
-const knownSpellNames = computed(() =>
-  sectionsByTab.value.spells.flatMap((s) => (s.kind === 'list' ? s.items.map((i) => i.label) : [])),
+const libraryAddLabel = computed(
+  () =>
+    (sheet.value?.library ?? []).find((c) => c.id === libraryCollection.value)?.label ?? 'Add',
 )
 
-function openSpellSearch(): void {
-  spellResults.value = []
-  spellPreview.value = null
-  spellPreviewUuid.value = null
-  spellSearchOpen.value = true
+/** Names already on the sheet for the active collection (case-insensitive hint). */
+const knownNames = computed(() => {
+  const cid = libraryCollection.value
+  if (!cid) return []
+  const names: string[] = []
+  for (const s of sheet.value?.sections ?? []) {
+    if (s.kind === 'list') for (const i of s.items) if (i.removable === cid) names.push(i.label)
+  }
+  return names
+})
+
+function openLibrary(collection: string): void {
+  libResults.value = []
+  libPreview.value = null
+  libPreviewUuid.value = null
+  libraryCollection.value = collection
 }
 
-function closeSpellSearch(): void {
-  spellSearchOpen.value = false
-  spellPreview.value = null
-  spellPreviewUuid.value = null
+function closeLibrary(): void {
+  libraryCollection.value = null
+  libPreview.value = null
+  libPreviewUuid.value = null
 }
 
-async function onSpellSearch(q: string): Promise<void> {
-  if (q.trim() === '') {
-    spellResults.value = []
+async function onLibrarySearch(q: string): Promise<void> {
+  const collection = libraryCollection.value
+  if (!collection || q.trim() === '') {
+    libResults.value = []
     return
   }
-  spellSearching.value = true
+  libSearching.value = true
   try {
-    const res = await api<SpellSearchResponse>(
-      `/api/actors/${actorId.value}/spellbook/search?q=${encodeURIComponent(q.trim())}`,
+    const res = await api<LibrarySearchResponse>(
+      `/api/actors/${actorId.value}/library/${collection}/search?q=${encodeURIComponent(q.trim())}`,
     )
-    spellResults.value = res.results
+    libResults.value = res.results
   } catch {
     toast.show('Search failed. Try again.')
   } finally {
-    spellSearching.value = false
+    libSearching.value = false
   }
 }
 
-async function onSpellPreview(uuid: string): Promise<void> {
-  spellBusy.value = true
+async function onLibraryPreview(uuid: string): Promise<void> {
+  const collection = libraryCollection.value
+  if (!collection) return
+  libBusy.value = true
   try {
-    const res = await api<SpellPreviewResponse>(
-      `/api/actors/${actorId.value}/spellbook/preview?uuid=${encodeURIComponent(uuid)}`,
+    const res = await api<LibraryPreviewResponse>(
+      `/api/actors/${actorId.value}/library/${collection}/preview?uuid=${encodeURIComponent(uuid)}`,
     )
-    spellPreview.value = res.preview
-    spellPreviewUuid.value = uuid
+    libPreview.value = res.preview
+    libPreviewUuid.value = uuid
   } catch {
-    toast.show('Couldn’t load that spell.')
+    toast.show('Couldn’t load that entry.')
   } finally {
-    spellBusy.value = false
+    libBusy.value = false
   }
 }
 
-async function onSpellLearn(uuid: string): Promise<void> {
-  spellBusy.value = true
-  const name = spellPreview.value?.label ?? 'spell'
+async function onLibraryAdd(uuid: string): Promise<void> {
+  const collection = libraryCollection.value
+  if (!collection) return
+  libBusy.value = true
+  const name = libPreview.value?.label ?? 'entry'
   try {
-    const res = await api<SheetResponse>(`/api/actors/${actorId.value}/spellbook/learn`, {
+    const res = await api<SheetResponse>(`/api/actors/${actorId.value}/library/${collection}/add`, {
       method: 'POST',
       body: { uuid },
     })
     applySheet(res.sheet)
-    toast.show(`Learned ${name}`)
-    closeSpellSearch()
+    toast.show(`Added ${name}`)
+    closeLibrary()
   } catch {
-    toast.show('Learning didn’t go through. Try again.')
+    toast.show('That didn’t go through. Try again.')
   } finally {
-    spellBusy.value = false
+    libBusy.value = false
   }
 }
 
-async function onForget(): Promise<void> {
+async function onRemove(): Promise<void> {
   const target = detailFor.value
-  if (!target?.itemId || !target.forgettable || forgetBusy.value) return
-  const ok = await askConfirm(`Forget ${target.title}? This removes it from the spellbook.`)
+  if (!target?.itemId || !target.removable || removeBusy.value) return
+  const ok = await askConfirm(`Remove ${target.title}? This removes it from your sheet.`)
   if (!ok) return
-  forgetBusy.value = true
+  removeBusy.value = true
   try {
-    const res = await api<SheetResponse>(`/api/actors/${actorId.value}/spells/${target.itemId}`, {
-      method: 'DELETE',
-    })
+    const res = await api<SheetResponse>(
+      `/api/actors/${actorId.value}/library/${target.removable}/${target.itemId}`,
+      { method: 'DELETE' },
+    )
     applySheet(res.sheet)
     detailFor.value = null
-    toast.show(`Forgot ${target.title}`)
+    toast.show(`Removed ${target.title}`)
   } catch {
-    toast.show('Couldn’t forget that spell.')
+    toast.show('Couldn’t remove that.')
   } finally {
-    forgetBusy.value = false
+    removeBusy.value = false
   }
 }
 
@@ -918,7 +959,7 @@ onBeforeUnmount(() => {
   padding: 48px 12px;
 }
 
-.learn-spell {
+.lib-add {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -934,12 +975,12 @@ onBeforeUnmount(() => {
   border: 1px dashed color-mix(in srgb, var(--gold) 40%, transparent);
 }
 
-.learn-spell svg {
+.lib-add svg {
   width: 16px;
   height: 16px;
 }
 
-.learn-spell:active {
+.lib-add:active {
   transform: scale(0.98);
 }
 

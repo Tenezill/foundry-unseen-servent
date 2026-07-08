@@ -1,8 +1,8 @@
 <template>
   <div class="scrim" @click.self="emit('close')">
-    <div class="modal-sheet book" role="dialog" aria-modal="true" aria-label="Learn a spell">
+    <div class="modal-sheet book" role="dialog" aria-modal="true" :aria-label="addLabel">
       <div class="head">
-        <span class="title">{{ preview ? preview.label : 'Learn a spell' }}</span>
+        <span class="title">{{ preview ? preview.label : addLabel }}</span>
         <button class="close" type="button" aria-label="Close" @click="emit('close')">✕</button>
       </div>
 
@@ -33,29 +33,29 @@
           </button>
           <p v-if="searching" class="hint">Searching…</p>
           <p v-else-if="query.trim() !== '' && results.length === 0" class="hint">
-            No spells found for “{{ query.trim() }}”.
+            No matches for “{{ query.trim() }}”.
           </p>
           <p v-else-if="query.trim() === ''" class="hint">
-            Type a spell name — anything the GM’s world knows can be learned.
+            Type a name — anything the GM’s world knows can be added.
           </p>
         </div>
       </template>
 
       <template v-else>
         <p v-if="preview.sub" class="preview-sub">{{ preview.sub }}</p>
-        <p v-if="alreadyKnown" class="known">Already in the spellbook.</p>
+        <p v-if="alreadyKnown" class="known">Already on your sheet.</p>
         <!-- eslint-disable-next-line vue/no-v-html -- sanitized world content -->
         <div v-if="previewDetail" class="preview-body" v-html="previewDetail" />
         <div class="actions">
           <button class="back" type="button" :disabled="busy" @click="emit('back')">Back</button>
           <button
-            class="learn"
+            class="add"
             type="button"
             :class="{ pending: busy }"
             :disabled="busy"
-            @click="previewUuid && emit('learn', previewUuid)"
+            @click="previewUuid && emit('add', previewUuid)"
           >
-            Learn
+            {{ addLabel }}
           </button>
         </div>
       </template>
@@ -65,14 +65,16 @@
 
 <script setup lang="ts">
 import type { ListItem } from '@companion/adapter-sdk'
-import type { SpellSearchEntry } from '~/types/api'
+import type { LibrarySearchEntry } from '~/types/api'
 
 const props = defineProps<{
-  results: SpellSearchEntry[]
+  /** Add-button + title label for the active collection (e.g. "Learn spell"). */
+  addLabel: string
+  results: LibrarySearchEntry[]
   preview: ListItem | null
-  /** uuid of the previewed entry (emitted back on Learn). */
+  /** uuid of the previewed entry (emitted back on Add). */
   previewUuid: string | null
-  /** Names of spells already on the sheet (case-insensitive hint). */
+  /** Names of items already on the sheet for this collection (case-insensitive hint). */
   knownNames: string[]
   busy: boolean
   searching: boolean
@@ -81,7 +83,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'search', q: string): void
   (e: 'preview', uuid: string): void
-  (e: 'learn', uuid: string): void
+  (e: 'add', uuid: string): void
   (e: 'back'): void
   (e: 'close'): void
 }>()
@@ -252,7 +254,7 @@ const alreadyKnown = computed(() => {
   font-weight: 600;
 }
 
-.learn {
+.add {
   flex: 2;
   min-height: 44px;
   border-radius: 12px;
@@ -263,7 +265,7 @@ const alreadyKnown = computed(() => {
   box-shadow: 0 2px 8px color-mix(in srgb, var(--gold) 30%, transparent);
 }
 
-.learn:active:not(:disabled),
+.add:active:not(:disabled),
 .back:active:not(:disabled) {
   transform: scale(0.98);
 }

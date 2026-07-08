@@ -6,7 +6,7 @@
         <ActorAvatar :name="item.label" :img="item.img" :size="38" />
         <div class="row-main">
           <button
-            v-if="item.detail"
+            v-if="item.detail || (item.removable && !readonly)"
             class="row-name detail"
             type="button"
             :aria-label="`Details for ${item.label}`"

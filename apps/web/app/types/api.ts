@@ -49,19 +49,19 @@ export interface ApiErrorBody {
   sheet?: SheetViewModel
 }
 
-/** One hit from GET /api/actors/:id/spellbook/search. */
-export interface SpellSearchEntry {
+/** One hit from GET /api/actors/:id/library/:collection/search. */
+export interface LibrarySearchEntry {
   uuid: string
   name: string
   img?: string
   pack?: string
 }
 
-export interface SpellSearchResponse {
-  results: SpellSearchEntry[]
+export interface LibrarySearchResponse {
+  results: LibrarySearchEntry[]
 }
 
-/** GET /api/actors/:id/spellbook/preview — adapter-described spell. */
-export interface SpellPreviewResponse {
+/** GET /api/actors/:id/library/:collection/preview — adapter-described entry. */
+export interface LibraryPreviewResponse {
   preview: ListItem
 }
