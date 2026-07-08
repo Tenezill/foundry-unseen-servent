@@ -346,6 +346,26 @@ function buildResources(actor: FoundryActorDoc): ResourceDescriptor[] {
     });
   }
 
+  // Inspiration is a boolean in dnd5e; surfaced as a 0/1 toggle resource.
+  out.push({
+    id: 'inspiration',
+    label: 'Inspiration',
+    value: getPath(sys, 'attributes.inspiration') === true ? 1 : 0,
+    min: 0,
+    max: 1,
+    writable: true,
+    group: 'vitals',
+  });
+  out.push({
+    id: 'exhaustion',
+    label: 'Exhaustion',
+    value: numAt(sys, 'attributes.exhaustion') ?? 0,
+    min: 0,
+    max: 6,
+    writable: true,
+    group: 'vitals',
+  });
+
   for (const slot of spellSlots(actor)) {
     out.push({ id: slot.id, label: slot.label, value: slot.value, min: 0, max: slot.max, writable: true, group: 'slots' });
   }
@@ -416,6 +436,9 @@ function buildUpdate(actor: FoundryActorDoc, intent: ResourceIntent): FoundryUpd
   if (id === 'deathsaves.success') return { data: { 'system.attributes.death.success': target } };
   if (id === 'deathsaves.failure') return { data: { 'system.attributes.death.failure': target } };
   if (id === 'slots.pact') return { data: { 'system.spells.pact.value': target } };
+  // dnd5e stores inspiration as a boolean; the 0/1 resource maps onto it.
+  if (id === 'inspiration') return { data: { 'system.attributes.inspiration': target === 1 } };
+  if (id === 'exhaustion') return { data: { 'system.attributes.exhaustion': target } };
 
   const slotMatch = /^slots\.([1-9])$/.exec(id);
   if (slotMatch) return { data: { [`system.spells.spell${slotMatch[1]}.value`]: target } };
@@ -528,6 +551,68 @@ function skillInfo(actor: FoundryActorDoc, s: { id: string; ability: string }): 
   const derivedTotal = typeof skill.total === 'number' && Number.isFinite(skill.total) ? skill.total : undefined;
   const total = derivedTotal ?? abilityMod(actor.system, ability) + Math.floor(profMult * proficiency(actor));
   return { total, ability, profMult };
+}
+
+/** The three passive senses DDB-style sheets surface (M10). */
+const PASSIVE_SKILLS = [
+  { id: 'prc', label: 'Passive Perception', ability: 'wis' },
+  { id: 'inv', label: 'Passive Investigation', ability: 'int' },
+  { id: 'ins', label: 'Passive Insight', ability: 'wis' },
+] as const;
+
+/** Numeric value of a dnd5e bonus/formula field when it is a plain number
+ * (source data stores strings like "5" or ""); dice formulas -> undefined. */
+function numericBonus(raw: unknown): number | undefined {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+function passiveStats(actor: FoundryActorDoc): Stat[] {
+  return PASSIVE_SKILLS.map((p) => {
+    // Derived `skills.<id>.passive` when serialized, else dnd5e's formula:
+    // 10 + skill total + bonuses.passive + 5 * roll.mode (adv +5 / dis -5).
+    const derived = numAt(actor.system, `skills.${p.id}.passive`);
+    if (derived !== undefined) return { id: `passive.${p.id}`, label: p.label, value: derived };
+    const bonus = numericBonus(getPath(actor.system, `skills.${p.id}.bonuses.passive`)) ?? 0;
+    const mode = numAt(actor.system, `skills.${p.id}.roll.mode`) ?? 0;
+    return { id: `passive.${p.id}`, label: p.label, value: 10 + skillInfo(actor, p).total + bonus + 5 * mode };
+  });
+}
+
+/** One stat per set sense range ("Darkvision 60 ft"); empty when none.
+ * Like speedLine: the relay serializes source data where race-granted senses
+ * live on the race item (possibly as numeric strings) and the actor's own
+ * ranges are null overrides — so fall back to the race item per mode. */
+function senseStats(actor: FoundryActorDoc): Stat[] {
+  const senses = rec(getPath(actor.system, 'attributes.senses'));
+  const ranges = rec(senses.ranges);
+  const race = (actor.items ?? []).find((i) => i.type === 'race');
+  const raceSenses = race ? rec(getPath(race.system, 'senses')) : {};
+  const raceRanges = rec(raceSenses.ranges);
+  const units =
+    (typeof senses.units === 'string' && senses.units !== '' ? senses.units : undefined) ??
+    (typeof raceSenses.units === 'string' && raceSenses.units !== '' ? raceSenses.units : undefined) ??
+    'ft';
+  const modeValue = (mode: string): number => {
+    const own = ranges[mode];
+    if (typeof own === 'number' && Number.isFinite(own)) return own;
+    return numericBonus(raceRanges[mode]) ?? 0;
+  };
+  const out: Stat[] = [];
+  for (const mode of new Set([...Object.keys(ranges), ...Object.keys(raceRanges)])) {
+    const v = modeValue(mode);
+    if (v <= 0) continue;
+    out.push({
+      id: `sense.${mode}`,
+      label: mode.charAt(0).toUpperCase() + mode.slice(1),
+      value: `${v} ${units}`,
+    });
+  }
+  return out;
 }
 
 /** Save bonus = ability mod + prof when save-proficient (`abilities.<id>.proficient` >= 1). */
@@ -780,6 +865,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     out.push({ id: `ability.${a.id}.check`, label: `${a.label} Check`, kind: 'check' });
     out.push({ id: `ability.${a.id}.save`, label: `${a.label} Save`, kind: 'save' });
   }
+  out.push({ id: 'init.roll', label: 'Initiative', kind: 'check' });
   for (const item of actor.items ?? []) {
     if (item.type === 'weapon') {
       out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack' });
@@ -854,6 +940,9 @@ function buildRollAction(
   actionId: string,
   mode: 'advantage' | 'disadvantage' | undefined,
 ): RelayAction {
+  if (actionId === 'init.roll') {
+    return { endpoint: 'roll', formula: d20Formula(initiative(actor), mode), flavor: 'Initiative' };
+  }
   const skillMatch = /^skill\.([a-z]+)$/.exec(actionId);
   if (skillMatch) {
     const def = SKILLS.find((s) => s.id === skillMatch[1]);
@@ -967,7 +1056,8 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     { id: 'class', label: 'Class', value: classLine },
     { id: 'speed', label: 'Speed', value: speedLine(actor) },
     { id: 'prof', label: 'Proficiency', value: signed(proficiency(actor)) },
-    { id: 'init', label: 'Initiative', value: signed(initiative(actor)) },
+    { id: 'init', label: 'Initiative', value: signed(initiative(actor)), actionId: 'init.roll' },
+    { id: 'xp', label: 'XP', value: numAt(actor.system, 'details.xp.value') ?? 0 },
   ];
 
   const inventory: ListItem[] = [];
@@ -985,14 +1075,21 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     'deathsaves.success',
     'deathsaves.failure',
     ...resources.filter((r) => r.id.startsWith('hitdice.')).map((r) => r.id),
+    'inspiration',
+    'exhaustion',
   ];
   const slotIds = resources.filter((r) => r.id.startsWith('slots.')).map((r) => r.id);
 
   const sections: SheetSection[] = [
     { kind: 'stats', id: 'abilities', label: 'Abilities', stats: abilityStats(actor) },
     { kind: 'stats', id: 'skills', label: 'Skills', stats: skillStats(actor) },
-    { kind: 'tracks', id: 'vitals', label: 'Vitals', resourceIds: vitalsIds },
+    { kind: 'stats', id: 'passives', label: 'Passive Senses', stats: passiveStats(actor) },
   ];
+  const senses = senseStats(actor);
+  if (senses.length > 0) {
+    sections.push({ kind: 'stats', id: 'senses', label: 'Senses', stats: senses });
+  }
+  sections.push({ kind: 'tracks', id: 'vitals', label: 'Vitals', resourceIds: vitalsIds });
   if (slotIds.length > 0) {
     sections.push({ kind: 'tracks', id: 'slots', label: 'Spell Slots', resourceIds: slotIds });
   }

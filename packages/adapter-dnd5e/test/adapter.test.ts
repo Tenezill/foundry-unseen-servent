@@ -85,7 +85,7 @@ describe('view model — martial (source-shaped data, fallback math)', () => {
     expect(acr?.sub).toBe('DEX');
   });
 
-  it('vitals tracks hp, temp hp, death saves, and hit dice', () => {
+  it('vitals tracks hp, temp hp, death saves, hit dice, inspiration, exhaustion', () => {
     const s = section(martial, 'vitals');
     if (s.kind !== 'tracks') throw new Error('vitals must be a tracks section');
     expect(s.resourceIds).toEqual([
@@ -94,6 +94,8 @@ describe('view model — martial (source-shaped data, fallback math)', () => {
       'deathsaves.success',
       'deathsaves.failure',
       'hitdice.d10',
+      'inspiration',
+      'exhaustion',
     ]);
   });
 
@@ -766,5 +768,266 @@ describe('item detail (system.description.value)', () => {
     const s = dnd5eAdapter.toViewModel(withSpellDesc).sections.find((x) => x.id === 'spells');
     if (s?.kind !== 'list') throw new Error('spells must be a list section');
     expect(s.items.find((i) => i.label === 'Bless')?.detail).toBe('<p>You bless up to three creatures.</p>');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M10 — sheet completeness: inspiration, exhaustion, passives, senses, XP.
+
+describe('inspiration + exhaustion (M10)', () => {
+  it('inspiration: 0/1 vitals resource, false -> 0', () => {
+    expect(resource(martial, 'inspiration')).toEqual({
+      id: 'inspiration',
+      label: 'Inspiration',
+      value: 0,
+      min: 0,
+      max: 1,
+      writable: true,
+      group: 'vitals',
+    });
+  });
+
+  it('inspiration true -> value 1', () => {
+    const inspired: FoundryActorDoc = {
+      ...martial,
+      system: {
+        ...martial.system,
+        attributes: { ...(martial.system.attributes as Record<string, unknown>), inspiration: true },
+      },
+    };
+    expect(resource(inspired, 'inspiration').value).toBe(1);
+  });
+
+  it('buildUpdate writes a BOOLEAN to system.attributes.inspiration', () => {
+    expect(dnd5eAdapter.buildUpdate(martial, { kind: 'set', resourceId: 'inspiration', value: 1 })).toEqual({
+      data: { 'system.attributes.inspiration': true },
+    });
+    expect(dnd5eAdapter.buildUpdate(martial, { kind: 'delta', resourceId: 'inspiration', amount: -1 })).toEqual({
+      data: { 'system.attributes.inspiration': false },
+    });
+  });
+
+  it('exhaustion: 0..6 vitals resource', () => {
+    expect(resource(martial, 'exhaustion')).toEqual({
+      id: 'exhaustion',
+      label: 'Exhaustion',
+      value: 0,
+      min: 0,
+      max: 6,
+      writable: true,
+      group: 'vitals',
+    });
+    expect(resource(martialCaptured, 'exhaustion')).toMatchObject({ value: 0, min: 0, max: 6 });
+  });
+
+  it('buildUpdate writes system.attributes.exhaustion, clamped to 0..6', () => {
+    expect(dnd5eAdapter.buildUpdate(martial, { kind: 'set', resourceId: 'exhaustion', value: 3 })).toEqual({
+      data: { 'system.attributes.exhaustion': 3 },
+    });
+    expect(
+      dnd5eAdapter.buildUpdate(martial, { kind: 'delta', resourceId: 'exhaustion', amount: 99 }).data[
+        'system.attributes.exhaustion'
+      ],
+    ).toBe(6);
+  });
+});
+
+describe('passive senses (M10)', () => {
+  it('passives section sits right after skills', () => {
+    const vm = dnd5eAdapter.toViewModel(martial);
+    const idx = vm.sections.findIndex((s) => s.id === 'skills');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(vm.sections[idx + 1]?.id).toBe('passives');
+  });
+
+  it('falls back to 10 + skill total when no derived passive is serialized', () => {
+    const s = section(martial, 'passives');
+    if (s.kind !== 'stats') throw new Error('passives must be a stats section');
+    expect(s.label).toBe('Passive Senses');
+    // prc proficient (wis +1, prof +3) -> 14; inv int +0 -> 10; ins wis +1 -> 11.
+    expect(s.stats).toEqual([
+      { id: 'passive.prc', label: 'Passive Perception', value: 14 },
+      { id: 'passive.inv', label: 'Passive Investigation', value: 10 },
+      { id: 'passive.ins', label: 'Passive Insight', value: 11 },
+    ]);
+  });
+
+  it('uses the derived total in the fallback (caster: ins total +7 -> 17)', () => {
+    const s = section(caster, 'passives');
+    if (s.kind !== 'stats') throw new Error('passives must be a stats section');
+    expect(s.stats.find((x) => x.id === 'passive.ins')?.value).toBe(17);
+    expect(s.stats.find((x) => x.id === 'passive.prc')?.value).toBe(14);
+  });
+
+  it('prefers the derived skills.<id>.passive number when serialized', () => {
+    const withPassive: FoundryActorDoc = {
+      ...caster,
+      system: {
+        ...caster.system,
+        skills: {
+          ...(caster.system.skills as Record<string, unknown>),
+          prc: { ...((caster.system.skills as Record<string, Record<string, unknown>>).prc), passive: 19 },
+        },
+      },
+    };
+    const s = dnd5eAdapter.toViewModel(withPassive).sections.find((x) => x.id === 'passives');
+    if (s?.kind !== 'stats') throw new Error('passives must be a stats section');
+    expect(s.stats.find((x) => x.id === 'passive.prc')?.value).toBe(19);
+  });
+
+  it('captured fixtures render passives via the fallback (pinned values)', () => {
+    const m = section(martialCaptured, 'passives');
+    if (m.kind !== 'stats') throw new Error('passives must be a stats section');
+    // martial: prof 3; prc wis +1 unprof -> 11; inv int -1 -> 9; ins wis +1 prof -> 14.
+    expect(m.stats).toEqual([
+      { id: 'passive.prc', label: 'Passive Perception', value: 11 },
+      { id: 'passive.inv', label: 'Passive Investigation', value: 9 },
+      { id: 'passive.ins', label: 'Passive Insight', value: 14 },
+    ]);
+    const c = section(casterCaptured, 'passives');
+    if (c.kind !== 'stats') throw new Error('passives must be a stats section');
+    // caster: prof 3; prc wis +2 prof -> 15; inv int -1 -> 9; ins wis +2 prof -> 15.
+    expect(c.stats).toEqual([
+      { id: 'passive.prc', label: 'Passive Perception', value: 15 },
+      { id: 'passive.inv', label: 'Passive Investigation', value: 9 },
+      { id: 'passive.ins', label: 'Passive Insight', value: 15 },
+    ]);
+  });
+
+  it('fallback adds skills.<id>.bonuses.passive (Observant: "5" as a source string)', () => {
+    const observant = withSkillOverride(martialCaptured, 'prc', { bonuses: { check: '', passive: '5' } });
+    const s = section(observant, 'passives');
+    if (s.kind !== 'stats') throw new Error('passives must be a stats section');
+    // Base 11 (see pinned captured values) + 5 passive bonus.
+    expect(s.stats.find((x) => x.id === 'passive.prc')?.value).toBe(16);
+  });
+
+  it('fallback adds +5/-5 for roll.mode advantage/disadvantage', () => {
+    const adv = withSkillOverride(martialCaptured, 'prc', { roll: { min: null, max: null, mode: 1 } });
+    const sAdv = section(adv, 'passives');
+    if (sAdv.kind !== 'stats') throw new Error('passives must be a stats section');
+    expect(sAdv.stats.find((x) => x.id === 'passive.prc')?.value).toBe(16);
+
+    const dis = withSkillOverride(martialCaptured, 'prc', { roll: { min: null, max: null, mode: -1 } });
+    const sDis = section(dis, 'passives');
+    if (sDis.kind !== 'stats') throw new Error('passives must be a stats section');
+    expect(sDis.stats.find((x) => x.id === 'passive.prc')?.value).toBe(6);
+  });
+
+  it('fallback ignores a non-numeric bonuses.passive formula', () => {
+    const weird = withSkillOverride(martialCaptured, 'prc', { bonuses: { check: '', passive: '1d4' } });
+    const s = section(weird, 'passives');
+    if (s.kind !== 'stats') throw new Error('passives must be a stats section');
+    expect(s.stats.find((x) => x.id === 'passive.prc')?.value).toBe(11);
+  });
+});
+
+/** Clone a captured-shape actor with fields merged into one skill's data. */
+function withSkillOverride(actor: FoundryActorDoc, skillId: string, patch: Record<string, unknown>): FoundryActorDoc {
+  const skills = actor.system.skills as Record<string, Record<string, unknown>>;
+  return {
+    ...actor,
+    system: {
+      ...actor.system,
+      skills: { ...skills, [skillId]: { ...skills[skillId], ...patch } },
+    },
+  };
+}
+
+describe('senses (M10)', () => {
+  it('is omitted when no sense is set (captured fixtures have all-null ranges)', () => {
+    expect(dnd5eAdapter.toViewModel(martialCaptured).sections.some((s) => s.id === 'senses')).toBe(false);
+    expect(dnd5eAdapter.toViewModel(casterCaptured).sections.some((s) => s.id === 'senses')).toBe(false);
+    expect(dnd5eAdapter.toViewModel(martial).sections.some((s) => s.id === 'senses')).toBe(false);
+  });
+
+  it('lists set senses with capitalized label and units ("Darkvision 60 ft")', () => {
+    const seer: FoundryActorDoc = {
+      ...martial,
+      system: {
+        ...martial.system,
+        attributes: {
+          ...(martial.system.attributes as Record<string, unknown>),
+          senses: {
+            units: 'ft',
+            ranges: { darkvision: 60, blindsight: null, tremorsense: 0, truesight: null },
+          },
+        },
+      },
+    };
+    const s = dnd5eAdapter.toViewModel(seer).sections.find((x) => x.id === 'senses');
+    if (s?.kind !== 'stats') throw new Error('senses must be a stats section');
+    expect(s.label).toBe('Senses');
+    expect(s.stats).toEqual([{ id: 'sense.darkvision', label: 'Darkvision', value: '60 ft' }]);
+  });
+
+  it('defaults units to ft when unset', () => {
+    const seer: FoundryActorDoc = {
+      ...martial,
+      system: {
+        ...martial.system,
+        attributes: {
+          ...(martial.system.attributes as Record<string, unknown>),
+          senses: { ranges: { truesight: 30 } },
+        },
+      },
+    };
+    const s = dnd5eAdapter.toViewModel(seer).sections.find((x) => x.id === 'senses');
+    if (s?.kind !== 'stats') throw new Error('senses must be a stats section');
+    expect(s.stats).toEqual([{ id: 'sense.truesight', label: 'Truesight', value: '30 ft' }]);
+  });
+
+  it('falls back to race-item senses when actor ranges are null (relay source data)', () => {
+    // Captured shape: actor senses.ranges are all null; the race item carries
+    // the value — as a numeric string, like race movement.walk "30".
+    const dwarf = withRaceSenses(martialCaptured, {
+      units: 'ft',
+      ranges: { darkvision: '60', blindsight: 0, tremorsense: null, truesight: null },
+    });
+    const s = dnd5eAdapter.toViewModel(dwarf).sections.find((x) => x.id === 'senses');
+    if (s?.kind !== 'stats') throw new Error('senses must be a stats section');
+    expect(s.stats).toEqual([{ id: 'sense.darkvision', label: 'Darkvision', value: '60 ft' }]);
+  });
+
+  it("actor's own numeric range overrides the race item", () => {
+    const dwarf = withRaceSenses(martialCaptured, { ranges: { darkvision: '60' } });
+    const boosted: FoundryActorDoc = {
+      ...dwarf,
+      system: {
+        ...dwarf.system,
+        attributes: {
+          ...(dwarf.system.attributes as Record<string, unknown>),
+          senses: { units: 'ft', ranges: { darkvision: 120, blindsight: null } },
+        },
+      },
+    };
+    const s = dnd5eAdapter.toViewModel(boosted).sections.find((x) => x.id === 'senses');
+    if (s?.kind !== 'stats') throw new Error('senses must be a stats section');
+    expect(s.stats).toEqual([{ id: 'sense.darkvision', label: 'Darkvision', value: '120 ft' }]);
+  });
+});
+
+/** Clone a captured-shape actor with its race item's system.senses replaced. */
+function withRaceSenses(actor: FoundryActorDoc, senses: Record<string, unknown>): FoundryActorDoc {
+  return {
+    ...actor,
+    items: (actor.items ?? []).map((i) =>
+      i.type === 'race' ? { ...i, system: { ...(i.system as Record<string, unknown>), senses } } : i,
+    ),
+  };
+}
+
+describe('XP headline stat (M10)', () => {
+  it('appends details.xp.value to the headline', () => {
+    const headline = dnd5eAdapter.toViewModel(martial).headline;
+    expect(headline[headline.length - 1]).toEqual({ id: 'xp', label: 'XP', value: 6500 });
+  });
+
+  it('missing xp defaults to 0 (captured fixture has 0)', () => {
+    const byId = new Map(dnd5eAdapter.toViewModel(martialCaptured).headline.map((s) => [s.id, s]));
+    expect(byId.get('xp')?.value).toBe(0);
+    const noXp: FoundryActorDoc = { ...martial, system: { ...martial.system, details: {} } };
+    const byId2 = new Map(dnd5eAdapter.toViewModel(noXp).headline.map((s) => [s.id, s]));
+    expect(byId2.get('xp')?.value).toBe(0);
   });
 });

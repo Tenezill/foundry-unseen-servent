@@ -123,10 +123,11 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
 
   it('non-caster has no cast actions; total count is pinned', () => {
     expect(all.filter((a) => a.kind === 'cast')).toHaveLength(0);
-    // 18 skills + 12 ability checks/saves + 3 attacks + 5 equips + 1 feature
-    // use + 6 item uses (Waterskin, Torch, Rations, Piton, Rope, Horn)
+    // 18 skills + 12 ability checks/saves + 1 initiative (M10) + 3 attacks
+    // + 5 equips + 1 feature use + 6 item uses (Waterskin, Torch, Rations,
+    // Piton, Rope, Horn)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(47);
+    expect(all).toHaveLength(48);
   });
 });
 
@@ -146,12 +147,13 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
       'feature.vWo0CO4uYJ8XRnRi.use',
     ]);
     expect(all.filter((a) => a.kind === 'use' && a.group === 'items')).toHaveLength(6);
-    // 18 skills + 12 ability checks/saves + 2 attacks + 4 equips + 18 casts
+    // 18 skills + 12 ability checks/saves + 1 initiative (M10) + 2 attacks
+    // + 4 equips + 18 casts
     // + 13 prepare toggles (18 spells − 3 cantrips − 2 always-prepared)
     // + 1 feature use + 6 item uses (Waterskin, Torch, Common Clothes,
     // Rations, Rope, Vestments)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(76);
+    expect(all).toHaveLength(77);
   });
 
   it('a leveled spell with a base-level slot is directly castable (no slotLevels — the bridge casts at base only)', () => {
@@ -469,6 +471,42 @@ describe('M8 actor-command actions (rest / death save / concentration)', () => {
   });
 });
 
+describe('M10 initiative roll', () => {
+  it('exposes init.roll as a check action for every actor', () => {
+    for (const actor of [martialCaptured, casterCaptured, caster]) {
+      expect(action(actor, 'init.roll')).toEqual({ id: 'init.roll', label: 'Initiative', kind: 'check' });
+    }
+  });
+
+  it('rolls d20 + the initiative the headline shows (martial: dex fallback +2)', () => {
+    expect(build(martialCaptured, { kind: 'check', actionId: 'init.roll' })).toEqual({
+      endpoint: 'roll',
+      formula: '1d20 + 2',
+      flavor: 'Initiative',
+    });
+    // Derived init.total preferred (synthetic caster: 0).
+    expect(formulaOf(caster, { kind: 'check', actionId: 'init.roll' })).toBe('1d20 + 0');
+  });
+
+  it('advantage/disadvantage swap the d20 term', () => {
+    expect(formulaOf(martialCaptured, { kind: 'check', actionId: 'init.roll', mode: 'advantage' })).toBe('2d20kh1 + 2');
+    expect(formulaOf(martialCaptured, { kind: 'check', actionId: 'init.roll', mode: 'disadvantage' })).toBe(
+      '2d20kl1 + 2',
+    );
+  });
+
+  it('the headline init stat carries actionId init.roll', () => {
+    for (const actor of [martialCaptured, casterCaptured]) {
+      const byId = new Map(dnd5eAdapter.toViewModel(actor).headline.map((s) => [s.id, s]));
+      expect(byId.get('init')?.actionId).toBe('init.roll');
+    }
+  });
+
+  it('kind mismatch is rejected', () => {
+    expectIntentError(() => build(martialCaptured, { kind: 'save', actionId: 'init.roll' }), 'UNKNOWN_RESOURCE');
+  });
+});
+
 describe('view model wiring', () => {
   it('skill and ability stats carry actionIds', () => {
     const skills = section(martialCaptured, 'skills');
@@ -510,7 +548,7 @@ describe('view model wiring', () => {
 
   it('the sheet embeds the full action list', () => {
     expect(dnd5eAdapter.toViewModel(martialCaptured).actions).toEqual(actions(martialCaptured));
-    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(76);
+    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(77);
   });
 });
 
