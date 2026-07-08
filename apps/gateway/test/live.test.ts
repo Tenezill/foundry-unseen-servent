@@ -4,7 +4,12 @@
  * reconnect when the hooks stream fails.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { extractUpdatedActorId, LiveManager, type LiveOptions } from '../src/live.js';
+import {
+  extractItemParentActorId,
+  extractUpdatedActorId,
+  LiveManager,
+  type LiveOptions,
+} from '../src/live.js';
 
 type HookHandler = (ev: { event: string; data: unknown }) => void;
 
@@ -93,7 +98,49 @@ describe('extractUpdatedActorId', () => {
   });
 });
 
+describe('extractItemParentActorId', () => {
+  it('resolves the parent actor from the item parent field', () => {
+    expect(extractItemParentActorId({ data: { args: [{ _id: 'i1', parent: { _id: 'a9' } }, {}] } })).toBe('a9');
+  });
+
+  it('falls back to parsing the embedded item uuid', () => {
+    expect(extractItemParentActorId({ data: { args: [{ _id: 'i1', uuid: 'Actor.a7.Item.i1' }, {}] } })).toBe('a7');
+  });
+
+  it('returns null for world-level items and malformed payloads', () => {
+    expect(extractItemParentActorId({ data: { args: [{ _id: 'i1', uuid: 'Item.i1' }] } })).toBeNull();
+    expect(extractItemParentActorId({ data: { args: [] } })).toBeNull();
+    expect(extractItemParentActorId(null)).toBeNull();
+  });
+});
+
 describe('LiveManager shared hooks subscription', () => {
+  it('subscribes to actor AND embedded-item hooks (DM loot syncs live)', async () => {
+    const h = new Harness();
+    h.sheets.set('x', '{"items":1}');
+    const live = new LiveManager(h.options);
+    const got: string[] = [];
+    const detach = live.attach('x', (json) => got.push(json), '{"items":1}');
+    await waitFor(() => h.streamOpen);
+    expect(h.subscribeCalls).toEqual([['updateActor', 'createItem', 'updateItem', 'deleteItem']]);
+
+    // GM drags loot onto the character -> Foundry fires createItem for the
+    // embedded item; the sheet must refresh from the parent actor.
+    h.sheets.set('x', '{"items":2}');
+    h.emit('createItem', { data: { args: [{ _id: 'i9', parent: { _id: 'x' } }, {}, 'gm'] } });
+    await waitFor(() => got.length === 1);
+    expect(got).toEqual(['{"items":2}']);
+
+    // deleteItem with a uuid-only payload also maps to the parent actor.
+    h.sheets.set('x', '{"items":1}');
+    h.emit('deleteItem', { data: { args: [{ _id: 'i9', uuid: 'Actor.x.Item.i9' }, {}, 'gm'] } });
+    await waitFor(() => got.length === 2);
+    expect(got[1]).toBe('{"items":1}');
+
+    detach();
+    live.stopAll();
+  });
+
   it('starts ONE stream on first attach and delivers updated sheets to the matching actor', async () => {
     const h = new Harness();
     h.sheets.set('x', '{"hp":10}');
@@ -106,7 +153,8 @@ describe('LiveManager shared hooks subscription', () => {
     const detachY = live.attach('y', (json) => gotY.push(json), '{"mp":3}');
 
     await waitFor(() => h.streamOpen);
-    expect(h.subscribeCalls).toEqual([['updateActor']]); // one shared subscription for both actors
+    // one shared subscription for both actors
+    expect(h.subscribeCalls).toEqual([['updateActor', 'createItem', 'updateItem', 'deleteItem']]);
 
     h.sheets.set('x', '{"hp":5}');
     h.emitUpdateActor('x');

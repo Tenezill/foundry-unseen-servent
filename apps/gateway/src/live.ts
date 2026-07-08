@@ -38,7 +38,14 @@ export interface LiveOptions {
 
 type Send = (sheetJson: string) => void;
 
-const WATCHED_HOOKS = ['updateActor'];
+/**
+ * updateActor covers direct actor edits (HP, currency…). The embedded-item
+ * hooks cover the DM adding loot, deleting items, or editing item fields —
+ * none of which fire updateActor, so without them the sheet would only catch
+ * up on the next poll-gap or reconnect.
+ */
+const WATCHED_HOOKS = ['updateActor', 'createItem', 'updateItem', 'deleteItem'];
+const ITEM_HOOKS = new Set(['createItem', 'updateItem', 'deleteItem']);
 
 /**
  * Pull the updated actor's `_id` out of a relay `updateActor` event payload.
@@ -53,6 +60,30 @@ export function extractUpdatedActorId(payload: unknown): string | null {
   if (doc !== null && typeof doc === 'object' && !Array.isArray(doc)) {
     const id = (doc as Record<string, unknown>)._id;
     if (typeof id === 'string' && id !== '') return id;
+  }
+  return null;
+}
+
+/**
+ * Pull the PARENT actor's id out of a createItem/updateItem/deleteItem event.
+ * `args[0]` is the embedded item document: prefer its serialized
+ * `parent._id`, fall back to parsing the `Actor.<id>.Item.<id>` uuid.
+ * World-level items (no actor parent) yield null.
+ */
+export function extractItemParentActorId(payload: unknown): string | null {
+  const args = findArgsArray(payload, 0);
+  if (!args || args.length === 0) return null;
+  const doc = args[0];
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return null;
+  const item = doc as Record<string, unknown>;
+  const parent = item.parent;
+  if (parent !== null && typeof parent === 'object' && !Array.isArray(parent)) {
+    const id = (parent as Record<string, unknown>)._id;
+    if (typeof id === 'string' && id !== '') return id;
+  }
+  if (typeof item.uuid === 'string') {
+    const m = /^Actor\.([^.]+)\.Item\./.exec(item.uuid);
+    if (m) return m[1] as string;
   }
   return null;
 }
@@ -192,8 +223,12 @@ export class LiveManager {
           WATCHED_HOOKS,
           (ev) => {
             backoff = minMs; // any frame proves the connection is healthy
-            if (ev.event !== 'updateActor') return;
-            const actorId = extractUpdatedActorId(ev.data);
+            const actorId =
+              ev.event === 'updateActor'
+                ? extractUpdatedActorId(ev.data)
+                : ITEM_HOOKS.has(ev.event)
+                  ? extractItemParentActorId(ev.data)
+                  : null;
             if (actorId === null) return;
             const watcher = this.watchers.get(actorId);
             if (watcher) void watcher.refresh();

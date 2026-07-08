@@ -523,7 +523,7 @@ describe('SSE events', () => {
       await new Promise((r) => setTimeout(r, 10));
     }
     expect(relay.hookSubscribers.size).toBe(1);
-    expect(relay.hookSubscriptions[0]).toEqual(['updateActor']);
+    expect(relay.hookSubscriptions[0]).toEqual(['updateActor', 'createItem', 'updateItem', 'deleteItem']);
     relay.mutate('Actor.a1', 'system.hp.value', 5);
     relay.emitUpdateActor('a1');
 
