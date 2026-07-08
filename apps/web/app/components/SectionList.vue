@@ -44,15 +44,15 @@
           {{ verbOf(item) }}
         </button>
         <button
-          v-if="equipOf(item)"
+          v-if="toggleOf(item)"
           class="equip-btn"
           type="button"
-          :class="{ on: equipOf(item)!.equipped, pending: actionBusy === item.equipActionId }"
-          :aria-pressed="equipOf(item)!.equipped === true"
+          :class="{ on: toggleOn(toggleOf(item)!), pending: actionBusy === item.toggleActionId }"
+          :aria-pressed="toggleOn(toggleOf(item)!)"
           :disabled="readonly || actionBusy !== null"
-          @click="item.equipActionId && emit('action', item.equipActionId)"
+          @click="item.toggleActionId && emit('action', item.toggleActionId)"
         >
-          {{ equipOf(item)!.equipped ? 'Equipped' : 'Equip' }}
+          {{ toggleLabel(toggleOf(item)!) }}
         </button>
       </div>
       <p v-if="section.items.length === 0" class="empty">Nothing here yet.</p>
@@ -82,8 +82,17 @@ function actionOf(item: ListItem): ActionDescriptor | undefined {
   return item.actionId ? props.actions[item.actionId] : undefined
 }
 
-function equipOf(item: ListItem): ActionDescriptor | undefined {
-  return item.equipActionId ? props.actions[item.equipActionId] : undefined
+function toggleOf(item: ListItem): ActionDescriptor | undefined {
+  return item.toggleActionId ? props.actions[item.toggleActionId] : undefined
+}
+
+function toggleOn(action: ActionDescriptor): boolean {
+  return action.kind === 'prepare' ? action.prepared === true : action.equipped === true
+}
+
+function toggleLabel(action: ActionDescriptor): string {
+  if (action.kind === 'prepare') return action.prepared ? 'Prepared' : 'Prepare'
+  return action.equipped ? 'Equipped' : 'Equip'
 }
 
 function verbOf(item: ListItem): string | null {

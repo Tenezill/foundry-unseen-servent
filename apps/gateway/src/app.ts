@@ -188,6 +188,9 @@ function parseActionIntent(
     case 'equip':
       if (typeof body.equipped !== 'boolean') return null;
       return { kind, actionId, equipped: body.equipped };
+    case 'prepare':
+      if (typeof body.prepared !== 'boolean') return null;
+      return { kind, actionId, prepared: body.prepared };
     case 'rest':
     case 'deathsave':
     case 'endconcentration':
@@ -627,6 +630,11 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           break;
         case 'equip-item':
           await relay.equipItem(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.equipped);
+          break;
+        case 'update-item':
+          // Generic item-field write (e.g. prepared state) — same entity-update
+          // path as quantity/uses; no chat card, no roll.
+          await relay.updateEntity(`Actor.${id}.Item.${action.itemId}`, action.data);
           break;
         case 'short-rest':
         case 'long-rest':

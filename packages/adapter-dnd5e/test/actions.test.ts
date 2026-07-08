@@ -484,13 +484,13 @@ describe('view model wiring', () => {
     if (inv.kind !== 'list') throw new Error('inventory must be a list section');
     const sword = inv.items.find((i) => i.label === 'Longsword');
     expect(sword?.actionId).toBeUndefined();
-    expect(sword?.equipActionId).toBe('item.gta26ORvqC323k3r.equip');
+    expect(sword?.toggleActionId).toBe('item.gta26ORvqC323k3r.equip');
     const mail = inv.items.find((i) => i.label === 'Chain Mail');
     expect(mail?.actionId).toBeUndefined();
-    expect(mail?.equipActionId).toBe('item.yz7DxhEVWUzdQKm7.equip');
+    expect(mail?.toggleActionId).toBe('item.yz7DxhEVWUzdQKm7.equip');
     const torch = inv.items.find((i) => i.label === 'Torch');
     expect(torch?.actionId).toBeUndefined();
-    expect(torch?.equipActionId).toBeUndefined();
+    expect(torch?.toggleActionId).toBeUndefined();
   });
 
   it('spell rows carry cast actions', () => {

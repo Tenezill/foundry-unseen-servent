@@ -94,8 +94,12 @@ export interface ListItem {
   tags?: string[];
   /** Primary action for the row (attack, cast, use). */
   actionId?: string;
-  /** Secondary equip/unequip toggle action, when applicable. */
-  equipActionId?: string;
+  /** Secondary toggle action (equip/unequip, prepare/unprepare), when
+   *  applicable. The pill label follows the action's kind. */
+  toggleActionId?: string;
+  /** May be deleted via the spellbook API (renders a destructive detail
+   *  action, e.g. "Forget spell"). */
+  forgettable?: boolean;
   /**
    * Rich description for a detail view (M8). This is content from the user's
    * OWN world (the item's own description) — the app only ever renders what
@@ -151,6 +155,8 @@ export interface SheetViewModel {
   conditions?: Condition[];
   /** The spell being concentrated on, if any (M8, dnd5e: from effects). */
   concentration?: { label: string } | null;
+  /** True when the actor's adapter supports spellbook search/learn/forget. */
+  hasSpellbook?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +171,8 @@ export type SheetActionKind =
   | 'cast'
   | 'use'
   | 'equip'
+  /** toggle a spell's prepared state (item-field write, no chat card). */
+  | 'prepare'
   // M8 actor-scoped commands (no item target):
   | 'rest'
   | 'deathsave'
@@ -184,6 +192,8 @@ export interface ActionDescriptor {
   slotLevels?: number[];
   /** equip only: current state (the intent carries the desired state). */
   equipped?: boolean;
+  /** prepare only: current state (the intent carries the desired state). */
+  prepared?: boolean;
 }
 
 export type ActionIntent =
@@ -191,6 +201,7 @@ export type ActionIntent =
   | { kind: 'attack' | 'use'; actionId: string }
   | { kind: 'cast'; actionId: string; slotLevel?: number }
   | { kind: 'equip'; actionId: string; equipped: boolean }
+  | { kind: 'prepare'; actionId: string; prepared: boolean }
   | { kind: 'rest' | 'deathsave' | 'endconcentration'; actionId: string };
 
 /**
@@ -203,6 +214,9 @@ export type RelayAction =
   | { endpoint: 'roll'; formula: string; flavor: string }
   | { endpoint: 'use-item' | 'use-spell' | 'use-feature'; itemId: string; slotLevel?: number }
   | { endpoint: 'equip-item'; itemId: string; equipped: boolean }
+  /** Generic embedded-item field write (e.g. prepared state); executed via
+   *  the same entity-update path as quantity/uses. */
+  | { endpoint: 'update-item'; itemId: string; data: Record<string, number | string | boolean> }
   | { endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration' };
 
 /**
@@ -215,9 +229,28 @@ export interface AdapterIO {
   getSystemDetails(details: string[]): Promise<unknown>;
 }
 
+/**
+ * Optional spellbook capability: search the world's compendia for learnable
+ * spells, learn a found one (relay `give` copies it onto the actor), forget
+ * a known one (relay `delete` on the embedded item). All system knowledge
+ * (filter strings, document types, preview labels) stays in the adapter.
+ */
+export interface SpellbookSupport {
+  /** relay /search filter for learnable entries, e.g. "documentType:Item,subType:spell". */
+  searchFilter: string;
+  /** fetched compendium doc is a learnable spell. */
+  canLearn(doc: Record<string, unknown>): boolean;
+  /** embedded item may be deleted via the spellbook API. */
+  canForget(item: FoundryItemDoc): boolean;
+  /** preview for the learn-confirm sheet: label, "3rd level · Evocation", detail HTML. */
+  describe(doc: Record<string, unknown>): ListItem;
+}
+
 export interface SystemAdapter {
   /** Foundry system id this adapter handles, e.g. "dnd5e". */
   systemId: string;
+  /** Optional: spellbook search/learn/forget support (gateway 404s without it). */
+  spellbook?: SpellbookSupport;
   /**
    * Optional: merge derived data the relay's plain /get does not serialize
    * (e.g. dnd5e spell-slot maxima) into the document before rendering.

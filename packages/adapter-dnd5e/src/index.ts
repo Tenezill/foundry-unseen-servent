@@ -654,7 +654,7 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>): List
     ...(tags.length > 0 ? { tags } : {}),
     // No primary actionId: inventory rows manage (quantity, equip); using and
     // attacking live on the Actions tab.
-    ...(isEquippable(item) ? { equipActionId: `item.${item._id}.equip` } : {}),
+    ...(isEquippable(item) ? { toggleActionId: `item.${item._id}.equip` } : {}),
     ...(detail !== undefined ? { detail } : {}),
   };
 }

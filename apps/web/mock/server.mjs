@@ -219,7 +219,7 @@ function buildActions(actor) {
 /* SheetViewModel assembly                                                    */
 /* ------------------------------------------------------------------------- */
 
-function listItem(def, actionId, equipActionId) {
+function listItem(def, actionId, toggleActionId) {
   const item = { id: def.id, label: def.label }
   if (def.sub) item.sub = def.sub
   if (def.img) item.img = def.img
@@ -229,7 +229,7 @@ function listItem(def, actionId, equipActionId) {
   if (def.equip?.equipped) tags.push('equipped')
   if (tags.length > 0) item.tags = tags
   if (actionId) item.actionId = actionId
-  if (equipActionId) item.equipActionId = equipActionId
+  if (toggleActionId) item.toggleActionId = toggleActionId
   return item
 }
 
