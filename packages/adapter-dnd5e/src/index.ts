@@ -533,13 +533,19 @@ function speedLine(actor: FoundryActorDoc): string {
 }
 
 function abilityStats(actor: FoundryActorDoc): Stat[] {
-  return ABILITIES.map((a) => ({
-    id: `ability.${a.id}`,
-    label: a.label,
-    value: abilityScore(actor.system, a.id),
-    sub: signed(abilityMod(actor.system, a.id)),
-    actionId: `ability.${a.id}.check`,
-  }));
+  return ABILITIES.map((a) => {
+    const subParts = [signed(abilityMod(actor.system, a.id))];
+    // Save proficiency marker (M14): abilities.<id>.proficient is 1 when the
+    // actor is proficient in that saving throw.
+    if (getPath(actor.system, `abilities.${a.id}.proficient`) === 1) subParts.push('● save');
+    return {
+      id: `ability.${a.id}`,
+      label: a.label,
+      value: abilityScore(actor.system, a.id),
+      sub: subParts.join(' · '),
+      actionId: `ability.${a.id}.check`,
+    };
+  });
 }
 
 /** Skill total + provenance shared by the view model and buildAction so the
@@ -626,9 +632,10 @@ function skillStats(actor: FoundryActorDoc): Stat[] {
   return SKILLS.map((s) => {
     const { total, ability, profMult } = skillInfo(actor, s);
     const subParts = [ability.toUpperCase()];
-    if (profMult >= 2) subParts.push('expertise');
-    else if (profMult >= 1) subParts.push('proficient');
-    else if (profMult > 0) subParts.push('half proficiency');
+    // Proficiency markers (M14): ◐ half / ● proficient / ◆ expertise.
+    if (profMult >= 2) subParts.push('◆ expertise');
+    else if (profMult >= 1) subParts.push('● proficient');
+    else if (profMult > 0) subParts.push('◐ half');
     return {
       id: `skill.${s.id}`,
       label: s.label,
