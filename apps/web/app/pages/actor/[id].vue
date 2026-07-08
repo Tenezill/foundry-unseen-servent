@@ -24,7 +24,7 @@
           </button>
         </div>
 
-        <SheetHero :sheet="sheet" :conn="conn" :readonly="offline" @numpad="openNumpad" />
+        <SheetHero :sheet="sheet" :conn="conn" :readonly="offline" @numpad="openNumpad" @action="onAction" />
 
         <ConcentrationBanner
           v-if="sheet.concentration"

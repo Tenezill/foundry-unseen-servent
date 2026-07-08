@@ -51,11 +51,25 @@
     </div>
 
     <div v-if="cluster.length" class="cluster tabular">
-      <div v-for="stat in cluster" :key="stat.id" class="stat" :class="{ shield: stat.id === 'ac' }">
-        <svg v-if="stat.id === 'ac'" viewBox="0 0 40 44" fill="currentColor" aria-hidden="true"><path d="M20 2 L36 8 V22 C36 33 29 39 20 42 C11 39 4 33 4 22 V8 Z" /></svg>
-        <div class="big">{{ stat.value }}</div>
-        <div class="cap">{{ stat.label }}</div>
-      </div>
+      <template v-for="stat in cluster" :key="stat.id">
+        <button
+          v-if="stat.actionId"
+          class="stat tappable"
+          type="button"
+          :disabled="readonly"
+          :aria-label="`Roll ${stat.label}`"
+          @click="emit('action', stat.actionId)"
+        >
+          <span class="tap-glyph" aria-hidden="true">⚅</span>
+          <div class="big">{{ stat.value }}</div>
+          <div class="cap">{{ stat.label }}</div>
+        </button>
+        <div v-else class="stat" :class="{ shield: stat.id === 'ac' }">
+          <svg v-if="stat.id === 'ac'" viewBox="0 0 40 44" fill="currentColor" aria-hidden="true"><path d="M20 2 L36 8 V22 C36 33 29 39 20 42 C11 39 4 33 4 22 V8 Z" /></svg>
+          <div class="big">{{ stat.value }}</div>
+          <div class="cap">{{ stat.label }}</div>
+        </div>
+      </template>
     </div>
   </section>
 </template>
@@ -69,7 +83,10 @@ const props = defineProps<{
   readonly: boolean
 }>()
 
-const emit = defineEmits<{ (e: 'numpad', resourceId: string): void }>()
+const emit = defineEmits<{
+  (e: 'numpad', resourceId: string): void
+  (e: 'action', actionId: string): void
+}>()
 
 const config = useRuntimeConfig()
 const foundryBase = String(config.public.foundryBase || '')
@@ -304,13 +321,18 @@ const cluster = computed<Stat[]>(() => props.sheet.headline.filter((s) => s.id !
 }
 
 /* ---- vitals cluster ---- */
+/* Flex-wrap instead of a fixed 4-column grid: the headline yields 5 cluster
+ * stats (AC, Speed, Prof, Init, XP); wrapped tiles grow to fill their row so
+ * a wide value (6-digit XP) never sits cramped in a quarter-width orphan. */
 .cluster {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
 }
 .stat {
+  flex: 1 1 calc(20% - 8px);
+  min-width: 72px;
   position: relative;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -328,6 +350,29 @@ const cluster = computed<Stat[]>(() => props.sheet.headline.filter((s) => s.id !
   text-transform: uppercase;
   color: var(--ink-faint);
   margin-top: 2px;
+}
+.stat.tappable {
+  border-color: color-mix(in srgb, var(--gold) 35%, var(--line));
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.stat.tappable .big {
+  color: var(--gold-bright);
+}
+.stat.tappable:active:not(:disabled) {
+  transform: scale(0.96);
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--line));
+}
+.stat.tappable:disabled {
+  opacity: 0.55;
+}
+.tap-glyph {
+  position: absolute;
+  top: 5px;
+  right: 7px;
+  color: var(--gold);
+  opacity: 0.55;
+  font-size: 0.66rem;
+  line-height: 1;
 }
 .shield svg {
   position: absolute;
