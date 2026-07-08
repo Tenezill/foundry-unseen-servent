@@ -39,16 +39,17 @@ const emit = defineEmits<{
 }>()
 
 const GROUP_DEFS = [
-  { id: 'attacks', label: 'Attacks', kind: 'attack', verb: 'Attack', icon: 'M14.5 3.5 21 10l-2 2-6.5-6.5ZM3 21l7-7M6.5 17.5 3 21' },
-  { id: 'spells', label: 'Spells', kind: 'cast', verb: 'Cast', icon: 'M12 3l1.8 4.9L18.8 9l-4.9 1.8L12 15.7 10.2 10.8 5.2 9l5-1.1ZM18 15l.9 2.4 2.4.9-2.4.9L18 22l-.9-2.4-2.4-.9 2.4-.9Z' },
-  { id: 'features', label: 'Features', kind: 'use', verb: 'Use', icon: 'M13 2 4 14h6l-1 8 9-12h-6z' },
+  { id: 'attacks', label: 'Attacks', kind: 'attack', group: undefined, verb: 'Attack', icon: 'M14.5 3.5 21 10l-2 2-6.5-6.5ZM3 21l7-7M6.5 17.5 3 21' },
+  { id: 'spells', label: 'Spells', kind: 'cast', group: undefined, verb: 'Cast', icon: 'M12 3l1.8 4.9L18.8 9l-4.9 1.8L12 15.7 10.2 10.8 5.2 9l5-1.1ZM18 15l.9 2.4 2.4.9-2.4.9L18 22l-.9-2.4-2.4-.9 2.4-.9Z' },
+  { id: 'features', label: 'Features', kind: 'use', group: undefined, verb: 'Use', icon: 'M13 2 4 14h6l-1 8 9-12h-6z' },
+  { id: 'items', label: 'Items', kind: 'use', group: 'items', verb: 'Use', icon: 'M10 2h4v3.2l2.5 4.2A6 6 0 0 1 12 22a6 6 0 0 1-4.5-12.6L10 5.2Z' },
 ] as const
 
-/** Non-empty groups only — empty headers are omitted. */
+/** Non-empty groups only — kind AND group hint must match. */
 const groups = computed(() =>
   GROUP_DEFS.map((def) => ({
     ...def,
-    actions: props.actions.filter((a) => a.kind === def.kind),
+    actions: props.actions.filter((a) => a.kind === def.kind && a.group === def.group),
   })).filter((g) => g.actions.length > 0),
 )
 
