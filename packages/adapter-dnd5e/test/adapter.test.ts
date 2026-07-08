@@ -1017,6 +1017,189 @@ function withRaceSenses(actor: FoundryActorDoc, senses: Record<string, unknown>)
   };
 }
 
+// ---------------------------------------------------------------------------
+// M11 — identity & lore: proficiencies & traits stats, biography list.
+
+/** Clone an actor with fields merged into system.traits. */
+function withTraits(actor: FoundryActorDoc, patch: Record<string, unknown>): FoundryActorDoc {
+  return {
+    ...actor,
+    system: {
+      ...actor.system,
+      traits: { ...(actor.system.traits as Record<string, unknown>), ...patch },
+    },
+  };
+}
+
+/** Clone an actor with fields merged into system.details. */
+function withDetails(actor: FoundryActorDoc, patch: Record<string, unknown>): FoundryActorDoc {
+  return {
+    ...actor,
+    system: {
+      ...actor.system,
+      details: { ...(actor.system.details as Record<string, unknown>), ...patch },
+    },
+  };
+}
+
+describe('proficiencies & traits (M11)', () => {
+  it('sits right after passives with the pinned label', () => {
+    const vm = dnd5eAdapter.toViewModel(martialCaptured);
+    const idx = vm.sections.findIndex((s) => s.id === 'passives');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const s = vm.sections[idx + 1];
+    expect(s?.id).toBe('traits');
+    if (s?.kind !== 'stats') throw new Error('traits must be a stats section');
+    expect(s.label).toBe('Proficiencies & Traits');
+  });
+
+  it('captured martial: languages/armor/weapons via the vocab, joined with ", "', () => {
+    const s = section(martialCaptured, 'traits');
+    if (s.kind !== 'stats') throw new Error('traits must be a stats section');
+    expect(s.stats).toEqual([
+      { id: 'trait.languages', label: 'Languages', value: 'Common, Dwarvish, Elvish, Goblin' },
+      { id: 'trait.armor', label: 'Armor', value: 'Light Armor, Medium Armor, Heavy Armor, Shields' },
+      { id: 'trait.weapons', label: 'Weapons', value: 'Simple Weapons, Martial Weapons' },
+    ]);
+  });
+
+  it('captured caster: dr ["cold"] renders a capitalized Resistances stat', () => {
+    const s = section(casterCaptured, 'traits');
+    if (s.kind !== 'stats') throw new Error('traits must be a stats section');
+    expect(s.stats).toEqual([
+      { id: 'trait.languages', label: 'Languages', value: 'Giant, Halfling, Common, Draconic' },
+      { id: 'trait.armor', label: 'Armor', value: 'Light Armor, Medium Armor, Shields, Heavy Armor' },
+      { id: 'trait.weapons', label: 'Weapons', value: 'Simple Weapons' },
+      { id: 'trait.dr', label: 'Resistances', value: 'Cold' },
+    ]);
+  });
+
+  it('unknown language ids fall back to capitalization; known ids use the vocab', () => {
+    const polyglot = withTraits(martialCaptured, {
+      languages: { value: ['common', 'deep', 'cant', 'druidic', 'gith'], custom: '' },
+    });
+    const s = section(polyglot, 'traits');
+    if (s.kind !== 'stats') throw new Error('traits must be a stats section');
+    expect(s.stats.find((x) => x.id === 'trait.languages')?.value).toBe(
+      "Common, Deep Speech, Thieves' Cant, Druidic, Gith",
+    );
+  });
+
+  it('tool proficiencies appear when present (unknown ids capitalized)', () => {
+    const tinker = withTraits(martialCaptured, { toolProf: { value: ['thief', 'herb'], custom: '' } });
+    const s = section(tinker, 'traits');
+    if (s.kind !== 'stats') throw new Error('traits must be a stats section');
+    expect(s.stats.find((x) => x.id === 'trait.tools')).toEqual({
+      id: 'trait.tools',
+      label: 'Tools',
+      value: 'Thief, Herb',
+    });
+  });
+
+  it('di/dv/ci render when set; .custom strings are appended', () => {
+    const tough = withTraits(martialCaptured, {
+      dr: { value: ['fire'], bypasses: [], custom: 'Nonmagical slashing' },
+      di: { value: ['poison'], bypasses: [], custom: '' },
+      dv: { value: ['thunder'], bypasses: [], custom: '' },
+      ci: { value: ['charmed', 'frightened'], custom: '' },
+    });
+    const s = section(tough, 'traits');
+    if (s.kind !== 'stats') throw new Error('traits must be a stats section');
+    expect(s.stats.find((x) => x.id === 'trait.dr')?.value).toBe('Fire, Nonmagical slashing');
+    expect(s.stats.find((x) => x.id === 'trait.di')).toEqual({
+      id: 'trait.di',
+      label: 'Immunities',
+      value: 'Poison',
+    });
+    expect(s.stats.find((x) => x.id === 'trait.dv')).toEqual({
+      id: 'trait.dv',
+      label: 'Vulnerabilities',
+      value: 'Thunder',
+    });
+    expect(s.stats.find((x) => x.id === 'trait.ci')).toEqual({
+      id: 'trait.ci',
+      label: 'Condition Immunities',
+      value: 'Charmed, Frightened',
+    });
+  });
+
+  it('empty categories are omitted (captured fixtures have empty dr/di/dv/ci)', () => {
+    const s = section(martialCaptured, 'traits');
+    if (s.kind !== 'stats') throw new Error('traits must be a stats section');
+    const ids = s.stats.map((x) => x.id);
+    expect(ids).not.toContain('trait.dr');
+    expect(ids).not.toContain('trait.di');
+    expect(ids).not.toContain('trait.dv');
+    expect(ids).not.toContain('trait.ci');
+    expect(ids).not.toContain('trait.tools');
+  });
+
+  it('the whole section is omitted when every category is empty (synthetic fixtures)', () => {
+    expect(dnd5eAdapter.toViewModel(martial).sections.some((s) => s.id === 'traits')).toBe(false);
+    expect(dnd5eAdapter.toViewModel(caster).sections.some((s) => s.id === 'traits')).toBe(false);
+  });
+});
+
+describe('biography & personality (M11)', () => {
+  it('is a list section labelled "Character", last before currency', () => {
+    const vm = dnd5eAdapter.toViewModel(martialCaptured);
+    const idx = vm.sections.findIndex((s) => s.id === 'biography');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const s = vm.sections[idx];
+    if (s?.kind !== 'list') throw new Error('biography must be a list section');
+    expect(s.label).toBe('Character');
+    expect(vm.sections[idx + 1]?.id).toBe('currency');
+    expect(idx + 2).toBe(vm.sections.length);
+  });
+
+  it('biography row carries the HTML as detail with a "Tap to read" sub', () => {
+    const s = section(martialCaptured, 'biography');
+    if (s.kind !== 'list') throw new Error('biography must be a list section');
+    const bio = s.items.find((i) => i.id === 'bio');
+    expect(bio?.label).toBe('Biography');
+    expect(bio?.sub).toBe('Tap to read');
+    expect(bio?.detail).toHaveLength(293);
+    expect(bio?.detail).toContain('Randal worked his way through the ranks');
+    expect(bio?.actionId).toBeUndefined();
+  });
+
+  it('personality one-liners render as sub-only rows (no detail, no actions)', () => {
+    const storied = withDetails(martialCaptured, {
+      trait: 'Blunt to a fault.',
+      ideal: 'The strong protect the weak.',
+      bond: 'My old guard company.',
+      flaw: 'Cannot refuse a wager.',
+      appearance: 'Scarred hands, grey eyes.',
+    });
+    const s = section(storied, 'biography');
+    if (s.kind !== 'list') throw new Error('biography must be a list section');
+    expect(s.items).toEqual([
+      s.items[0], // the bio row, asserted above
+      { id: 'trait', label: 'Personality', sub: 'Blunt to a fault.' },
+      { id: 'ideal', label: 'Ideal', sub: 'The strong protect the weak.' },
+      { id: 'bond', label: 'Bond', sub: 'My old guard company.' },
+      { id: 'flaw', label: 'Flaw', sub: 'Cannot refuse a wager.' },
+      { id: 'appearance', label: 'Appearance', sub: 'Scarred hands, grey eyes.' },
+    ]);
+  });
+
+  it('empty one-liners are omitted (captured fixtures have "" for all five)', () => {
+    const s = section(martialCaptured, 'biography');
+    if (s.kind !== 'list') throw new Error('biography must be a list section');
+    expect(s.items.map((i) => i.id)).toEqual(['bio']);
+  });
+
+  it('the whole section is omitted when nothing is set (synthetic fixtures)', () => {
+    expect(dnd5eAdapter.toViewModel(martial).sections.some((s) => s.id === 'biography')).toBe(false);
+    expect(dnd5eAdapter.toViewModel(caster).sections.some((s) => s.id === 'biography')).toBe(false);
+  });
+
+  it('an empty biography HTML string yields no bio row', () => {
+    const blank = withDetails(martialCaptured, { biography: { value: '', public: '' } });
+    expect(dnd5eAdapter.toViewModel(blank).sections.some((s) => s.id === 'biography')).toBe(false);
+  });
+});
+
 describe('XP headline stat (M10)', () => {
   it('appends details.xp.value to the headline', () => {
     const headline = dnd5eAdapter.toViewModel(martial).headline;

@@ -86,6 +86,10 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 // ---------------------------------------------------------------------------
 // dnd5e 5.3.3 vocabulary (labels only — no game-rules content)
 
@@ -128,6 +132,42 @@ const SPELL_SCHOOLS: Record<string, string> = {
   ill: 'Illusion',
   nec: 'Necromancy',
   trs: 'Transmutation',
+};
+
+/** dnd5e 5.3.3 `traits.languages.value` ids (M11) — labels only. */
+const LANGUAGES: Record<string, string> = {
+  common: 'Common',
+  dwarvish: 'Dwarvish',
+  elvish: 'Elvish',
+  goblin: 'Goblin',
+  draconic: 'Draconic',
+  orc: 'Orc',
+  giant: 'Giant',
+  gnomish: 'Gnomish',
+  halfling: 'Halfling',
+  infernal: 'Infernal',
+  abyssal: 'Abyssal',
+  celestial: 'Celestial',
+  primordial: 'Primordial',
+  sylvan: 'Sylvan',
+  undercommon: 'Undercommon',
+  deep: 'Deep Speech',
+  druidic: 'Druidic',
+  cant: "Thieves' Cant",
+};
+
+/** dnd5e `traits.armorProf.value` ids (M11). */
+const ARMOR_PROFICIENCIES: Record<string, string> = {
+  lgt: 'Light Armor',
+  med: 'Medium Armor',
+  hvy: 'Heavy Armor',
+  shl: 'Shields',
+};
+
+/** dnd5e `traits.weaponProf.value` ids (M11). */
+const WEAPON_PROFICIENCIES: Record<string, string> = {
+  sim: 'Simple Weapons',
+  mar: 'Martial Weapons',
 };
 
 const PHYSICAL_ITEM_TYPES = new Set(['weapon', 'equipment', 'consumable', 'tool', 'container', 'loot']);
@@ -612,6 +652,75 @@ function senseStats(actor: FoundryActorDoc): Stat[] {
       label: mode.charAt(0).toUpperCase() + mode.slice(1),
       value: `${v} ${units}`,
     });
+  }
+  return out;
+}
+
+/**
+ * The label list for one `traits.<key>` category (M11): `.value` ids mapped
+ * through the vocab (unknown ids capitalized), plus the free-text `.custom`
+ * string when asked for (dr/di/dv/ci carry player-written entries there).
+ * Empty array = category absent from the sheet.
+ */
+function traitLabels(
+  actor: FoundryActorDoc,
+  key: string,
+  vocab: Record<string, string> = {},
+  includeCustom = false,
+): string[] {
+  const trait = rec(getPath(actor.system, `traits.${key}`));
+  const value = Array.isArray(trait.value) ? trait.value : [];
+  const out = value
+    .filter((id): id is string => typeof id === 'string' && id !== '')
+    .map((id) => vocab[id] ?? capitalize(id));
+  if (includeCustom && typeof trait.custom === 'string' && trait.custom.trim() !== '') {
+    out.push(trait.custom.trim());
+  }
+  return out;
+}
+
+/** One Stat per non-empty proficiency/trait category (M11); read-only. */
+function traitStats(actor: FoundryActorDoc): Stat[] {
+  const categories: Array<{ id: string; label: string; values: string[] }> = [
+    { id: 'languages', label: 'Languages', values: traitLabels(actor, 'languages', LANGUAGES) },
+    { id: 'armor', label: 'Armor', values: traitLabels(actor, 'armorProf', ARMOR_PROFICIENCIES) },
+    { id: 'weapons', label: 'Weapons', values: traitLabels(actor, 'weaponProf', WEAPON_PROFICIENCIES) },
+    { id: 'tools', label: 'Tools', values: traitLabels(actor, 'toolProf') },
+    { id: 'dr', label: 'Resistances', values: traitLabels(actor, 'dr', {}, true) },
+    { id: 'di', label: 'Immunities', values: traitLabels(actor, 'di', {}, true) },
+    { id: 'dv', label: 'Vulnerabilities', values: traitLabels(actor, 'dv', {}, true) },
+    { id: 'ci', label: 'Condition Immunities', values: traitLabels(actor, 'ci', {}, true) },
+  ];
+  return categories
+    .filter((c) => c.values.length > 0)
+    .map((c) => ({ id: `trait.${c.id}`, label: c.label, value: c.values.join(', ') }));
+}
+
+/** The five personality one-liners rendered under the biography (M11). */
+const PERSONALITY_FIELDS = [
+  { id: 'trait', label: 'Personality' },
+  { id: 'ideal', label: 'Ideal' },
+  { id: 'bond', label: 'Bond' },
+  { id: 'flaw', label: 'Flaw' },
+  { id: 'appearance', label: 'Appearance' },
+] as const;
+
+/**
+ * Read-only "Character" rows (M11): the biography HTML as a detail row
+ * (content from the user's OWN world; the client sanitizes, same pipeline as
+ * item details) plus personality one-liners. Empty sources are omitted; an
+ * empty array means the whole section is omitted. Render-only — biography
+ * editing from the phone is a non-goal (roadmap §M11).
+ */
+function biographyItems(actor: FoundryActorDoc): ListItem[] {
+  const out: ListItem[] = [];
+  const bio = strAt(actor.system, 'details.biography.value');
+  if (bio !== undefined && bio.trim() !== '') {
+    out.push({ id: 'bio', label: 'Biography', sub: 'Tap to read', detail: bio });
+  }
+  for (const f of PERSONALITY_FIELDS) {
+    const v = strAt(actor.system, `details.${f.id}`);
+    if (v !== undefined && v.trim() !== '') out.push({ id: f.id, label: f.label, sub: v });
   }
   return out;
 }
@@ -1164,6 +1273,10 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     { kind: 'stats', id: 'skills', label: 'Skills', stats: skillStats(actor) },
     { kind: 'stats', id: 'passives', label: 'Passive Senses', stats: passiveStats(actor) },
   ];
+  const traits = traitStats(actor);
+  if (traits.length > 0) {
+    sections.push({ kind: 'stats', id: 'traits', label: 'Proficiencies & Traits', stats: traits });
+  }
   const senses = senseStats(actor);
   if (senses.length > 0) {
     sections.push({ kind: 'stats', id: 'senses', label: 'Senses', stats: senses });
@@ -1176,6 +1289,12 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   sections.push({ kind: 'list', id: 'features', label: 'Features', items: features });
   if (spells.length > 0) {
     sections.push({ kind: 'list', id: 'spells', label: 'Spells', items: spells });
+  }
+  // "Character" deliberately matches neither of the PWA's tab regexes
+  // (spell/gear), so the section routes to Overview.
+  const biography = biographyItems(actor);
+  if (biography.length > 0) {
+    sections.push({ kind: 'list', id: 'biography', label: 'Character', items: biography });
   }
   sections.push({
     kind: 'tracks',
