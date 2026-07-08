@@ -2,7 +2,25 @@
   <section>
     <h2 class="section-title">{{ section.label }}</h2>
     <div class="list card">
-      <div v-for="item in section.items" :key="item.id" class="row">
+      <div
+        v-for="{ item, depth, hasChildren } in rows"
+        :key="item.id"
+        class="row"
+        :style="depth > 0 ? { paddingLeft: `${14 + depth * 22}px` } : undefined"
+      >
+        <button
+          v-if="hasChildren"
+          class="chev"
+          type="button"
+          :class="{ open: !isCollapsed(item.id) }"
+          :aria-expanded="!isCollapsed(item.id)"
+          :aria-label="`Toggle contents of ${item.label}`"
+          @click="toggleCollapse(item.id)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="m9 6 6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
         <ActorAvatar :name="item.label" :img="item.img" :size="38" />
         <div class="row-main">
           <button
@@ -54,6 +72,17 @@
         >
           {{ toggleLabel(toggleOf(item)!) }}
         </button>
+        <button
+          v-if="attuneOf(item)"
+          class="equip-btn"
+          type="button"
+          :class="{ on: attuneOf(item)!.attuned === true, pending: actionBusy === item.attuneActionId }"
+          :aria-pressed="attuneOf(item)!.attuned === true"
+          :disabled="readonly || actionBusy !== null"
+          @click="item.attuneActionId && emit('action', item.attuneActionId)"
+        >
+          {{ attuneOf(item)!.attuned ? 'Attuned' : 'Attune' }}
+        </button>
       </div>
       <p v-if="section.items.length === 0" class="empty">Nothing here yet.</p>
     </div>
@@ -78,8 +107,78 @@ const emit = defineEmits<{
   (e: 'detail', item: ListItem): void
 }>()
 
+/* ---- container grouping (M12) ----------------------------------------- */
+
+interface Row {
+  item: ListItem
+  depth: number
+  hasChildren: boolean
+}
+
+const collapsedIds = ref(new Set<string>())
+
+function isCollapsed(id: string): boolean {
+  return collapsedIds.value.has(id)
+}
+
+function toggleCollapse(id: string): void {
+  const next = new Set(collapsedIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  collapsedIds.value = next
+}
+
+/** Flattened rows: items nested (depth-first) under their container row,
+ *  default expanded; containerIds that match no row render flat. */
+const rows = computed<Row[]>(() => {
+  const items = props.section.items
+  const ids = new Set(items.map((i) => i.id))
+  const children = new Map<string, ListItem[]>()
+  const roots: ListItem[] = []
+  for (const item of items) {
+    const cid = item.containerId
+    if (cid && cid !== item.id && ids.has(cid)) {
+      const kids = children.get(cid)
+      if (kids) kids.push(item)
+      else children.set(cid, [item])
+    } else {
+      roots.push(item)
+    }
+  }
+  const out: Row[] = []
+  const seen = new Set<string>()
+  // Descendants of a collapsed container are hidden, not unreachable — mark
+  // them seen so the leftover pass below doesn't resurface them flat.
+  const markSeen = (item: ListItem): void => {
+    for (const kid of children.get(item.id) ?? []) {
+      if (seen.has(kid.id)) continue
+      seen.add(kid.id)
+      markSeen(kid)
+    }
+  }
+  const visit = (item: ListItem, depth: number): void => {
+    if (seen.has(item.id)) return
+    seen.add(item.id)
+    const kids = children.get(item.id) ?? []
+    out.push({ item, depth, hasChildren: kids.length > 0 })
+    if (collapsedIds.value.has(item.id)) {
+      markSeen(item)
+      return
+    }
+    for (const kid of kids) visit(kid, depth + 1)
+  }
+  for (const item of roots) visit(item, 0)
+  // Container cycles never reach a root; render any leftovers flat.
+  for (const item of items) if (!seen.has(item.id)) visit(item, 0)
+  return out
+})
+
 function actionOf(item: ListItem): ActionDescriptor | undefined {
   return item.actionId ? props.actions[item.actionId] : undefined
+}
+
+function attuneOf(item: ListItem): ActionDescriptor | undefined {
+  return item.attuneActionId ? props.actions[item.attuneActionId] : undefined
 }
 
 function toggleOf(item: ListItem): ActionDescriptor | undefined {
@@ -123,6 +222,33 @@ function tap(item: ListItem): void {
 
 .row + .row {
   border-top: 1px solid var(--line);
+}
+
+.chev {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-left: -6px;
+  margin-right: -6px;
+  border-radius: 8px;
+  color: var(--ink-faint);
+}
+
+.chev svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.15s ease;
+}
+
+.chev.open svg {
+  transform: rotate(90deg);
+}
+
+.chev:active {
+  color: var(--gold);
 }
 
 .row-main {

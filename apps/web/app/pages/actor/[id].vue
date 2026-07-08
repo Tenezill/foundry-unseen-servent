@@ -323,8 +323,11 @@ const walletResources = computed(() =>
 
 function tabOf(section: SheetSection): TabId {
   if (section.kind === 'tracks') return 'resources'
-  if (section.kind === 'stats') return 'overview'
   const key = `${section.id} ${section.label}`.toLowerCase()
+  // Gear-scoped stats (M12 'gearstats') live on the Gear tab with the list.
+  if (section.kind === 'stats') {
+    return /invent|item|equip|gear|loot/.test(key) ? 'inventory' : 'overview'
+  }
   if (/spell|cantrip/.test(key)) return 'spells'
   if (/invent|item|equip|gear|loot/.test(key)) return 'inventory'
   return 'overview'
@@ -565,6 +568,12 @@ function onAction(actionId: string): void {
         action.label,
       )
       break
+    case 'attune':
+      void submitAction(
+        { kind: 'attune', actionId, attuned: !(action.attuned ?? false) },
+        action.label,
+      )
+      break
   }
 }
 
@@ -756,6 +765,9 @@ async function submitAction(intent: ActionIntent, label: string): Promise<void> 
     switch (intent.kind) {
       case 'equip':
         toast.show(`${label} ${intent.equipped ? 'equipped' : 'unequipped'}`)
+        break
+      case 'attune':
+        toast.show(`${label} ${intent.attuned ? 'attuned' : 'attunement ended'}`)
         break
       case 'rest':
         toast.show(`${label} complete`)
