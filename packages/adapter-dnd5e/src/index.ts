@@ -1551,6 +1551,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       if (intent.actionId.startsWith('item.')) {
         const itemId = intent.actionId.slice('item.'.length, -'.use'.length);
         const item = (actor.items ?? []).find((i) => i._id === itemId);
+        if (item && isAttuneable(item) && !isAttuned(item)) {
+          throw new IntentError(`"${item.name}" requires attunement`, 'INVALID');
+        }
         if (item) {
           const effect = effectTypeOf(item);
           if (effect === 'heal') {

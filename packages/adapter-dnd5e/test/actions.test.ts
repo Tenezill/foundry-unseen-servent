@@ -577,6 +577,49 @@ describe('buildAction — item on-use effects (M16)', () => {
   });
 });
 
+describe('buildAction — attunement-required-to-use enforcement (M16)', () => {
+  function withAttunement(attunement: string, attuned: boolean): FoundryActorDoc {
+    return {
+      ...martialCaptured,
+      items: (martialCaptured.items ?? []).map((i) =>
+        i._id === 'iecfawCz0pIwcPVg'
+          ? { ...i, system: { ...(i.system as Record<string, unknown>), attunement, attuned } }
+          : i,
+      ),
+    };
+  }
+
+  it('blocks use with a clear message when attunement is required but missing', () => {
+    const actor = withAttunement('required', false);
+    let caught: unknown;
+    try {
+      build(actor, { kind: 'use', actionId: 'item.iecfawCz0pIwcPVg.use' });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(IntentError);
+    expect((caught as IntentError).code).toBe('INVALID');
+    expect((caught as IntentError).message).toBe('"Bead of Force" requires attunement');
+  });
+
+  it('allows use normally once attuned', () => {
+    const actor = withAttunement('required', true);
+    expect(build(actor, { kind: 'use', actionId: 'item.iecfawCz0pIwcPVg.use' })).toEqual({
+      endpoint: 'roll',
+      formula: '5d4',
+      flavor: 'Bead of Force — Damage',
+    });
+  });
+
+  it('items that do not require attunement are unaffected (Bead of Force real data, Torch)', () => {
+    expect(build(martialCaptured, { kind: 'use', actionId: 'item.iecfawCz0pIwcPVg.use' })).toEqual({
+      endpoint: 'roll',
+      formula: '5d4',
+      flavor: 'Bead of Force — Damage',
+    });
+  });
+});
+
 describe('buildAction — rejections', () => {
   it('unknown action id -> UNKNOWN_RESOURCE', () => {
     expectIntentError(() => build(martialCaptured, { kind: 'check', actionId: 'skill.nope' }), 'UNKNOWN_RESOURCE');
