@@ -9,7 +9,7 @@
     >
       <span class="total-wrap">
         <span v-if="result.isCritical || result.isFumble" class="burst" aria-hidden="true" />
-        <span class="total tabular">{{ result.total }}</span>
+        <span class="total tabular">{{ display ?? result.total }}</span>
       </span>
       <span class="body">
         <span class="label">
@@ -27,7 +27,7 @@
 <script setup lang="ts">
 import type { ActionRollResult } from '~/types/api'
 
-defineProps<{ result: ActionRollResult; label: string }>()
+defineProps<{ result: ActionRollResult; label: string; display?: string }>()
 
 const emit = defineEmits<{ (e: 'dismiss'): void }>()
 </script>

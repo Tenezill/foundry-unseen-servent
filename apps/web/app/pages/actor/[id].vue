@@ -185,6 +185,7 @@
         v-if="lastRoll"
         :result="lastRoll.result"
         :label="lastRoll.label"
+        :display="lastRoll.display"
         @dismiss="dismissRoll"
       />
       <ConfirmDialog
@@ -497,7 +498,7 @@ function applyNumpad(delta: number): void {
 
 /* ---- roll results, history & haptics (M6/M8) ---------------------------- */
 
-const lastRoll = ref<{ result: ActionRollResult; label: string } | null>(null)
+const lastRoll = ref<{ result: ActionRollResult; label: string; display?: string } | null>(null)
 const rollHistory = ref<RollLogEntry[]>([])
 let rollSeq = 0
 let rollTimer: ReturnType<typeof setTimeout> | undefined
@@ -517,8 +518,19 @@ function haptics(result: ActionRollResult): void {
   }
 }
 
-function showRoll(result: ActionRollResult, label: string): void {
-  lastRoll.value = { result, label }
+type EffectType = 'damage' | 'heal' | 'utility'
+
+/** M15: heal -> "+N HP", damage (weapon or spell) -> "N dmg", everything
+ *  else keeps today's plain total. Only the displayed label changes —
+ *  haptics/history/critical styling below are untouched. */
+function effectDisplay(result: ActionRollResult, effectType: EffectType | undefined): string | undefined {
+  if (effectType === 'heal') return `+${result.total} HP`
+  if (effectType === 'damage') return `${result.total} dmg`
+  return undefined
+}
+
+function showRoll(result: ActionRollResult, label: string, effectType?: EffectType): void {
+  lastRoll.value = { result, label, display: effectDisplay(result, effectType) }
   rollHistory.value.unshift({
     id: ++rollSeq,
     label,
@@ -560,7 +572,7 @@ function onAction(actionId: string): void {
       void submitAction({ kind: 'damage', actionId }, `${action.label} — Damage`)
       break
     case 'use':
-      void submitAction({ kind: 'use', actionId }, action.label)
+      void submitAction({ kind: 'use', actionId }, action.label, action.effectType)
       break
     case 'equip':
       void submitAction(
@@ -589,7 +601,7 @@ function onCombatAction(actionId: string): void {
   if (!action) return
   if (action.kind === 'cast') {
     if (action.slotLevels === undefined) {
-      void submitAction({ kind: 'cast', actionId }, action.label)
+      void submitAction({ kind: 'cast', actionId }, action.label, action.effectType)
       return
     }
     if (action.slotLevels.length === 0) return
@@ -598,9 +610,9 @@ function onCombatAction(actionId: string): void {
 }
 
 function onActionSubmit(intent: ActionIntent): void {
-  const label = actionMap.value[intent.actionId]?.label ?? 'Roll'
+  const action = actionMap.value[intent.actionId]
   actionSheetFor.value = null
-  void submitAction(intent, label)
+  void submitAction(intent, action?.label ?? 'Roll', action?.effectType)
 }
 
 async function onRest(kind: 'short' | 'long'): Promise<void> {
@@ -755,7 +767,7 @@ async function onRemove(): Promise<void> {
   }
 }
 
-async function submitAction(intent: ActionIntent, label: string): Promise<void> {
+async function submitAction(intent: ActionIntent, label: string, effectType?: EffectType): Promise<void> {
   if (offline.value || actionBusy.value) return
   actionBusy.value = intent.actionId
   try {
@@ -765,7 +777,10 @@ async function submitAction(intent: ActionIntent, label: string): Promise<void> 
     })
     applySheet(res.sheet)
     if (res.result) {
-      showRoll(res.result, label)
+      // Weapon damage rolls carry their effect via the intent kind itself
+      // (no effectType on 'damage' descriptors — Attacks stays unfiltered);
+      // cast/use heals and damage-save spells carry it via the descriptor.
+      showRoll(res.result, label, intent.kind === 'damage' ? 'damage' : effectType)
       return
     }
     switch (intent.kind) {
