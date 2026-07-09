@@ -1319,6 +1319,55 @@ function healFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | und
 }
 
 /**
+ * Damage formula for an item's on-use damage effect (M16), checked in the
+ * order these two real shapes were confirmed to exist:
+ *   1. Inline `damage.parts` on any activity (a future item shaped like
+ *      Sacred Flame) — each part's `number`/`denomination` becomes a dice
+ *      term, `bonus` resolves through the same two roll-data shapes
+ *      `healFormula`/`weaponDamageFormula` already accept, parts join
+ *      with `+`.
+ *   2. A sibling `utility` activity's `roll.formula` string, used verbatim
+ *      (Bead of Force's real shape — its `"5d4"` is already a complete
+ *      dice formula with no roll-data references to resolve, unlike a
+ *      spell/feature's healing/damage dice).
+ * Undefined when neither shape is present.
+ */
+function itemDamageFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | undefined {
+  const activities = allActivities(item);
+  for (const activity of activities) {
+    const rawParts = getPath(activity, 'damage.parts');
+    if (!Array.isArray(rawParts) || rawParts.length === 0) continue;
+    const terms: string[] = [];
+    for (const rawPart of rawParts) {
+      const part = rec(rawPart);
+      const number = typeof part.number === 'number' && Number.isFinite(part.number) ? part.number : undefined;
+      const denomination =
+        typeof part.denomination === 'number' && Number.isFinite(part.denomination) ? part.denomination : undefined;
+      if (number === undefined || denomination === undefined || number <= 0 || denomination <= 0) continue;
+      const dice = `${number}d${denomination}`;
+      const rawBonus = typeof part.bonus === 'string' ? part.bonus.trim() : '';
+      let bonus: number;
+      if (rawBonus === '@mod') {
+        const ability = strAt(actor.system, 'attributes.spellcasting') ?? 'wis';
+        bonus = abilityMod(actor.system, ability);
+      } else if (/^@classes\.[a-z]+\.levels$/.test(rawBonus)) {
+        bonus = characterLevel(actor);
+      } else {
+        const flat = Number(rawBonus);
+        bonus = Number.isFinite(flat) ? flat : 0;
+      }
+      terms.push(bonus === 0 ? dice : `${dice} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}`);
+    }
+    if (terms.length > 0) return terms.join(' + ');
+  }
+  const utilityRoll = activities.find(
+    (a) => a.type === 'utility' && typeof getPath(a, 'roll.formula') === 'string' && getPath(a, 'roll.formula') !== '',
+  );
+  if (utilityRoll) return String(getPath(utilityRoll, 'roll.formula'));
+  return undefined;
+}
+
+/**
  * A heal-type use/cast: the relay only auto-executes attack-type activities
  * (live-verified 2026-07-09 — Second Wind's "Use" consumed its use but
  * rolled/applied nothing), so the roll is computed client-side, same as
@@ -1328,13 +1377,18 @@ function healFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | und
  * display — applying them to whichever creature was healed stays a manual
  * step in Foundry, exactly like weapon damage today.
  */
-function buildHealAction(actor: FoundryActorDoc, item: FoundryItemDoc, actionId: string): RelayAction {
+function buildHealAction(
+  actor: FoundryActorDoc,
+  item: FoundryItemDoc,
+  actionId: string,
+  opts?: { forceSelf?: boolean },
+): RelayAction {
   const formula = healFormula(actor, item);
   if (formula === undefined) {
     throw new IntentError(`no heal formula for "${actionId}"`, 'UNKNOWN_RESOURCE');
   }
   const flavor = `${item.name} — Healing`;
-  if (!isSelfTargeted(item)) {
+  if (!opts?.forceSelf && !isSelfTargeted(item)) {
     return { endpoint: 'roll', formula, flavor };
   }
   const current = numAt(actor.system, 'attributes.hp.value') ?? 0;
@@ -1495,7 +1549,20 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
     case 'use': {
       // Items and features share the kind; the id prefix picks the endpoint.
       if (intent.actionId.startsWith('item.')) {
-        return { endpoint: 'use-item', itemId: intent.actionId.slice('item.'.length, -'.use'.length) };
+        const itemId = intent.actionId.slice('item.'.length, -'.use'.length);
+        const item = (actor.items ?? []).find((i) => i._id === itemId);
+        if (item) {
+          const effect = effectTypeOf(item);
+          if (effect === 'heal') {
+            return buildHealAction(actor, item, intent.actionId, { forceSelf: true });
+          }
+          if (effect === 'damage') {
+            const formula = itemDamageFormula(actor, item);
+            if (!formula) throw new IntentError(`no damage formula for "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
+            return { endpoint: 'roll', formula, flavor: `${item.name} — Damage` };
+          }
+        }
+        return { endpoint: 'use-item', itemId };
       }
       const itemId = intent.actionId.slice('feature.'.length, -'.use'.length);
       const item = (actor.items ?? []).find((i) => i._id === itemId);

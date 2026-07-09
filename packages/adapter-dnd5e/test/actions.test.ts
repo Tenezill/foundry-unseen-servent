@@ -546,6 +546,37 @@ describe('buildAction — heal formulas & self-heal write-through (M15)', () => 
   });
 });
 
+describe('buildAction — item on-use effects (M16)', () => {
+  it('Bead of Force rolls its sibling-activity damage formula verbatim, display-only', () => {
+    expect(build(martialCaptured, { kind: 'use', actionId: 'item.iecfawCz0pIwcPVg.use' })).toEqual({
+      endpoint: 'roll',
+      formula: '5d4',
+      flavor: 'Bead of Force — Damage',
+    });
+  });
+
+  it('Potion of Healing always self-heals, even though its real target.affects.type is "creature", not "self"', () => {
+    // Akra's fixture HP is 38/38 (verified directly against caster-captured.json).
+    expect(build(casterCaptured, { kind: 'use', actionId: 'item.7vIZxvwGzmJgmugo.use' })).toEqual({
+      endpoint: 'roll-and-heal',
+      formula: '2d4 + 2',
+      flavor: 'Potion of Healing — Healing',
+      path: 'system.attributes.hp.value',
+      current: 38,
+      max: 38,
+    });
+  });
+
+  it('a mundane item with no damage/heal effect is unaffected (Torch still maps to use-item)', () => {
+    const torch = martialCaptured.items?.find((i) => i.name === 'Torch');
+    if (!torch) throw new Error('Torch not found');
+    expect(build(martialCaptured, { kind: 'use', actionId: `item.${torch._id}.use` })).toEqual({
+      endpoint: 'use-item',
+      itemId: torch._id,
+    });
+  });
+});
+
 describe('buildAction — rejections', () => {
   it('unknown action id -> UNKNOWN_RESOURCE', () => {
     expectIntentError(() => build(martialCaptured, { kind: 'check', actionId: 'skill.nope' }), 'UNKNOWN_RESOURCE');
