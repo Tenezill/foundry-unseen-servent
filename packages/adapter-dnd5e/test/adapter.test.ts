@@ -566,6 +566,43 @@ describe('captured fixtures — martial (Randal, Fighter 5)', () => {
     expect(torch?.sub).toBe('×10 · consumable · 10 × 1 lb');
   });
 
+  describe('inventory row recharge display (M16)', () => {
+    function withWaterskinRecovery(period: string): FoundryActorDoc {
+      return {
+        ...martialCaptured,
+        items: (martialCaptured.items ?? []).map((i) =>
+          i._id === '4c3saZuHGHXb8Qlg' // Waterskin
+            ? {
+                ...i,
+                system: {
+                  ...(i.system as Record<string, unknown>),
+                  uses: { max: '4', spent: 0, recovery: [{ period, type: 'recoverAll' }] },
+                },
+              }
+            : i,
+        ),
+      };
+    }
+
+    it('shows a friendly recharge label when the item has a recovery period', () => {
+      const inv = section(withWaterskinRecovery('dawn'), 'inventory');
+      if (inv.kind !== 'list') throw new Error('inventory must be a list section');
+      expect(inv.items.find((i) => i.label === 'Waterskin')?.sub).toBe('consumable · 5 lb · recharges: dawn');
+    });
+
+    it('maps the short rest period to a friendly label', () => {
+      const inv = section(withWaterskinRecovery('sr'), 'inventory');
+      if (inv.kind !== 'list') throw new Error('inventory must be a list section');
+      expect(inv.items.find((i) => i.label === 'Waterskin')?.sub).toBe('consumable · 5 lb · recharges: short rest');
+    });
+
+    it('shows nothing extra for items with no recovery period (Bead of Force, real data)', () => {
+      const inv = section(martialCaptured, 'inventory');
+      if (inv.kind !== 'list') throw new Error('inventory must be a list section');
+      expect(inv.items.find((i) => i.label === 'Bead of Force')?.sub).toBe('consumable · 0.06 lb');
+    });
+  });
+
   it('item uses: Torch has uses.max "1" (string formula) -> uses resource 1/1', () => {
     expect(resource(martialCaptured, 'item.Di7LgeBsM42Mi6yF.uses')).toMatchObject({ value: 1, min: 0, max: 1 });
     // Second Wind feat: uses.max "1", spent 0.

@@ -332,6 +332,22 @@ function usesInfo(item: FoundryItemDoc): { spent: number; max: number } | undefi
   return { spent, max };
 }
 
+const RECOVERY_LABELS: Record<string, string> = {
+  sr: 'short rest',
+  lr: 'long rest',
+};
+
+/** A friendly recharge-period string for an item's first uses-recovery
+ *  entry (e.g. "dawn", "short rest"), or undefined when the item has no
+ *  recovery period (most consumables — single-use, destroyed on use). */
+function recoveryLabel(item: FoundryItemDoc): string | undefined {
+  const recovery = getPath(item.system, 'uses.recovery');
+  if (!Array.isArray(recovery) || recovery.length === 0) return undefined;
+  const period = rec(recovery[0]).period;
+  if (typeof period !== 'string' || period === '') return undefined;
+  return RECOVERY_LABELS[period] ?? period;
+}
+
 interface SlotInfo {
   id: string;
   label: string;
@@ -939,6 +955,8 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>, physi
     const unit = strAt(item.system, 'weight.units') || 'lb';
     subParts.push(qty > 1 ? `${qty} × ${weight} ${unit}` : `${weight} ${unit}`);
   }
+  const recovery = recoveryLabel(item);
+  if (recovery !== undefined) subParts.push(`recharges: ${recovery}`);
   const usesId = `item.${item._id}.uses`;
   const qtyId = `item.${item._id}.qty`;
   const resourceId = resourceIds.has(usesId) ? usesId : resourceIds.has(qtyId) ? qtyId : undefined;
