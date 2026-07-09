@@ -134,10 +134,10 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
   it('non-caster has no cast actions; total count is pinned', () => {
     expect(all.filter((a) => a.kind === 'cast')).toHaveLength(0);
     // 18 skills + 12 ability checks/saves + 1 initiative (M10) + 3 attacks
-    // + 3 weapon damage rolls (M14) + 5 equips + 1 feature use + 6 item uses
-    // (Waterskin, Torch, Rations, Piton, Rope, Horn)
+    // + 3 weapon damage rolls (M14) + 5 equips + 1 feature use + 7 item uses
+    // (Waterskin, Torch, Rations, Piton, Rope, Horn, Bead of Force)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(51);
+    expect(all).toHaveLength(52);
   });
 });
 
@@ -161,14 +161,14 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     expect(all.filter((a) => a.kind === 'use' && a.group === undefined).map((a) => a.id)).toEqual([
       'feature.vWo0CO4uYJ8XRnRi.use',
     ]);
-    expect(all.filter((a) => a.kind === 'use' && a.group === 'items')).toHaveLength(6);
+    expect(all.filter((a) => a.kind === 'use' && a.group === 'items')).toHaveLength(7);
     // 18 skills + 12 ability checks/saves + 1 initiative (M10) + 2 attacks
     // + 2 weapon damage rolls (M14) + 4 equips + 8 casts (castable-now spells only)
     // + 13 prepare toggles (18 spells − 3 cantrips − 2 always-prepared)
-    // + 1 feature use + 6 item uses (Waterskin, Torch, Common Clothes,
-    // Rations, Rope, Vestments)
+    // + 1 feature use + 7 item uses (Waterskin, Torch, Common Clothes,
+    // Rations, Rope, Vestments, Potion of Healing)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(69);
+    expect(all).toHaveLength(70);
   });
 
   it('a leveled spell with a base-level slot is directly castable (no slotLevels — the bridge casts at base only)', () => {
@@ -741,7 +741,7 @@ describe('view model wiring', () => {
 
   it('the sheet embeds the full action list', () => {
     expect(dnd5eAdapter.toViewModel(martialCaptured).actions).toEqual(actions(martialCaptured));
-    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(69);
+    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(70);
   });
 });
 

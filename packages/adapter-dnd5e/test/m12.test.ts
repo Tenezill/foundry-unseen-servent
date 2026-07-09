@@ -97,7 +97,7 @@ describe('M12 attune actions', () => {
   it('mundane items (attunement "") get no attune action — fixture totals stay pinned', () => {
     const all = dnd5eAdapter.actions?.(martialCaptured) ?? [];
     expect(all.some((a) => a.kind === 'attune')).toBe(false);
-    expect(all).toHaveLength(51);
+    expect(all).toHaveLength(52);
     expect((dnd5eAdapter.actions?.(casterCaptured) ?? []).some((a) => a.kind === 'attune')).toBe(false);
   });
 
@@ -268,8 +268,9 @@ describe('M12 gearstats section', () => {
   });
 
   it('Carried weight sums weight × quantity over physical items, 1 decimal', () => {
-    // Randal's 20 physical items sum to 142.5 lb (Torch 10×1, Arrow 20×0.05, …).
-    expect(gearStat(martialCaptured, 'weight')).toEqual({ id: 'weight', label: 'Carried weight', value: '142.5 lb' });
+    // Randal's 21 physical items sum to 142.6 lb (Torch 10×1, Arrow 20×0.05,
+    // …, Bead of Force 0.06×1, added M16 — rounds into the existing total).
+    expect(gearStat(martialCaptured, 'weight')).toEqual({ id: 'weight', label: 'Carried weight', value: '142.6 lb' });
   });
 
   it('shows "<value>/<max> lb" when the enriched doc carries derived encumbrance', () => {
@@ -362,7 +363,7 @@ describe('M12 enrich — stats detail (encumbrance)', () => {
   it('junk stats payloads are tolerated', async () => {
     for (const stats of [null, 42, 'nope', { encumbrance: 'heavy' }, { encumbrance: { value: 'x', max: null } }]) {
       const enriched = await enrichWith(martialCaptured, { stats });
-      expect(gearStat(enriched, 'weight').value).toBe('142.5 lb');
+      expect(gearStat(enriched, 'weight').value).toBe('142.6 lb');
     }
   });
 });
