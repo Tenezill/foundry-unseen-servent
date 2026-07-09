@@ -126,6 +126,7 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
       id: 'feature.7r63kurEAM3GdEec.use',
       label: 'Second Wind',
       kind: 'use',
+      effectType: 'heal',
     });
     expect(all.some((a) => a.id.startsWith('feature.r7UallZJjcIFsz8i'))).toBe(false);
   });
@@ -176,6 +177,7 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
       id: 'spell.pZMrJb3AXiRYO5E8.cast',
       label: 'Guiding Bolt',
       kind: 'cast',
+      effectType: 'damage',
     });
   });
 
@@ -408,6 +410,50 @@ describe('buildAction — weapon damage (M14)', () => {
       () => build(martialCaptured, { kind: 'damage', actionId: 'item.NoSuchItem00001.damage' }),
       'UNKNOWN_RESOURCE',
     );
+  });
+});
+
+describe('effectType classification (M15)', () => {
+  it('heal-type activities classify as heal', () => {
+    expect(action(casterCaptured, 'spell.LjT1wf4D38c9Ieuo.cast').effectType).toBe('heal'); // Cure Wounds
+    expect(action(casterCaptured, 'spell.HpjaVMLEU14tJG7y.cast').effectType).toBe('heal'); // Healing Word
+  });
+
+  it('attack-type activities classify as damage', () => {
+    expect(action(casterCaptured, 'spell.pZMrJb3AXiRYO5E8.cast').effectType).toBe('damage'); // Guiding Bolt
+  });
+
+  it('a save-type activity that deals damage classifies as damage (Sacred Flame)', () => {
+    expect(action(casterCaptured, 'spell.P97npemu7j70IZAQ.cast').effectType).toBe('damage');
+  });
+
+  it('a save-type activity with no damage parts classifies as utility (Bane — a debuff, no damage)', () => {
+    // Bane is unprepared in the fixture (prepared: 0), so the M14 spell
+    // filter gives it no cast action by default — prepare it in a clone to
+    // reach the classification path directly (same technique as the M14
+    // finesse-weapon synthetic-actor test).
+    const prepared: FoundryActorDoc = {
+      ...casterCaptured,
+      items: (casterCaptured.items ?? []).map((i) =>
+        i._id === '9FrgmKwWCYPhlZ5w'
+          ? { ...i, system: { ...(i.system as Record<string, unknown>), prepared: 1 } }
+          : i,
+      ),
+    };
+    expect(action(prepared, 'spell.9FrgmKwWCYPhlZ5w.cast').effectType).toBe('utility');
+  });
+
+  it('a plain utility activity classifies as utility (Detect Magic)', () => {
+    expect(action(casterCaptured, 'spell.a7IlF5H2ZPsB4VWm.cast').effectType).toBe('utility');
+  });
+
+  it('Second Wind (feature, heal-type) classifies as heal', () => {
+    expect(action(martialCaptured, 'feature.7r63kurEAM3GdEec.use').effectType).toBe('heal');
+  });
+
+  it('weapon attack/damage descriptors carry no effectType (out of scope — Attacks stays its own section)', () => {
+    expect(action(martialCaptured, 'item.gta26ORvqC323k3r.attack').effectType).toBeUndefined();
+    expect(action(martialCaptured, 'item.gta26ORvqC323k3r.damage').effectType).toBeUndefined();
   });
 });
 

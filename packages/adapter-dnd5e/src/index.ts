@@ -1159,6 +1159,43 @@ function canCastAtBase(actor: FoundryActorDoc, spellLevel: number): boolean {
   return pactValue > 0 && pactLevel >= spellLevel;
 }
 
+/** This item's first activity, or an empty record if it has none. Foundry
+ *  stores activities as an object keyed by activity id; every dnd5e
+ *  spell/feature/weapon relevant to actions has at most one. */
+function firstActivity(item: FoundryItemDoc): Rec {
+  const activities = rec(getPath(item.system, 'activities'));
+  return rec(Object.values(activities)[0]);
+}
+
+/** The dnd5e activity `type` this item's first activity carries, e.g.
+ *  "attack", "heal", "save", "utility", "check". Undefined for items with
+ *  no activities (most physical gear). */
+function activityType(item: FoundryItemDoc): string | undefined {
+  const type = firstActivity(item).type;
+  return typeof type === 'string' ? type : undefined;
+}
+
+/**
+ * Classify a spell/feature for the Actions tab (M15): 'heal' for heal
+ * activities, 'damage' for attacks AND for save activities that still carry
+ * damage parts (e.g. Sacred Flame — mechanically a `save` activity, not an
+ * `attack`, but it deals radiant damage on a failed save; verified against
+ * the caster fixture: Sacred Flame's `damage.parts` has one entry, the pure
+ * debuff saves Bane/Command/Sanctuary's are empty), 'utility' for everything
+ * else (pure debuff saves, utility, check). Not exposed on weapon
+ * attack/damage descriptors — Attacks is already its own unfiltered section.
+ */
+function effectTypeOf(item: FoundryItemDoc): 'damage' | 'heal' | 'utility' {
+  const type = activityType(item);
+  if (type === 'heal') return 'heal';
+  if (type === 'attack') return 'damage';
+  if (type === 'save') {
+    const damageParts = getPath(firstActivity(item), 'damage.parts');
+    if (Array.isArray(damageParts) && damageParts.length > 0) return 'damage';
+  }
+  return 'utility';
+}
+
 /**
  * The ability modifier dnd5e would add to this weapon's attack/damage roll.
  * An explicit activity `attack.ability` override wins; otherwise a finesse
@@ -1266,6 +1303,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
           id: `spell.${item._id}.cast`,
           label: item.name,
           kind: 'cast',
+          effectType: effectTypeOf(item),
           ...(level > 0 && !canCastAtBase(actor, level) ? { slotLevels: [] } : {}),
         });
       }
@@ -1279,7 +1317,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       }
     }
     if (isUsableFeature(item)) {
-      out.push({ id: `feature.${item._id}.use`, label: item.name, kind: 'use' });
+      out.push({ id: `feature.${item._id}.use`, label: item.name, kind: 'use', effectType: effectTypeOf(item) });
     }
   }
 
