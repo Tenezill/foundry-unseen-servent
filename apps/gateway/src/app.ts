@@ -663,7 +663,11 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           const rolled = extractRoll(await relay.rollFormula(`Actor.${id}`, action.formula, action.flavor));
           result = rolled;
           if (rolled !== null) {
-            const newValue = Math.min(action.max, action.current + rolled.total);
+            // Floor at current: a heal total should never be negative in
+            // practice (the adapter only builds this for heal formulas), but
+            // an unusual negative bonus resolving a formula like "1d4 - 2"
+            // must not let this endpoint reduce HP.
+            const newValue = Math.min(action.max, action.current + Math.max(0, rolled.total));
             await relay.updateEntity(`Actor.${id}`, { [action.path]: newValue });
           }
           break;
