@@ -1167,6 +1167,17 @@ function firstActivity(item: FoundryItemDoc): Rec {
   return rec(Object.values(activities)[0]);
 }
 
+/** All of this item's activities, in insertion order, or empty if it has
+ *  none. Some items split a single effect across more than one activity —
+ *  Bead of Force's real data (live-captured 2026-07-09) has a `save`
+ *  activity carrying the DC and a *separate* `utility` activity carrying
+ *  the damage roll — so callers that need to find a specific activity
+ *  type must scan all of them, not just the first. */
+function allActivities(item: FoundryItemDoc): Rec[] {
+  const activities = rec(getPath(item.system, 'activities'));
+  return Object.values(activities).map(rec);
+}
+
 /** The dnd5e activity `type` this item's first activity carries, e.g.
  *  "attack", "heal", "save", "utility", "check". Undefined for items with
  *  no activities (most physical gear). */
@@ -1176,23 +1187,40 @@ function activityType(item: FoundryItemDoc): string | undefined {
 }
 
 /**
- * Classify a spell/feature for the Actions tab (M15): 'heal' for heal
- * activities, 'damage' for attacks AND for save activities that still carry
- * damage parts (e.g. Sacred Flame — mechanically a `save` activity, not an
- * `attack`, but it deals radiant damage on a failed save; verified against
- * the caster fixture: Sacred Flame's `damage.parts` has one entry, the pure
- * debuff saves Bane/Command/Sanctuary's are empty), 'utility' for everything
- * else (pure debuff saves, utility, check). Not exposed on weapon
- * attack/damage descriptors — Attacks is already its own unfiltered section.
+ * Classify a spell/feature/item for the Actions tab (M15/M16): 'heal' for
+ * heal activities, 'damage' for attacks in spells/features (but not items —
+ * item attacks are weapon attacks handled in the Attacks section), for save
+ * activities that still carry damage parts (e.g. Sacred Flame — mechanically
+ * a `save` activity, not an `attack`, but it deals radiant damage on a
+ * failed save; verified against the caster fixture: Sacred Flame's
+ * `damage.parts` has one entry, the pure debuff saves Bane/Command/Sanctuary's
+ * are empty), and for items that split DC and damage across two activities
+ * (Bead of Force: a `save` activity for the DC, a separate `utility`
+ * activity whose `roll.formula` carries the actual damage die — live-verified
+ * 2026-07-09, this item has no non-empty `damage.parts` anywhere). 'utility'
+ * for everything else (pure debuff saves, utility, check, item attacks).
+ * Not exposed on weapon attack/damage descriptors — Attacks is already its
+ * own unfiltered section.
  */
 function effectTypeOf(item: FoundryItemDoc): 'damage' | 'heal' | 'utility' {
-  const type = activityType(item);
-  if (type === 'heal') return 'heal';
-  if (type === 'attack') return 'damage';
-  if (type === 'save') {
-    const damageParts = getPath(firstActivity(item), 'damage.parts');
-    if (Array.isArray(damageParts) && damageParts.length > 0) return 'damage';
+  const activities = allActivities(item);
+  if (activities.some((a) => a.type === 'heal')) return 'heal';
+  // Attack activities on spells/features (cantrips like Fire Bolt) count as damage,
+  // but attack activities on physical items are weapon attacks handled separately in Attacks.
+  if (item.type === 'spell' || item.type === 'feat') {
+    if (activities.some((a) => a.type === 'attack')) return 'damage';
   }
+  const hasSaveDamage = activities.some((a) => {
+    if (a.type !== 'save') return false;
+    const parts = getPath(a, 'damage.parts');
+    return Array.isArray(parts) && parts.length > 0;
+  });
+  if (hasSaveDamage) return 'damage';
+  const hasSave = activities.some((a) => a.type === 'save');
+  const hasUtilityRoll = activities.some(
+    (a) => a.type === 'utility' && typeof getPath(a, 'roll.formula') === 'string' && getPath(a, 'roll.formula') !== '',
+  );
+  if (hasSave && hasUtilityRoll) return 'damage';
   return 'utility';
 }
 
@@ -1334,7 +1362,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     if (isUsableInventoryItem(item)) {
       // Offered even at 0 uses/quantity — Foundry owns the rules and refuses
       // when empty (same philosophy as unprepared spells).
-      out.push({ id: `item.${item._id}.use`, label: item.name, kind: 'use', group: 'items' });
+      out.push({ id: `item.${item._id}.use`, label: item.name, kind: 'use', group: 'items', effectType: effectTypeOf(item) });
     }
     if (isEquippable(item)) {
       out.push({

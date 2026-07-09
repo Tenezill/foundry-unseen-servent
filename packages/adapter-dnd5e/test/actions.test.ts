@@ -478,6 +478,34 @@ describe('effectType classification (M15)', () => {
   });
 });
 
+describe('effectType classification — items (M16)', () => {
+  it('Bead of Force (save DC on one activity, damage die on a separate utility activity) classifies as damage', () => {
+    expect(action(martialCaptured, 'item.iecfawCz0pIwcPVg.use').effectType).toBe('damage');
+  });
+
+  it('Potion of Healing (heal-type activity) classifies as heal', () => {
+    expect(action(casterCaptured, 'item.7vIZxvwGzmJgmugo.use').effectType).toBe('heal');
+  });
+
+  it('mundane items with no damage/heal activity stay utility (Torch)', () => {
+    const torch = martialCaptured.items?.find((i) => i.name === 'Torch');
+    if (!torch) throw new Error('Torch not found');
+    expect(action(martialCaptured, `item.${torch._id}.use`).effectType).toBe('utility');
+  });
+
+  it('a lone save activity with no sibling utility roll still classifies as utility (regression: Bane/Command/Sanctuary unaffected)', () => {
+    const prepared: FoundryActorDoc = {
+      ...casterCaptured,
+      items: (casterCaptured.items ?? []).map((i) =>
+        i._id === '9FrgmKwWCYPhlZ5w'
+          ? { ...i, system: { ...(i.system as Record<string, unknown>), prepared: 1 } }
+          : i,
+      ),
+    };
+    expect(action(prepared, 'spell.9FrgmKwWCYPhlZ5w.cast').effectType).toBe('utility'); // Bane
+  });
+});
+
 describe('buildAction — heal formulas & self-heal write-through (M15)', () => {
   it('Second Wind (self-targeted) rolls 1d10 + fighter level and writes HP directly', () => {
     // Randal's fixture HP is 35/44 (system.attributes.hp — verified directly
