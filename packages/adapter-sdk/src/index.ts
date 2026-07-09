@@ -212,6 +212,11 @@ export interface ActionDescriptor {
   prepared?: boolean;
   /** attune only: current state (the intent carries the desired state). */
   attuned?: boolean;
+  /** cast/use only: what this spell/feature mechanically does, for grouping
+   *  and roll-result wording on the Actions tab (M15). System-agnostic:
+   *  'damage' (deals damage, whether via an attack roll or a save), 'heal'
+   *  (restores HP), 'utility' (neither — buffs, debuffs, information). */
+  effectType?: 'damage' | 'heal' | 'utility';
 }
 
 export type ActionIntent =
@@ -240,6 +245,11 @@ export type RelayAction =
   /** Generic embedded-item field write (e.g. prepared state); executed via
    *  the same entity-update path as quantity/uses. */
   | { endpoint: 'update-item'; itemId: string; data: Record<string, number | string | boolean> }
+  /** M15: roll a formula, then write the result into the actor (self-heals
+   *  only — see the dnd5e adapter's buildHealAction). `path`/`current`/`max`
+   *  are resolved by the adapter so this stays system-agnostic here: the
+   *  gateway just computes `min(max, current + total)` and writes `path`. */
+  | { endpoint: 'roll-and-heal'; formula: string; flavor: string; path: string; current: number; max: number }
   | { endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration' };
 
 /**
