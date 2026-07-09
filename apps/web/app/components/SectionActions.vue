@@ -1,8 +1,20 @@
 <template>
   <section v-for="group in groups" :key="group.id">
     <h2 class="section-title">{{ group.label }}</h2>
+    <div v-if="group.id === 'spells'" class="filter-chips">
+      <button
+        v-for="chip in SPELL_FILTERS"
+        :key="chip.id"
+        type="button"
+        class="chip"
+        :class="{ active: spellFilter === chip.id }"
+        @click="spellFilter = chip.id"
+      >
+        {{ chip.label }}
+      </button>
+    </div>
     <div class="list card">
-      <div v-for="action in group.actions" :key="action.id" class="row">
+      <div v-for="action in visibleActions(group)" :key="action.id" class="row">
         <span class="ico" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path :d="group.icon" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </span>
@@ -65,6 +77,21 @@ const groups = computed(() =>
 
 function noSlots(action: ActionDescriptor): boolean {
   return action.kind === 'cast' && action.slotLevels !== undefined && action.slotLevels.length === 0
+}
+
+/** Filter chips on the Spells list only (M15) — single-select, default All. */
+const SPELL_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'damage', label: '⚔️ Atk' },
+  { id: 'heal', label: '⚕️ Heal' },
+  { id: 'utility', label: '⚙️ Util' },
+] as const
+
+const spellFilter = ref<(typeof SPELL_FILTERS)[number]['id']>('all')
+
+function visibleActions(group: (typeof groups.value)[number]): ActionDescriptor[] {
+  if (group.id !== 'spells' || spellFilter.value === 'all') return group.actions
+  return group.actions.filter((a) => a.effectType === spellFilter.value)
 }
 
 /** 'damage' isn't its own group (see combatActions in [id].vue) — it rides
@@ -157,6 +184,30 @@ function damageOf(action: ActionDescriptor): ActionDescriptor | undefined {
   background: var(--panel-2);
   color: var(--ink-dim);
   box-shadow: none;
+}
+
+.filter-chips {
+  display: flex;
+  gap: 8px;
+  padding: 0 2px 10px;
+  overflow-x: auto;
+}
+
+.chip {
+  flex: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink-dim);
+}
+
+.chip.active {
+  border-color: var(--gold-deep);
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  color: var(--accent-ink);
 }
 
 .act-btn:active:not(:disabled) {
