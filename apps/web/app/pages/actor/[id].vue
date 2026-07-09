@@ -347,7 +347,10 @@ const sectionsByTab = computed<Record<TabId, SheetSection[]>>(() => {
 
 const combatActions = computed(() =>
   (sheet.value?.actions ?? []).filter(
-    (a) => a.kind === 'attack' || a.kind === 'cast' || a.kind === 'use',
+    // 'damage' isn't a group of its own (SectionActions renders it as a
+    // second button on the matching attack row) but must be present here
+    // so that row can find its companion descriptor.
+    (a) => a.kind === 'attack' || a.kind === 'cast' || a.kind === 'use' || a.kind === 'damage',
   ),
 )
 
@@ -552,6 +555,9 @@ function onAction(actionId: string): void {
       break
     case 'attack':
       void submitAction({ kind: 'attack', actionId }, action.label)
+      break
+    case 'damage':
+      void submitAction({ kind: 'damage', actionId }, `${action.label} — Damage`)
       break
     case 'use':
       void submitAction({ kind: 'use', actionId }, action.label)

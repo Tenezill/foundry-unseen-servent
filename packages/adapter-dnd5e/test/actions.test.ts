@@ -90,6 +90,15 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
     ]);
     expect(attacks.find((a) => a.id === 'item.gta26ORvqC323k3r.attack')?.label).toBe('Longsword');
 
+    // Every attack gets a companion damage roll (M14: no native relay
+    // damage-roll action exists, so the adapter computes the formula).
+    const damages = all.filter((a) => a.kind === 'damage');
+    expect(damages.map((a) => a.id).sort()).toEqual([
+      'item.DHfjuHRMDDsyjBti.damage',
+      'item.gta26ORvqC323k3r.damage',
+      'item.rEwBQ75m41HeBYOs.damage',
+    ]);
+
     const equips = all.filter((a) => a.kind === 'equip');
     expect(equips.map((a) => a.id).sort()).toEqual([
       'item.DHfjuHRMDDsyjBti.equip',
@@ -124,18 +133,23 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
   it('non-caster has no cast actions; total count is pinned', () => {
     expect(all.filter((a) => a.kind === 'cast')).toHaveLength(0);
     // 18 skills + 12 ability checks/saves + 1 initiative (M10) + 3 attacks
-    // + 5 equips + 1 feature use + 6 item uses (Waterskin, Torch, Rations,
-    // Piton, Rope, Horn)
+    // + 3 weapon damage rolls (M14) + 5 equips + 1 feature use + 6 item uses
+    // (Waterskin, Torch, Rations, Piton, Rope, Horn)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(48);
+    expect(all).toHaveLength(51);
   });
 });
 
 describe('actions() — caster (Akra, Cleric 5)', () => {
   const all = actions(casterCaptured);
 
-  it('exposes a cast action per spell and the pinned total count', () => {
-    expect(all.filter((a) => a.kind === 'cast')).toHaveLength(18);
+  it('exposes a cast action per castable-now spell and the pinned total count', () => {
+    // Actions tab shows only what's castable right now: 3 cantrips (Thaumaturgy,
+    // Guidance, Sacred Flame) + 3 prepared (Guiding Bolt, Detect Magic, Cure
+    // Wounds) + 2 always-prepared (Bless, Healing Word) = 8. The other 10
+    // leveled spells are unprepared and still get a Prepare toggle (below)
+    // but no Cast action here — the Spells tab is where you ready them.
+    expect(all.filter((a) => a.kind === 'cast')).toHaveLength(8);
     expect(all.filter((a) => a.kind === 'attack')).toHaveLength(2);
     expect(all.filter((a) => a.kind === 'equip').map((a) => a.id).sort()).toEqual([
       'item.WBL9RaW0MEEVU3fX.equip', // Scale Mail (clothing items get no toggle)
@@ -148,12 +162,12 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     ]);
     expect(all.filter((a) => a.kind === 'use' && a.group === 'items')).toHaveLength(6);
     // 18 skills + 12 ability checks/saves + 1 initiative (M10) + 2 attacks
-    // + 4 equips + 18 casts
+    // + 2 weapon damage rolls (M14) + 4 equips + 8 casts (castable-now spells only)
     // + 13 prepare toggles (18 spells − 3 cantrips − 2 always-prepared)
     // + 1 feature use + 6 item uses (Waterskin, Torch, Common Clothes,
     // Rations, Rope, Vestments)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(77);
+    expect(all).toHaveLength(69);
   });
 
   it('a leveled spell with a base-level slot is directly castable (no slotLevels — the bridge casts at base only)', () => {
@@ -189,18 +203,21 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     expect(() => build(enriched, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' })).toThrow(IntentError);
   });
 
-  it('unprepared spells still get cast actions (deliberate: rituals/table rulings; Foundry owns the rules)', () => {
-    // Bane: prepared 0 in the capture. It must be castable AND buildable.
-    expect(action(casterCaptured, 'spell.9FrgmKwWCYPhlZ5w.cast')).toEqual({
-      id: 'spell.9FrgmKwWCYPhlZ5w.cast',
+  it('unprepared leveled spells get no cast action on the Actions tab, but keep their Prepare toggle', () => {
+    // Bane: prepared 0 in the capture. Foundry would refuse to cast it, so
+    // the Actions tab must not offer it at all.
+    expect(all.find((a) => a.id === 'spell.9FrgmKwWCYPhlZ5w.cast')).toBeUndefined();
+    expect(() =>
+      build(casterCaptured, { kind: 'cast', actionId: 'spell.9FrgmKwWCYPhlZ5w.cast' }),
+    ).toThrow(IntentError);
+    expect(action(casterCaptured, 'spell.9FrgmKwWCYPhlZ5w.prepare')).toEqual({
+      id: 'spell.9FrgmKwWCYPhlZ5w.prepare',
       label: 'Bane',
-      kind: 'cast',
+      kind: 'prepare',
+      prepared: false,
     });
-    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.9FrgmKwWCYPhlZ5w.cast' })).toEqual({
-      endpoint: 'use-spell',
-      itemId: '9FrgmKwWCYPhlZ5w',
-    });
-    // Consistency with the view model: every spell row is tappable.
+    // The Spells tab still lists it — with its own actionId — so the player
+    // can prepare it there.
     const spells = section(casterCaptured, 'spells');
     if (spells.kind !== 'list') throw new Error('spells must be a list section');
     expect(spells.items.every((i) => i.actionId !== undefined)).toBe(true);
@@ -323,6 +340,74 @@ describe('buildAction — attack / cast / use / equip', () => {
       itemId: 'yz7DxhEVWUzdQKm7',
       equipped: true,
     });
+  });
+});
+
+describe('buildAction — weapon damage (M14)', () => {
+  // Randal: str +3, dex +2. Akra: str +3, dex +0.
+  it('melee, non-finesse weapon uses STR (Longsword: 1d8 + str)', () => {
+    expect(formulaOf(martialCaptured, { kind: 'damage', actionId: 'item.gta26ORvqC323k3r.damage' })).toBe('1d8 + 3');
+  });
+
+  it('ranged weapon uses DEX (Longbow: 1d8 + dex)', () => {
+    expect(formulaOf(martialCaptured, { kind: 'damage', actionId: 'item.DHfjuHRMDDsyjBti.damage' })).toBe('1d8 + 2');
+  });
+
+  it('thrown-but-not-finesse weapon still keeps its melee (STR) ability (Handaxe: 1d6 + str)', () => {
+    expect(formulaOf(martialCaptured, { kind: 'damage', actionId: 'item.rEwBQ75m41HeBYOs.damage' })).toBe('1d6 + 3');
+  });
+
+  it('a zero ability modifier is omitted, not rendered as "+ 0" (Akra dex +0 on her ranged weapon)', () => {
+    expect(formulaOf(casterCaptured, { kind: 'damage', actionId: 'item.hutWJTfurJjNbSpG.damage' })).toBe('1d8');
+  });
+
+  it('finesse weapon picks the better of STR/DEX', () => {
+    // Synthetic: Randal's Longsword with the finesse property added, and DEX
+    // pushed above STR to confirm the "better of the two" pick, not a fixed one.
+    const system = martialCaptured.system as Record<string, unknown>;
+    const abilities = system.abilities as Record<string, unknown>;
+    const dex = abilities.dex as Record<string, unknown>;
+    const finesseWielder: FoundryActorDoc = {
+      ...martialCaptured,
+      system: { ...system, abilities: { ...abilities, dex: { ...dex, value: 20 } } },
+      items: (martialCaptured.items ?? []).map((i) =>
+        i._id === 'gta26ORvqC323k3r'
+          ? { ...i, system: { ...(i.system as Record<string, unknown>), properties: ['ver', 'fin'] } }
+          : i,
+      ),
+    };
+    expect(formulaOf(finesseWielder, { kind: 'damage', actionId: 'item.gta26ORvqC323k3r.damage' })).toBe('1d8 + 5');
+  });
+
+  it('an explicit activity ability override wins over the finesse/ranged/melee default', () => {
+    const longsword = (martialCaptured.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r');
+    if (!longsword) throw new Error('fixture missing Longsword');
+    const lsSystem = longsword.system as Record<string, unknown>;
+    const activities = lsSystem.activities as Record<string, unknown>;
+    const activity = activities.dnd5eactivity000 as Record<string, unknown>;
+    const attack = activity.attack as Record<string, unknown>;
+    const overridden: FoundryActorDoc = {
+      ...martialCaptured,
+      items: (martialCaptured.items ?? []).map((i) =>
+        i._id === 'gta26ORvqC323k3r'
+          ? {
+              ...i,
+              system: {
+                ...lsSystem,
+                activities: { ...activities, dnd5eactivity000: { ...activity, attack: { ...attack, ability: 'dex' } } },
+              },
+            }
+          : i,
+      ),
+    };
+    expect(formulaOf(overridden, { kind: 'damage', actionId: 'item.gta26ORvqC323k3r.damage' })).toBe('1d8 + 2');
+  });
+
+  it('unknown damage action id -> UNKNOWN_RESOURCE', () => {
+    expectIntentError(
+      () => build(martialCaptured, { kind: 'damage', actionId: 'item.NoSuchItem00001.damage' }),
+      'UNKNOWN_RESOURCE',
+    );
   });
 });
 
@@ -549,7 +634,7 @@ describe('view model wiring', () => {
 
   it('the sheet embeds the full action list', () => {
     expect(dnd5eAdapter.toViewModel(martialCaptured).actions).toEqual(actions(martialCaptured));
-    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(77);
+    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(69);
   });
 });
 

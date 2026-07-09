@@ -178,6 +178,10 @@ export type SheetActionKind =
   | 'check'
   | 'save'
   | 'attack'
+  /** roll a weapon's damage (companion to 'attack'; no native relay action
+   *  exists for this, so the adapter computes the formula itself — see
+   *  weaponDamageFormula in the dnd5e adapter). */
+  | 'damage'
   | 'cast'
   | 'use'
   | 'equip'
@@ -212,7 +216,7 @@ export interface ActionDescriptor {
 
 export type ActionIntent =
   | { kind: 'check' | 'save'; actionId: string; mode?: 'advantage' | 'disadvantage' }
-  | { kind: 'attack' | 'use'; actionId: string }
+  | { kind: 'attack' | 'use' | 'damage'; actionId: string }
   | { kind: 'cast'; actionId: string; slotLevel?: number }
   | { kind: 'equip'; actionId: string; equipped: boolean }
   | { kind: 'prepare'; actionId: string; prepared: boolean }

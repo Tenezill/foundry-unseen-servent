@@ -379,6 +379,8 @@ export const fakeAdapter: SystemAdapter = {
         return { endpoint: 'roll', formula: '1d20 + 6', flavor: desc.label };
       case 'attack':
         return { endpoint: 'use-item', itemId: 'i1' };
+      case 'damage':
+        return { endpoint: 'roll', formula: '1d8 + 3', flavor: desc.label };
       case 'use':
         return { endpoint: 'use-feature', itemId: 'f1' };
       case 'cast':

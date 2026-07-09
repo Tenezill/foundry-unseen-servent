@@ -1159,6 +1159,54 @@ function canCastAtBase(actor: FoundryActorDoc, spellLevel: number): boolean {
   return pactValue > 0 && pactLevel >= spellLevel;
 }
 
+/**
+ * The ability modifier dnd5e would add to this weapon's attack/damage roll.
+ * An explicit activity `attack.ability` override wins; otherwise a finesse
+ * weapon picks the better of STR/DEX, a ranged weapon uses DEX, and anything
+ * else — including a thrown-but-not-finesse weapon, which by RAW keeps its
+ * melee ability — uses STR.
+ */
+function weaponAbilityMod(actor: FoundryActorDoc, item: FoundryItemDoc): number {
+  const activities = rec(getPath(item.system, 'activities'));
+  const firstActivity = rec(Object.values(activities)[0]);
+  const override = strAt(firstActivity, 'attack.ability');
+  if (override !== undefined && override !== '') return abilityMod(actor.system, override);
+  const rawProps = getPath(item.system, 'properties');
+  const props = Array.isArray(rawProps) ? rawProps : [];
+  if (props.includes('fin')) {
+    return Math.max(abilityMod(actor.system, 'str'), abilityMod(actor.system, 'dex'));
+  }
+  const attackType = strAt(firstActivity, 'attack.type.value');
+  return abilityMod(actor.system, attackType === 'ranged' ? 'dex' : 'str');
+}
+
+/**
+ * Weapon damage formula: base dice + the weapon's own static bonus (e.g. a
+ * +1 weapon's `damage.base.bonus`) + the resolved ability modifier —
+ * dnd5e's default calc for a plain weapon hit. Undefined when the item
+ * carries no base dice (e.g. an improvised/unconfigured weapon).
+ *
+ * Deliberately NOT modelled (no relay action exists to cross-check against
+ * Foundry's own roll — see docs/HOSTING.md troubleshooting notes on the
+ * relay module's lack of a damage-roll endpoint): extra activity damage
+ * parts, weapon mastery bonus dice, the versatile two-handed die, critical
+ * doubling, and active effects. This is a best-effort client-side estimate,
+ * not a substitute for Foundry's own roll.
+ */
+function weaponDamageFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | undefined {
+  const base = rec(getPath(item.system, 'damage.base'));
+  const number = typeof base.number === 'number' && Number.isFinite(base.number) ? base.number : undefined;
+  const denomination =
+    typeof base.denomination === 'number' && Number.isFinite(base.denomination) ? base.denomination : undefined;
+  if (number === undefined || denomination === undefined || number <= 0 || denomination <= 0) return undefined;
+  const dice = `${number}d${denomination}`;
+  const rawBonus = typeof base.bonus === 'string' ? Number(base.bonus) : 0;
+  const staticBonus = Number.isFinite(rawBonus) ? rawBonus : 0;
+  const bonus = staticBonus + weaponAbilityMod(actor, item);
+  if (bonus === 0) return dice;
+  return `${dice} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}`;
+}
+
 function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
   const out: ActionDescriptor[] = [];
   for (const s of SKILLS) {
@@ -1172,6 +1220,9 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
   for (const item of actor.items ?? []) {
     if (item.type === 'weapon') {
       out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack' });
+      if (weaponDamageFormula(actor, item) !== undefined) {
+        out.push({ id: `item.${item._id}.damage`, label: item.name, kind: 'damage' });
+      }
     }
     if (isUsableInventoryItem(item)) {
       // Offered even at 0 uses/quantity — Foundry owns the rules and refuses
@@ -1195,31 +1246,35 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       });
     }
     if (item.type === 'spell') {
-      // Deliberately offer EVERY spell on the sheet, prepared or not
-      // (mirrors spellListItem, which always sets actionId): dnd5e casts
-      // unprepared spells legitimately via rituals, always-prepared domain
-      // spells (`prepared: 2`), and table rulings. Foundry's use-spell
-      // workflow owns preparation/slot rules and is free to refuse; the
-      // sheet surfaces the prepared state as tags so the player can judge.
       const level = numAt(item.system, 'level') ?? 0;
-      // The bridge casts at base level only (no upcast), so a spell is either
-      // castable now (single Cast) or not (disabled). We signal this with
-      // slotLevels: absent = castable directly (cantrip or a base slot is
-      // free); [] = no slot, render disabled. No per-level picker — the
-      // module cannot honour a chosen higher level.
-      out.push({
-        id: `spell.${item._id}.cast`,
-        label: item.name,
-        kind: 'cast',
-        ...(level > 0 && !canCastAtBase(actor, level) ? { slotLevels: [] } : {}),
-      });
+      const rawPrepared = getPath(item.system, 'prepared');
+      const alwaysPrepared = rawPrepared === 2;
+      const isPrepared = alwaysPrepared || rawPrepared === 1 || rawPrepared === true;
+      // The Actions tab only offers spells that are actually ready to cast
+      // right now: cantrips (no preparation concept), always-prepared spells
+      // (domain/ritual grants), and explicitly prepared leveled spells. An
+      // unprepared leveled spell still appears on the Spells tab — with its
+      // own Prepare toggle below — so the player can ready it; cluttering the
+      // Actions tab with spells that Foundry would just refuse was confusing.
+      if (level === 0 || isPrepared) {
+        // The bridge casts at base level only (no upcast), so a spell is either
+        // castable now (single Cast) or not (disabled). We signal this with
+        // slotLevels: absent = castable directly (cantrip or a base slot is
+        // free); [] = no slot, render disabled. No per-level picker — the
+        // module cannot honour a chosen higher level.
+        out.push({
+          id: `spell.${item._id}.cast`,
+          label: item.name,
+          kind: 'cast',
+          ...(level > 0 && !canCastAtBase(actor, level) ? { slotLevels: [] } : {}),
+        });
+      }
       if (isPreparableSpell(item)) {
-        const rawPrepared = getPath(item.system, 'prepared');
         out.push({
           id: `spell.${item._id}.prepare`,
           label: item.name,
           kind: 'prepare',
-          prepared: rawPrepared === 1 || rawPrepared === true,
+          prepared: isPrepared,
         });
       }
     }
@@ -1292,6 +1347,15 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
     }
     case 'attack':
       return { endpoint: 'use-item', itemId: intent.actionId.slice('item.'.length, -'.attack'.length) };
+    case 'damage': {
+      const itemId = intent.actionId.slice('item.'.length, -'.damage'.length);
+      const item = (actor.items ?? []).find((i) => i._id === itemId);
+      const formula = item ? weaponDamageFormula(actor, item) : undefined;
+      if (!item || formula === undefined) {
+        throw new IntentError(`no damage formula for "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
+      }
+      return { endpoint: 'roll', formula, flavor: `${item.name} — Damage` };
+    }
     case 'use': {
       // Items and features share the kind; the id prefix picks the endpoint.
       if (intent.actionId.startsWith('item.')) {

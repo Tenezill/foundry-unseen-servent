@@ -184,6 +184,7 @@ function parseActionIntent(
       return body.mode === undefined ? { kind, actionId } : { kind, actionId, mode: body.mode };
     case 'attack':
     case 'use':
+    case 'damage':
       return { kind, actionId };
     case 'cast':
       if (

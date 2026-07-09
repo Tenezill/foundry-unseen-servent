@@ -19,6 +19,16 @@
         >
           {{ group.verb }}
         </button>
+        <button
+          v-if="group.id === 'attacks' && damageOf(action)"
+          class="act-btn secondary"
+          type="button"
+          :class="{ pending: actionBusy === damageOf(action)?.id }"
+          :disabled="readonly || actionBusy !== null"
+          @click="emit('action', damageOf(action)!.id)"
+        >
+          Dmg
+        </button>
       </div>
     </div>
   </section>
@@ -55,6 +65,18 @@ const groups = computed(() =>
 
 function noSlots(action: ActionDescriptor): boolean {
   return action.kind === 'cast' && action.slotLevels !== undefined && action.slotLevels.length === 0
+}
+
+/** 'damage' isn't its own group (see combatActions in [id].vue) — it rides
+ *  along in `actions` so each attack row can find its companion roll. */
+const damageById = computed(() => {
+  const m = new Map<string, ActionDescriptor>()
+  for (const a of props.actions) if (a.kind === 'damage') m.set(a.id, a)
+  return m
+})
+
+function damageOf(action: ActionDescriptor): ActionDescriptor | undefined {
+  return damageById.value.get(action.id.replace(/\.attack$/, '.damage'))
 }
 </script>
 
@@ -127,6 +149,14 @@ function noSlots(action: ActionDescriptor): boolean {
   background: linear-gradient(180deg, var(--gold-bright), var(--gold));
   color: var(--accent-ink);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--gold) 30%, transparent);
+}
+
+.act-btn.secondary {
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink-dim);
+  box-shadow: none;
 }
 
 .act-btn:active:not(:disabled) {
