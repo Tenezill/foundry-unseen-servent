@@ -9,6 +9,7 @@ interface EventStream {
   off(event: 'data', listener: (chunk: unknown) => void): unknown;
   destroy(): void;
 }
+import { IntentError, type SystemAdapter } from '@companion/adapter-sdk';
 import { buildApp } from '../src/app.js';
 import { sha256Hex, type Player } from '../src/players.js';
 import { createRegistry } from '../src/registry.js';
@@ -476,6 +477,93 @@ describe('actions', () => {
       expect(res.body).not.toContain(FAKE_API_KEY);
       expect(res.body).not.toContain(FAKE_RELAY_URL);
     }
+  });
+
+  it('roll-and-heal -> rolls the formula, then writes clamped HP into the actor', async () => {
+    await app?.close();
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 20, 30));
+    relay.rollResult = { formula: '1d10 + 5', total: 8, isCritical: false, isFumble: false };
+    const healAdapter: SystemAdapter = {
+      systemId: 'fake',
+      toViewModel: (actor) => ({
+        actorId: actor._id,
+        systemId: 'fake',
+        name: actor.name,
+        headline: [],
+        sections: [],
+        resources: [],
+      }),
+      resources: () => [],
+      buildUpdate: () => {
+        throw new IntentError('not used in this test', 'UNKNOWN_RESOURCE');
+      },
+      actions: () => [{ id: 'feature.sw.use', label: 'Second Wind', kind: 'use', effectType: 'heal' }],
+      buildAction: () => ({
+        endpoint: 'roll-and-heal',
+        formula: '1d10 + 5',
+        flavor: 'Second Wind — Healing',
+        path: 'system.attributes.hp.value',
+        current: 20,
+        max: 30,
+      }),
+    };
+    app = buildApp({
+      relay,
+      players: makePlayers(),
+      registry: createRegistry([healAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+    });
+    const res = await post(app, 'a1', { kind: 'use', actionId: 'feature.sw.use' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.rollCalls).toEqual([{ actorUuid: 'Actor.a1', formula: '1d10 + 5', flavor: 'Second Wind — Healing' }]);
+    expect(relay.updates).toEqual([{ uuid: 'Actor.a1', data: { 'system.attributes.hp.value': 28 } }]);
+    const body = res.json();
+    expect(body.result).toEqual({ total: 8, formula: '1d10 + 5', isCritical: false, isFumble: false });
+  });
+
+  it('roll-and-heal clamps the written HP to max, never overhealing', async () => {
+    await app?.close();
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 28, 30));
+    relay.rollResult = { formula: '1d10 + 5', total: 8, isCritical: false, isFumble: false };
+    const healAdapter: SystemAdapter = {
+      systemId: 'fake',
+      toViewModel: (actor) => ({
+        actorId: actor._id,
+        systemId: 'fake',
+        name: actor.name,
+        headline: [],
+        sections: [],
+        resources: [],
+      }),
+      resources: () => [],
+      buildUpdate: () => {
+        throw new IntentError('not used in this test', 'UNKNOWN_RESOURCE');
+      },
+      actions: () => [{ id: 'feature.sw.use', label: 'Second Wind', kind: 'use', effectType: 'heal' }],
+      buildAction: () => ({
+        endpoint: 'roll-and-heal',
+        formula: '1d10 + 5',
+        flavor: 'Second Wind — Healing',
+        path: 'system.attributes.hp.value',
+        current: 28,
+        max: 30,
+      }),
+    };
+    app = buildApp({
+      relay,
+      players: makePlayers(),
+      registry: createRegistry([healAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+    });
+    const res = await post(app, 'a1', { kind: 'use', actionId: 'feature.sw.use' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.updates).toEqual([{ uuid: 'Actor.a1', data: { 'system.attributes.hp.value': 30 } }]);
   });
 });
 

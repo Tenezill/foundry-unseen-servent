@@ -653,6 +653,21 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           // path as quantity/uses; no chat card, no roll.
           await relay.updateEntity(`Actor.${id}.Item.${action.itemId}`, action.data);
           break;
+        case 'roll-and-heal': {
+          // M15: the relay only auto-executes attack-type activities — a
+          // heal-type use/cast just posts an inert card (live-verified
+          // 2026-07-09: Second Wind consumed its use but rolled/applied
+          // nothing). So the adapter computed the formula itself; roll it,
+          // then write the result — clamped to max — directly onto the
+          // actor. `path` is adapter-supplied so this stays system-agnostic.
+          const rolled = extractRoll(await relay.rollFormula(`Actor.${id}`, action.formula, action.flavor));
+          result = rolled;
+          if (rolled !== null) {
+            const newValue = Math.min(action.max, action.current + rolled.total);
+            await relay.updateEntity(`Actor.${id}`, { [action.path]: newValue });
+          }
+          break;
+        }
         case 'short-rest':
         case 'long-rest':
         case 'death-save':
