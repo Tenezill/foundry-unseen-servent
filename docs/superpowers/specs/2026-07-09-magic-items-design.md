@@ -69,34 +69,59 @@ document is a `feat` or a `consumable`.
 out.push({ id: `item.${item._id}.use`, label: item.name, kind: 'use', group: 'items' });
 ```
 
-It gains `effectType: effectTypeOf(item)`, identical to the call the
-`feature.<id>.use` push already makes. `effectTypeOf`'s existing rule set
-(heal-type activity → `heal`; attack-type → `damage`; save-type with
-non-empty `damage.parts` → `damage`; else → `utility`) needs no changes —
-verified against Bead of Force's real shape (a `save` activity, DC-based,
-with non-empty `damage.parts`, structurally identical to Sacred Flame) and
-Potion of Healing's (a `heal` activity).
+It gains `effectType: effectTypeOf(item)`. **Live-capture correction**
+(2026-07-09, after adding real items to the world): the original rule set
+only inspected the item's *first* activity, which is wrong for Bead of
+Force's real shape — its first activity is `save`-type with **empty**
+`damage.parts` (`[]`); the actual `5d4` damage lives in a *second*,
+separate `utility`-type activity's `roll.formula` field, not inline on the
+save activity. Sacred Flame's single-activity save+damage shape does not
+generalize to this item.
+
+`effectTypeOf` therefore needs to inspect **all** of an item's activities,
+not just the first, via a new `allActivities(item): Rec[]` helper
+(`Object.values(rec(getPath(item.system, 'activities')))`):
+
+1. any activity `type === 'heal'` → `heal`
+2. any activity `type === 'attack'` → `damage`
+3. any activity `type === 'save'` with non-empty `damage.parts` → `damage`
+   (unchanged rule, covers a future item shaped like Sacred Flame)
+4. any activity `type === 'save'` **and a separate** activity
+   `type === 'utility'` with a non-empty `roll.formula` string → `damage`
+   (the Bead of Force shape: DC lives on the save activity, the damage die
+   lives on a sibling utility activity)
+5. everything else → `utility`
+
+Verified this doesn't regress existing classifications: Bane/Command/
+Sanctuary (caster fixture) each have exactly one `save` activity and no
+sibling `utility` activity, so rule 4 doesn't fire for them — they stay
+`utility`. Guiding Bolt (`attack`) and Sacred Flame (`save` + inline
+`damage.parts`) are unaffected — rules 2 and 3 already catch them before
+rule 4 is reached.
 
 ### Generalized damage formula
 
 `weaponDamageFormula` reads a *single* damage entry
 (`activity.damage.base.number/denomination/bonus`) because a weapon's
-attack activity has exactly one. Save/attack-type item activities carry an
-array instead: `activity.damage.parts`, each `{number, denomination,
-bonus, types}`. New `activityDamageFormula(actor, item)`:
+attack activity has exactly one. New `itemDamageFormula(actor, item)`,
+checked in this order (matching the two real shapes now confirmed to
+exist):
 
-- Reads the first activity's `damage.parts`.
-- For each part, resolves `number`/`denomination` into a dice term and
-  `bonus` into a modifier, using the *same* two resolvable roll-data shapes
-  already accepted by `healFormula`/`weaponDamageFormula` (`@mod` → the
-  actor's spellcasting ability modifier; `@classes.<id>.levels` →
-  approximated with total character level; anything else → `+0`, same
-  documented gap).
-- Joins parts with `+` into one formula string (e.g. `4d4` for Bead of
-  Force — a single part, no bonus).
-- Returns `undefined` if there are no damage parts, so the caller can throw
-  the same `IntentError` shape `buildHealAction` already throws for a
-  missing formula.
+1. **Inline parts:** the first activity with non-empty `damage.parts`
+   (each `{number, denomination, bonus, types}`) — resolves each part's
+   `number`/`denomination` into a dice term and `bonus` into a modifier
+   using the same two resolvable roll-data shapes `healFormula`/
+   `weaponDamageFormula` already accept (`@mod`, `@classes.<id>.levels`;
+   anything else → `+0`), joining parts with `+`. Covers a future
+   Sacred-Flame-shaped item.
+2. **Sibling utility roll (Bead of Force's real shape):** if no activity
+   has inline damage parts, look for a `utility`-type activity with a
+   non-empty `roll.formula` string and use it verbatim — Bead of Force's
+   is the literal string `"5d4"`, already a complete dice formula with no
+   roll-data references to resolve.
+3. Returns `undefined` if neither shape is found, so the caller throws the
+   same `IntentError` shape `buildHealAction` already throws for a missing
+   formula.
 
 ### Wiring into `buildAction`
 
@@ -111,17 +136,33 @@ if (intent.actionId.startsWith('item.')) {
   if (item && isAttuneable(item) && !isAttuned(item)) {
     throw new IntentError(`"${item.name}" requires attunement`, 'INVALID');
   }
-  if (item && activityType(item) === 'heal') {
-    return buildHealAction(actor, item, intent.actionId);
+  if (item && effectTypeOf(item) === 'heal') {
+    return buildHealAction(actor, item, intent.actionId, { forceSelf: true });
   }
   if (item && effectTypeOf(item) === 'damage') {
-    const formula = activityDamageFormula(actor, item);
+    const formula = itemDamageFormula(actor, item);
     if (!formula) throw new IntentError(`no damage formula for "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
     return { endpoint: 'roll', formula, flavor: `${item.name} — Damage` };
   }
   return { endpoint: 'use-item', itemId };
 }
 ```
+
+**Live-capture correction:** the original plan reused `activityType(item)
+=== 'heal'` (spell/feature check) and relied on `isSelfTargeted`'s
+`target.affects.type === 'self'` rule inside `buildHealAction` to decide
+self-apply. Potion of Healing's real activity has
+`target.affects.type: "creature"` (count 1), **not** `"self"` — under the
+unmodified spell/feature rule it would be treated as target-chosen
+(roll-and-display only, no HP write), which is wrong for an item: this app
+has no other-creature-targeting flow for items at all, so an item's heal
+is always drunk/used by its own holder. `buildHealAction` gains an
+optional third parameter, `{ forceSelf?: boolean }`, defaulting to
+`false`; when `true` it skips the `isSelfTargeted` check and always
+returns `roll-and-heal`. The `item.` branch above always passes
+`forceSelf: true`; the existing `feature.`/`cast` call sites (Second Wind,
+Cure Wounds, Healing Word) are unchanged — they omit the option and keep
+today's `isSelfTargeted`-driven behavior.
 
 The attunement gate runs before either effect check and before the
 `use-item` fallback, so it applies uniformly to every item action, not just
@@ -167,34 +208,50 @@ consumed only by the item detail view — everything else that reads uses
 
 ## Live data groundwork
 
-Add to the live Foundry world before implementation starts, then
-re-capture `martial-captured.json`/`caster-captured.json` the same way they
-were originally captured:
+**Done (2026-07-09).** Added to the live world via the GM browser session
+and the dnd5e system's own `dnd5e.items` compendium (2014-ruleset pack, matching
+the rest of the fixtures' rules version), then captured via
+`actor.items.get(id).toObject()` in the same session:
 
-- **Bead of Force** on Randal or Akra — validates the save+damage.parts
-  classification and the new `activityDamageFormula` against real data, and
-  the "display-only, never auto-applied" boundary (it has no self-target).
-- **Potion of Healing** on the other character — validates the heal
-  classification, `buildHealAction`'s self-target detection (a potion is
-  drunk by its own holder), and consumable auto-destroy-on-use.
+- **Bead of Force** (`iecfawCz0pIwcPVg`) added to Randal
+  (`zteTG9PZZ6XQpQtK`). Real shape: `rarity: "rare"`, `attunement: ""` (does
+  **not** require attunement), `uses: {max:"1", autoDestroy:true}`, two
+  activities — `save` (DC 15 Dex, `damage.parts: []`) and `utility`
+  (`roll.formula: "5d4"`). This is what drove the classification and
+  formula corrections above.
+- **Potion of Healing** (`7vIZxvwGzmJgmugo`) added to Akra
+  (`pTvtx5dm2AuYqeX2`). Real shape: `rarity: "common"`, `attunement: ""`,
+  `uses: {max:"1", autoDestroy:true}`, one `heal` activity
+  (`healing: {number:2, denomination:4, bonus:"2"}`,
+  `target.affects: {type:"creature", count:"1"}` — confirmed **not**
+  `"self"`, the source of the `forceSelf` correction above).
 
-If the recaptured fixtures happen to already include (or the user adds) an
-attunement-required item or a multi-charge/recharge item, those get
-live-verified too; otherwise the attunement gate and `recovery` field are
-covered by unit tests against synthetic activity/uses data matching the
-already-verified real schema shapes (`system.attunement` enum,
-`uses.recovery[].period`), and flagged in the plan as pending live
-verification whenever such an item exists in the world.
+Both items' `attunement` came back empty, so neither exercises the
+attunement gate with real data — confirmed consistent with the scope
+decision to skip adding a dedicated attunement-required item. The
+attunement gate and the `uses.recovery` display are covered by unit tests
+against synthetic activity/uses data matching the already-verified real
+schema shapes (`system.attunement` enum values, `uses.recovery[].period`),
+flagged in the plan as pending live verification whenever such an item
+exists in the world.
+
+Remaining step: merge these two item documents into
+`martial-captured.json`'s / `caster-captured.json`'s `items` arrays — see
+the implementation plan's first task for the exact objects.
 
 ## Testing
 
-- `adapter-dnd5e`: `activityDamageFormula` unit tests (Bead of Force's real
-  shape, plus a synthetic multi-part case). `buildAction` tests: item
-  heal → `roll-and-heal` (self) or `roll` (target-chosen); item damage →
-  `roll`, display-only; attunement-required + unattuned → `IntentError`;
-  attunement-required + attuned → falls through normally; non-effect item →
-  unchanged `use-item`. `usesInfo`/resource test for the new `recovery`
-  field, present and absent cases.
+- `adapter-dnd5e`: `effectTypeOf` tests for the new sibling-utility-roll
+  rule (Bead of Force's real shape) plus a regression check that
+  Bane/Command/Sanctuary stay `utility`. `itemDamageFormula` unit tests
+  (Bead of Force's real `"5d4"` sibling-roll shape, plus a synthetic
+  inline-`damage.parts` case). `buildAction` tests: item heal → always
+  `roll-and-heal` (Potion of Healing's real shape, confirming `forceSelf`
+  overrides its non-`"self"` `target.affects.type`); item damage → `roll`,
+  display-only (Bead of Force); attunement-required + unattuned →
+  `IntentError`; attunement-required + attuned → falls through normally;
+  non-effect item → unchanged `use-item`. `usesInfo`/resource test for the
+  new `recovery` field, present and absent cases.
 - `apps/gateway`: no new executor logic (reuses `roll`/`roll-and-heal`/
   `use-item` cases verbatim) — existing tests already cover the 422 path
   for `IntentError`, so no new gateway tests required beyond confirming an
