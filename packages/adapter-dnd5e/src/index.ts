@@ -1244,6 +1244,76 @@ function weaponDamageFormula(actor: FoundryActorDoc, item: FoundryItemDoc): stri
   return `${dice} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}`;
 }
 
+/** True only for activities whose target is unconditionally the caster
+ *  (Second Wind). Cure Wounds/Healing Word have no `target.affects.type` at
+ *  all — they're cast at a creature the player chooses in Foundry, which is
+ *  usually NOT the caster — so this must be the sole signal for whether a
+ *  heal auto-applies to the actor's own HP (verified against both fixtures:
+ *  Second Wind's `target.affects.type` is `"self"`; Cure Wounds/Healing
+ *  Word's `target.affects` has no `type` field at all). */
+function isSelfTargeted(item: FoundryItemDoc): boolean {
+  return getPath(firstActivity(item), 'target.affects.type') === 'self';
+}
+
+/**
+ * Heal formula for a heal-type activity: base dice + a resolved bonus.
+ * Mirrors weaponDamageFormula. `bonus` is a Foundry roll-data reference
+ * string; only two shapes appear in dnd5e content and are resolved
+ * explicitly — anything else falls back to +0 (documented gap, not a
+ * roll-data evaluator, same honesty as weaponDamageFormula):
+ *   "@mod"                  -> the actor's spellcasting ability modifier
+ *                              (`actor.system.attributes.spellcasting`).
+ *   "@classes.<id>.levels"  -> approximated with total character level
+ *                              (ignores multiclass split — same caveat
+ *                              already accepted for weapon ability lookups).
+ * Undefined when the activity carries no healing dice.
+ */
+function healFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | undefined {
+  const healing = rec(getPath(firstActivity(item), 'healing'));
+  const number = typeof healing.number === 'number' && Number.isFinite(healing.number) ? healing.number : undefined;
+  const denomination =
+    typeof healing.denomination === 'number' && Number.isFinite(healing.denomination) ? healing.denomination : undefined;
+  if (number === undefined || denomination === undefined || number <= 0 || denomination <= 0) return undefined;
+  const dice = `${number}d${denomination}`;
+  const rawBonus = typeof healing.bonus === 'string' ? healing.bonus.trim() : '';
+  let bonus: number;
+  if (rawBonus === '@mod') {
+    const ability = strAt(actor.system, 'attributes.spellcasting') ?? 'wis';
+    bonus = abilityMod(actor.system, ability);
+  } else if (/^@classes\.[a-z]+\.levels$/.test(rawBonus)) {
+    bonus = characterLevel(actor);
+  } else {
+    const flat = Number(rawBonus);
+    bonus = Number.isFinite(flat) ? flat : 0;
+  }
+  if (bonus === 0) return dice;
+  return `${dice} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}`;
+}
+
+/**
+ * A heal-type use/cast: the relay only auto-executes attack-type activities
+ * (live-verified 2026-07-09 — Second Wind's "Use" consumed its use but
+ * rolled/applied nothing), so the roll is computed client-side, same as
+ * weapon damage. Self-targeted heals (Second Wind) also write the resulting
+ * HP directly, since there's no card-click step to rely on; heals that
+ * target a chosen creature (Cure Wounds, Healing Word) only roll and
+ * display — applying them to whichever creature was healed stays a manual
+ * step in Foundry, exactly like weapon damage today.
+ */
+function buildHealAction(actor: FoundryActorDoc, item: FoundryItemDoc, actionId: string): RelayAction {
+  const formula = healFormula(actor, item);
+  if (formula === undefined) {
+    throw new IntentError(`no heal formula for "${actionId}"`, 'UNKNOWN_RESOURCE');
+  }
+  const flavor = `${item.name} — Healing`;
+  if (!isSelfTargeted(item)) {
+    return { endpoint: 'roll', formula, flavor };
+  }
+  const current = numAt(actor.system, 'attributes.hp.value') ?? 0;
+  const max = numAt(actor.system, 'attributes.hp.max') ?? current;
+  return { endpoint: 'roll-and-heal', formula, flavor, path: 'system.attributes.hp.value', current, max };
+}
+
 function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
   const out: ActionDescriptor[] = [];
   for (const s of SKILLS) {
@@ -1399,7 +1469,12 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       if (intent.actionId.startsWith('item.')) {
         return { endpoint: 'use-item', itemId: intent.actionId.slice('item.'.length, -'.use'.length) };
       }
-      return { endpoint: 'use-feature', itemId: intent.actionId.slice('feature.'.length, -'.use'.length) };
+      const itemId = intent.actionId.slice('feature.'.length, -'.use'.length);
+      const item = (actor.items ?? []).find((i) => i._id === itemId);
+      if (item && activityType(item) === 'heal') {
+        return buildHealAction(actor, item, intent.actionId);
+      }
+      return { endpoint: 'use-feature', itemId };
     }
     case 'cast': {
       const itemId = intent.actionId.slice('spell.'.length, -'.cast'.length);
@@ -1408,6 +1483,10 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       // is intentionally ignored — Foundry consumes the base-level slot.
       if (descriptor.slotLevels !== undefined && descriptor.slotLevels.length === 0) {
         throw new IntentError(`no spell slot available for "${intent.actionId}"`, 'INVALID');
+      }
+      const item = (actor.items ?? []).find((i) => i._id === itemId);
+      if (item && activityType(item) === 'heal') {
+        return buildHealAction(actor, item, intent.actionId);
       }
       return { endpoint: 'use-spell', itemId };
     }

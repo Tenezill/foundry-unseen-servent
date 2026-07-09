@@ -310,8 +310,29 @@ describe('buildAction — attack / cast / use / equip', () => {
     });
   });
 
-  it('use maps to use-feature', () => {
-    expect(build(martialCaptured, { kind: 'use', actionId: 'feature.7r63kurEAM3GdEec.use' })).toEqual({
+  it('use maps to use-feature (non-heal features are unaffected by M15)', () => {
+    // Second Wind is heal-type and now maps to roll-and-heal (see the M15
+    // 'buildAction — heal formulas & self-heal write-through' describe
+    // block below) — clone it with a non-heal activity type to keep covering
+    // the plain use-feature fallback path. Same technique as the other
+    // 'still maps feature use intents to use-feature' fix (M15 Step 6); the
+    // task brief named only that one, but this test shares the identical
+    // premise (Second Wind -> use-feature) and broke for the same reason.
+    const nonHeal: FoundryActorDoc = {
+      ...martialCaptured,
+      items: (martialCaptured.items ?? []).map((i) => {
+        if (i._id !== '7r63kurEAM3GdEec') return i;
+        const system = i.system as Record<string, unknown>;
+        const activities = system.activities as Record<string, unknown>;
+        const activityId = Object.keys(activities)[0] as string;
+        const activity = activities[activityId] as Record<string, unknown>;
+        return {
+          ...i,
+          system: { ...system, activities: { ...activities, [activityId]: { ...activity, type: 'utility' } } },
+        };
+      }),
+    };
+    expect(build(nonHeal, { kind: 'use', actionId: 'feature.7r63kurEAM3GdEec.use' })).toEqual({
       endpoint: 'use-feature',
       itemId: '7r63kurEAM3GdEec',
     });
@@ -454,6 +475,46 @@ describe('effectType classification (M15)', () => {
   it('weapon attack/damage descriptors carry no effectType (out of scope — Attacks stays its own section)', () => {
     expect(action(martialCaptured, 'item.gta26ORvqC323k3r.attack').effectType).toBeUndefined();
     expect(action(martialCaptured, 'item.gta26ORvqC323k3r.damage').effectType).toBeUndefined();
+  });
+});
+
+describe('buildAction — heal formulas & self-heal write-through (M15)', () => {
+  it('Second Wind (self-targeted) rolls 1d10 + fighter level and writes HP directly', () => {
+    // Randal's fixture HP is 35/44 (system.attributes.hp — verified directly
+    // against martial-captured.json; do not assume live-session values,
+    // they drift as the test campaign is played).
+    expect(build(martialCaptured, { kind: 'use', actionId: 'feature.7r63kurEAM3GdEec.use' })).toEqual({
+      endpoint: 'roll-and-heal',
+      formula: '1d10 + 5',
+      flavor: 'Second Wind — Healing',
+      path: 'system.attributes.hp.value',
+      current: 35,
+      max: 44,
+    });
+  });
+
+  it('Cure Wounds (target-chosen, not self) rolls 1d8 + spellcasting mod but does NOT auto-apply', () => {
+    // Akra: WIS 15 (+2), Cleric spellcasting ability is "wis" in the fixture.
+    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.LjT1wf4D38c9Ieuo.cast' })).toEqual({
+      endpoint: 'roll',
+      formula: '1d8 + 2',
+      flavor: 'Cure Wounds — Healing',
+    });
+  });
+
+  it('Healing Word (target-chosen, not self) rolls 1d4 + spellcasting mod', () => {
+    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.HpjaVMLEU14tJG7y.cast' })).toEqual({
+      endpoint: 'roll',
+      formula: '1d4 + 2',
+      flavor: 'Healing Word — Healing',
+    });
+  });
+
+  it('non-heal use/cast actions are unaffected (Guiding Bolt still maps to use-spell)', () => {
+    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'pZMrJb3AXiRYO5E8',
+    });
   });
 });
 
@@ -725,8 +786,26 @@ describe('item use actions (inventory/actions split)', () => {
     });
   });
 
-  it('still maps feature use intents to use-feature', () => {
-    expect(build(martialCaptured, { kind: 'use', actionId: 'feature.7r63kurEAM3GdEec.use' })).toEqual({
+  it('still maps feature use intents to use-feature (non-heal features are unaffected by M15)', () => {
+    // Second Wind is heal-type and now maps to roll-and-heal (see the M15
+    // 'buildAction — heal formulas & self-heal write-through' describe
+    // block) — clone it with a non-heal activity type to keep covering the
+    // plain use-feature fallback path.
+    const nonHeal: FoundryActorDoc = {
+      ...martialCaptured,
+      items: (martialCaptured.items ?? []).map((i) => {
+        if (i._id !== '7r63kurEAM3GdEec') return i;
+        const system = i.system as Record<string, unknown>;
+        const activities = system.activities as Record<string, unknown>;
+        const activityId = Object.keys(activities)[0] as string;
+        const activity = activities[activityId] as Record<string, unknown>;
+        return {
+          ...i,
+          system: { ...system, activities: { ...activities, [activityId]: { ...activity, type: 'utility' } } },
+        };
+      }),
+    };
+    expect(build(nonHeal, { kind: 'use', actionId: 'feature.7r63kurEAM3GdEec.use' })).toEqual({
       endpoint: 'use-feature',
       itemId: '7r63kurEAM3GdEec',
     });
