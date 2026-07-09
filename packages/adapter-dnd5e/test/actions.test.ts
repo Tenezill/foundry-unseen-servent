@@ -518,6 +518,12 @@ describe('buildAction — heal formulas & self-heal write-through (M15)', () => 
       path: 'system.attributes.hp.value',
       current: 35,
       max: 44,
+      // M16 fix: roll-and-heal never called Foundry's real activation, so it
+      // never consumed Second Wind's own use either (live-verified
+      // 2026-07-09) — consumeUse carries that write alongside the roll.
+      // Fixture uses: {max:"1", spent:0}, no autoDestroy (a class feature
+      // recharges via rest, it isn't destroyed).
+      consumeUse: { itemId: '7r63kurEAM3GdEec', newSpent: 1, destroy: false },
     });
   });
 
@@ -564,7 +570,35 @@ describe('buildAction — item on-use effects (M16)', () => {
       path: 'system.attributes.hp.value',
       current: 38,
       max: 38,
+      // M16 fix: fixture uses {max:"1", autoDestroy:true, spent:0} -> after
+      // one use, newSpent (1) >= max (1) and autoDestroy is true, so this
+      // single-use potion is destroyed rather than just decremented.
+      consumeUse: { itemId: '7vIZxvwGzmJgmugo', newSpent: 1, destroy: true },
     });
+  });
+
+  it('a self-heal with no uses cap at all omits consumeUse entirely (no spurious item write)', () => {
+    // Synthetic: Second Wind's activity/target shape, but with uses removed
+    // entirely (max ""), same technique as other synthetic-clone tests in
+    // this file.
+    const noUses: FoundryActorDoc = {
+      ...martialCaptured,
+      items: (martialCaptured.items ?? []).map((i) =>
+        i._id === '7r63kurEAM3GdEec'
+          ? { ...i, system: { ...(i.system as Record<string, unknown>), uses: { max: '', recovery: [], spent: 0 } } }
+          : i,
+      ),
+    };
+    const result = build(noUses, { kind: 'use', actionId: 'feature.7r63kurEAM3GdEec.use' });
+    expect(result).toEqual({
+      endpoint: 'roll-and-heal',
+      formula: '1d10 + 5',
+      flavor: 'Second Wind — Healing',
+      path: 'system.attributes.hp.value',
+      current: 35,
+      max: 44,
+    });
+    expect('consumeUse' in result).toBe(false);
   });
 
   it('a mundane item with no damage/heal effect is unaffected (Torch still maps to use-item)', () => {

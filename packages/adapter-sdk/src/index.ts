@@ -248,8 +248,25 @@ export type RelayAction =
   /** M15: roll a formula, then write the result into the actor (self-heals
    *  only — see the dnd5e adapter's buildHealAction). `path`/`current`/`max`
    *  are resolved by the adapter so this stays system-agnostic here: the
-   *  gateway just computes `min(max, current + total)` and writes `path`. */
-  | { endpoint: 'roll-and-heal'; formula: string; flavor: string; path: string; current: number; max: number }
+   *  gateway just computes `min(max, current + total)` and writes `path`.
+   *  `consumeUse` (M16): this endpoint bypasses Foundry's own activation
+   *  flow entirely (it never calls `useAbility`), so it never consumed the
+   *  source item/feature's limited use either — live-verified 2026-07-09,
+   *  Second Wind's `uses.spent` and a single-use Potion of Healing's
+   *  `autoDestroy` both silently no-opped. When present, the gateway also
+   *  writes the new `uses.spent` to the source item, or deletes it entirely
+   *  when `destroy` is true (a single-use, `autoDestroy` consumable at its
+   *  use cap) — same shape decision the adapter already makes for uses
+   *  tracking elsewhere, just carried alongside this roll. */
+  | {
+      endpoint: 'roll-and-heal';
+      formula: string;
+      flavor: string;
+      path: string;
+      current: number;
+      max: number;
+      consumeUse?: { itemId: string; newSpent: number; destroy: boolean };
+    }
   | { endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration' };
 
 /**

@@ -1411,7 +1411,24 @@ function buildHealAction(
   }
   const current = numAt(actor.system, 'attributes.hp.value') ?? 0;
   const max = numAt(actor.system, 'attributes.hp.max') ?? current;
-  return { endpoint: 'roll-and-heal', formula, flavor, path: 'system.attributes.hp.value', current, max };
+  const uses = usesInfo(item);
+  const consumeUse =
+    uses !== undefined
+      ? {
+          itemId: item._id,
+          newSpent: uses.spent + 1,
+          destroy: getPath(item.system, 'uses.autoDestroy') === true && uses.spent + 1 >= uses.max,
+        }
+      : undefined;
+  return {
+    endpoint: 'roll-and-heal',
+    formula,
+    flavor,
+    path: 'system.attributes.hp.value',
+    current,
+    max,
+    ...(consumeUse ? { consumeUse } : {}),
+  };
 }
 
 function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {

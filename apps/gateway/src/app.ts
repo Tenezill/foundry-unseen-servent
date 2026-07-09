@@ -669,6 +669,15 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
             // must not let this endpoint reduce HP.
             const newValue = Math.min(action.max, action.current + Math.max(0, rolled.total));
             await relay.updateEntity(`Actor.${id}`, { [action.path]: newValue });
+            if (action.consumeUse) {
+              if (action.consumeUse.destroy) {
+                await relay.deleteEntity(`Actor.${id}.Item.${action.consumeUse.itemId}`);
+              } else {
+                await relay.updateEntity(`Actor.${id}.Item.${action.consumeUse.itemId}`, {
+                  'system.uses.spent': action.consumeUse.newSpent,
+                });
+              }
+            }
           }
           break;
         }
