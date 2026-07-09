@@ -263,3 +263,36 @@ the implementation plan's first task for the exact objects.
   attunement-required item (real or, if none exists in the recaptured
   fixtures, a temporary Foundry-side test item) blocks its Use action with
   a visible message until attuned, then works normally once attuned.
+
+## Addendum — branch-review corrections (2026-07-10)
+
+A whole-branch adversarial review of the implemented feature found five
+defects in the shipped design; the implementation now diverges from the
+sections above as follows:
+
+1. **Consumption is Foundry's job, via a new `use-and-roll` relay action**
+   (supersedes "Contract changes: None" and "no new write path for
+   charges"). Client-computed rolls (`roll` / the M15 `roll-and-heal`)
+   bypassed Foundry's activation entirely, so nothing was ever consumed:
+   heal-classified casts stopped consuming spell slots, damage items (Bead
+   of Force) never consumed or destroyed themselves, and a first-pass
+   hand-rolled `consumeUse` write deleted whole item stacks and wrote
+   `uses.spent` past max. `use-and-roll` activates the item through
+   Foundry's own `use-item`/`use-spell`/`use-feature` flow FIRST (slots,
+   uses, quantity, auto-destroy, refusal when empty — all Foundry's rules),
+   then fires the adapter-computed display roll, then applies the optional
+   self-heal HP write. `roll-and-heal` is removed from the contract.
+2. **The attunement gate blocks only `attunement === "required"`** (plus
+   the legacy numeric 1) — the section above gated on `isAttuneable`, which
+   also covers `"optional"`, wrongly blocking items that work unattuned.
+3. **An exhausted use/cast is rejected with a 422** before the activation:
+   Foundry refuses too, but its refusal is a chat message, not a relay
+   error, so the display roll would otherwise still fire.
+4. **`healFormula`/`isSelfTargeted` read the heal-type activity found by
+   scanning all activities** (`healActivity`), not blindly the first —
+   matching how `effectTypeOf` classifies.
+5. **Item damage uses show `N dmg` wording** — the M15 rule "damage wording
+   only from the weapon-damage intent kind" was extended: an item `use`
+   whose descriptor is damage-classified returns a genuine damage roll (not
+   a to-hit roll), so its `effectType` is trustworthy for wording; only
+   spell casts must keep suppressing it.

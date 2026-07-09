@@ -871,6 +871,14 @@ function isAttuned(item: FoundryItemDoc): boolean {
   return getPath(item.system, 'attuned') === true || getPath(item.system, 'attunement') === 2;
 }
 
+/** Attunement is mandatory for this item to function ('required', or the
+ * pre-5.x numeric 1). Narrower than isAttuneable: 'optional'-attunement
+ * items get the toggle but still work unattuned. */
+function requiresAttunement(item: FoundryItemDoc): boolean {
+  const att = getPath(item.system, 'attunement');
+  return att === 'required' || att === 1;
+}
+
 /** A physical, non-weapon item is usable when its data carries activities
  * (dnd5e 5.x usage rules: potions, torches, rations…). Weapons keep their
  * attack action instead. */
@@ -1290,15 +1298,25 @@ function weaponDamageFormula(actor: FoundryActorDoc, item: FoundryItemDoc): stri
   return `${dice} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}`;
 }
 
+/** The item's heal-type activity, or an empty record if it has none.
+ *  effectTypeOf classifies by scanning ALL activities, so the formula and
+ *  self-target reads must find the same activity it did — reading only the
+ *  first would advertise a heal action and then fail to build it whenever
+ *  the heal activity isn't first (branch review 2026-07-09). */
+function healActivity(item: FoundryItemDoc): Rec {
+  return allActivities(item).find((a) => a.type === 'heal') ?? {};
+}
+
 /** True only for activities whose target is unconditionally the caster
- *  (Second Wind). Cure Wounds/Healing Word have no `target.affects.type` at
- *  all — they're cast at a creature the player chooses in Foundry, which is
- *  usually NOT the caster — so this must be the sole signal for whether a
- *  heal auto-applies to the actor's own HP (verified against both fixtures:
- *  Second Wind's `target.affects.type` is `"self"`; Cure Wounds/Healing
- *  Word's `target.affects` has no `type` field at all). */
+ *  (Second Wind, or a potion its holder drinks). Cure Wounds/Healing Word
+ *  have no `target.affects.type` at all — they're cast at a creature the
+ *  player chooses in Foundry, which is usually NOT the caster — so this
+ *  must be the sole signal for whether a heal auto-applies to the actor's
+ *  own HP (verified against both fixtures: Second Wind's
+ *  `target.affects.type` is `"self"`; Cure Wounds/Healing Word's
+ *  `target.affects` has no `type` field at all). */
 function isSelfTargeted(item: FoundryItemDoc): boolean {
-  return getPath(firstActivity(item), 'target.affects.type') === 'self';
+  return getPath(healActivity(item), 'target.affects.type') === 'self';
 }
 
 /**
@@ -1315,7 +1333,7 @@ function isSelfTargeted(item: FoundryItemDoc): boolean {
  * Undefined when the activity carries no healing dice.
  */
 function healFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | undefined {
-  const healing = rec(getPath(firstActivity(item), 'healing'));
+  const healing = rec(getPath(healActivity(item), 'healing'));
   const number = typeof healing.number === 'number' && Number.isFinite(healing.number) ? healing.number : undefined;
   const denomination =
     typeof healing.denomination === 'number' && Number.isFinite(healing.denomination) ? healing.denomination : undefined;
@@ -1385,13 +1403,35 @@ function itemDamageFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string
   return undefined;
 }
 
+/** The use-* relay endpoint an action id's prefix maps to — the same
+ *  prefix→endpoint rule buildAction's plain paths already apply. */
+function useEndpointFor(actionId: string): 'use-item' | 'use-spell' | 'use-feature' {
+  if (actionId.startsWith('spell.')) return 'use-spell';
+  if (actionId.startsWith('feature.')) return 'use-feature';
+  return 'use-item';
+}
+
+/** Reject a use/cast whose limited uses are exhausted. Foundry itself
+ *  refuses too (the use-and-roll activation runs first for exactly that
+ *  reason), but its refusal surfaces as a chat message, not a relay error —
+ *  the display roll would still fire. This guard turns exhaustion into the
+ *  same 422 the rest of the intent pipeline speaks. */
+function assertUsesRemaining(item: FoundryItemDoc): void {
+  const uses = usesInfo(item);
+  if (uses !== undefined && uses.spent >= uses.max) {
+    throw new IntentError(`"${item.name}" has no uses remaining`, 'INVALID');
+  }
+}
+
 /**
  * A heal-type use/cast: the relay only auto-executes attack-type activities
  * (live-verified 2026-07-09 — Second Wind's "Use" consumed its use but
- * rolled/applied nothing), so the roll is computed client-side, same as
- * weapon damage. Self-targeted heals (Second Wind) also write the resulting
- * HP directly, since there's no card-click step to rely on; heals that
- * target a chosen creature (Cure Wounds, Healing Word) only roll and
+ * rolled/applied nothing), so the display roll is computed client-side, same
+ * as weapon damage — but the activation still goes through Foundry first
+ * (use-and-roll) so slots/uses/quantity/auto-destroy follow Foundry's own
+ * rules. Self-targeted heals (Second Wind, a drunk potion) also write the
+ * resulting HP directly, since there's no card-click step to rely on; heals
+ * that target a chosen creature (Cure Wounds, Healing Word) only roll and
  * display — applying them to whichever creature was healed stays a manual
  * step in Foundry, exactly like weapon damage today.
  */
@@ -1401,34 +1441,24 @@ function buildHealAction(
   actionId: string,
   opts?: { forceSelf?: boolean },
 ): RelayAction {
+  assertUsesRemaining(item);
   const formula = healFormula(actor, item);
   if (formula === undefined) {
     throw new IntentError(`no heal formula for "${actionId}"`, 'UNKNOWN_RESOURCE');
   }
-  const flavor = `${item.name} — Healing`;
+  const base = {
+    endpoint: 'use-and-roll' as const,
+    use: useEndpointFor(actionId),
+    itemId: item._id,
+    formula,
+    flavor: `${item.name} — Healing`,
+  };
   if (!opts?.forceSelf && !isSelfTargeted(item)) {
-    return { endpoint: 'roll', formula, flavor };
+    return base;
   }
   const current = numAt(actor.system, 'attributes.hp.value') ?? 0;
   const max = numAt(actor.system, 'attributes.hp.max') ?? current;
-  const uses = usesInfo(item);
-  const consumeUse =
-    uses !== undefined
-      ? {
-          itemId: item._id,
-          newSpent: uses.spent + 1,
-          destroy: getPath(item.system, 'uses.autoDestroy') === true && uses.spent + 1 >= uses.max,
-        }
-      : undefined;
-  return {
-    endpoint: 'roll-and-heal',
-    formula,
-    flavor,
-    path: 'system.attributes.hp.value',
-    current,
-    max,
-    ...(consumeUse ? { consumeUse } : {}),
-  };
+  return { ...base, heal: { path: 'system.attributes.hp.value', current, max } };
 }
 
 function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
@@ -1586,7 +1616,11 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       if (intent.actionId.startsWith('item.')) {
         const itemId = intent.actionId.slice('item.'.length, -'.use'.length);
         const item = (actor.items ?? []).find((i) => i._id === itemId);
-        if (item && isAttuneable(item) && !isAttuned(item)) {
+        // Only attunement 'required' (or the pre-5.x numeric 1) gates use —
+        // an 'optional'-attunement item works unattuned by the rules (it
+        // just forgoes its attuned benefit), so isAttuneable (which includes
+        // 'optional' for the toggle) must NOT be the gate here.
+        if (item && requiresAttunement(item) && !isAttuned(item)) {
           throw new IntentError(`"${item.name}" requires attunement`, 'INVALID');
         }
         if (item) {
@@ -1595,9 +1629,12 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
             return buildHealAction(actor, item, intent.actionId, { forceSelf: true });
           }
           if (effect === 'damage') {
+            assertUsesRemaining(item);
             const formula = itemDamageFormula(actor, item);
             if (!formula) throw new IntentError(`no damage formula for "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
-            return { endpoint: 'roll', formula, flavor: `${item.name} — Damage` };
+            // use-and-roll, not a bare roll: Foundry's activation consumes
+            // the charge / destroys the bead; the roll is display only.
+            return { endpoint: 'use-and-roll', use: 'use-item', itemId, formula, flavor: `${item.name} — Damage` };
           }
         }
         return { endpoint: 'use-item', itemId };

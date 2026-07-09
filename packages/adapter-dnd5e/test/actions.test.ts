@@ -511,34 +511,57 @@ describe('buildAction — heal formulas & self-heal write-through (M15)', () => 
     // Randal's fixture HP is 35/44 (system.attributes.hp — verified directly
     // against martial-captured.json; do not assume live-session values,
     // they drift as the test campaign is played).
+    // use-and-roll: Foundry's own activation consumes the use (and refuses
+    // when empty); the formula is the client-computed display roll; heal
+    // carries the self-apply write.
     expect(build(martialCaptured, { kind: 'use', actionId: 'feature.7r63kurEAM3GdEec.use' })).toEqual({
-      endpoint: 'roll-and-heal',
+      endpoint: 'use-and-roll',
+      use: 'use-feature',
+      itemId: '7r63kurEAM3GdEec',
       formula: '1d10 + 5',
       flavor: 'Second Wind — Healing',
-      path: 'system.attributes.hp.value',
-      current: 35,
-      max: 44,
-      // M16 fix: roll-and-heal never called Foundry's real activation, so it
-      // never consumed Second Wind's own use either (live-verified
-      // 2026-07-09) — consumeUse carries that write alongside the roll.
-      // Fixture uses: {max:"1", spent:0}, no autoDestroy (a class feature
-      // recharges via rest, it isn't destroyed).
-      consumeUse: { itemId: '7r63kurEAM3GdEec', newSpent: 1, destroy: false },
+      heal: { path: 'system.attributes.hp.value', current: 35, max: 44 },
     });
   });
 
-  it('Cure Wounds (target-chosen, not self) rolls 1d8 + spellcasting mod but does NOT auto-apply', () => {
+  it('an exhausted self-heal is rejected with a 422 instead of healing for free', () => {
+    // Fixture Second Wind is {max:"1", spent:0}; clone it fully spent.
+    const spent: FoundryActorDoc = {
+      ...martialCaptured,
+      items: (martialCaptured.items ?? []).map((i) =>
+        i._id === '7r63kurEAM3GdEec'
+          ? {
+              ...i,
+              system: {
+                ...(i.system as Record<string, unknown>),
+                uses: { max: '1', recovery: [{ period: 'sr', type: 'recoverAll' }], spent: 1 },
+              },
+            }
+          : i,
+      ),
+    };
+    expectIntentError(() => build(spent, { kind: 'use', actionId: 'feature.7r63kurEAM3GdEec.use' }), 'INVALID');
+  });
+
+  it('Cure Wounds (target-chosen, not self) consumes its slot via use-spell, rolls, but does NOT auto-apply (no heal field)', () => {
     // Akra: WIS 15 (+2), Cleric spellcasting ability is "wis" in the fixture.
+    // Branch review 2026-07-09: an earlier bare-roll shape here silently
+    // stopped consuming the spell slot — use-and-roll restores that by
+    // running Foundry's own cast first.
     expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.LjT1wf4D38c9Ieuo.cast' })).toEqual({
-      endpoint: 'roll',
+      endpoint: 'use-and-roll',
+      use: 'use-spell',
+      itemId: 'LjT1wf4D38c9Ieuo',
       formula: '1d8 + 2',
       flavor: 'Cure Wounds — Healing',
     });
   });
 
-  it('Healing Word (target-chosen, not self) rolls 1d4 + spellcasting mod', () => {
+  it('Healing Word (target-chosen, not self) consumes its slot and rolls 1d4 + spellcasting mod', () => {
     expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.HpjaVMLEU14tJG7y.cast' })).toEqual({
-      endpoint: 'roll',
+      endpoint: 'use-and-roll',
+      use: 'use-spell',
+      itemId: 'HpjaVMLEU14tJG7y',
       formula: '1d4 + 2',
       flavor: 'Healing Word — Healing',
     });
@@ -553,52 +576,79 @@ describe('buildAction — heal formulas & self-heal write-through (M15)', () => 
 });
 
 describe('buildAction — item on-use effects (M16)', () => {
-  it('Bead of Force rolls its sibling-activity damage formula verbatim, display-only', () => {
+  it('Bead of Force consumes its use via use-item and rolls its sibling-activity damage formula, display-only (no heal field)', () => {
+    // Branch review 2026-07-09: an earlier bare-roll shape never consumed
+    // the bead (infinite reuse) — use-and-roll lets Foundry's activation
+    // consume/destroy it before the display roll.
     expect(build(martialCaptured, { kind: 'use', actionId: 'item.iecfawCz0pIwcPVg.use' })).toEqual({
-      endpoint: 'roll',
+      endpoint: 'use-and-roll',
+      use: 'use-item',
+      itemId: 'iecfawCz0pIwcPVg',
       formula: '5d4',
       flavor: 'Bead of Force — Damage',
     });
   });
 
-  it('Potion of Healing always self-heals, even though its real target.affects.type is "creature", not "self"', () => {
-    // Akra's fixture HP is 38/38 (verified directly against caster-captured.json).
-    expect(build(casterCaptured, { kind: 'use', actionId: 'item.7vIZxvwGzmJgmugo.use' })).toEqual({
-      endpoint: 'roll-and-heal',
-      formula: '2d4 + 2',
-      flavor: 'Potion of Healing — Healing',
-      path: 'system.attributes.hp.value',
-      current: 38,
-      max: 38,
-      // M16 fix: fixture uses {max:"1", autoDestroy:true, spent:0} -> after
-      // one use, newSpent (1) >= max (1) and autoDestroy is true, so this
-      // single-use potion is destroyed rather than just decremented.
-      consumeUse: { itemId: '7vIZxvwGzmJgmugo', newSpent: 1, destroy: true },
-    });
-  });
-
-  it('a self-heal with no uses cap at all omits consumeUse entirely (no spurious item write)', () => {
-    // Synthetic: Second Wind's activity/target shape, but with uses removed
-    // entirely (max ""), same technique as other synthetic-clone tests in
-    // this file.
-    const noUses: FoundryActorDoc = {
+  it('an exhausted damage item is rejected with a 422', () => {
+    const spent: FoundryActorDoc = {
       ...martialCaptured,
       items: (martialCaptured.items ?? []).map((i) =>
-        i._id === '7r63kurEAM3GdEec'
-          ? { ...i, system: { ...(i.system as Record<string, unknown>), uses: { max: '', recovery: [], spent: 0 } } }
+        i._id === 'iecfawCz0pIwcPVg'
+          ? {
+              ...i,
+              system: {
+                ...(i.system as Record<string, unknown>),
+                uses: { max: '1', recovery: [], autoDestroy: true, spent: 1 },
+              },
+            }
           : i,
       ),
     };
-    const result = build(noUses, { kind: 'use', actionId: 'feature.7r63kurEAM3GdEec.use' });
-    expect(result).toEqual({
-      endpoint: 'roll-and-heal',
-      formula: '1d10 + 5',
-      flavor: 'Second Wind — Healing',
-      path: 'system.attributes.hp.value',
-      current: 35,
-      max: 44,
+    expectIntentError(() => build(spent, { kind: 'use', actionId: 'item.iecfawCz0pIwcPVg.use' }), 'INVALID');
+  });
+
+  it('Potion of Healing always self-heals, even though its real target.affects.type is "creature", not "self"', () => {
+    // Akra's fixture HP is 38/38 (verified directly against caster-captured.json).
+    // Consumption (including the single-use autoDestroy) is Foundry's job,
+    // reached through the use-item activation — not re-implemented here.
+    expect(build(casterCaptured, { kind: 'use', actionId: 'item.7vIZxvwGzmJgmugo.use' })).toEqual({
+      endpoint: 'use-and-roll',
+      use: 'use-item',
+      itemId: '7vIZxvwGzmJgmugo',
+      formula: '2d4 + 2',
+      flavor: 'Potion of Healing — Healing',
+      heal: { path: 'system.attributes.hp.value', current: 38, max: 38 },
     });
-    expect('consumeUse' in result).toBe(false);
+  });
+
+  it('classification and heal formula agree when the heal activity is not first (multi-activity item)', () => {
+    // Synthetic: prepend a utility activity before the Potion's heal
+    // activity. effectTypeOf scans all activities, so healFormula and
+    // isSelfTargeted must find the same heal activity, not just [0].
+    const reordered: FoundryActorDoc = {
+      ...casterCaptured,
+      items: (casterCaptured.items ?? []).map((i) => {
+        if (i._id !== '7vIZxvwGzmJgmugo') return i;
+        const system = i.system as Record<string, unknown>;
+        const activities = system.activities as Record<string, unknown>;
+        return {
+          ...i,
+          system: {
+            ...system,
+            activities: {
+              aaaFirstUtility0: { _id: 'aaaFirstUtility0', type: 'utility', activation: { type: 'action' } },
+              ...activities,
+            },
+          },
+        };
+      }),
+    };
+    const result = build(reordered, { kind: 'use', actionId: 'item.7vIZxvwGzmJgmugo.use' });
+    expect(result).toMatchObject({
+      endpoint: 'use-and-roll',
+      formula: '2d4 + 2',
+      heal: { path: 'system.attributes.hp.value', current: 38, max: 38 },
+    });
   });
 
   it('a mundane item with no damage/heal effect is unaffected (Torch still maps to use-item)', () => {
@@ -639,7 +689,23 @@ describe('buildAction — attunement-required-to-use enforcement (M16)', () => {
   it('allows use normally once attuned', () => {
     const actor = withAttunement('required', true);
     expect(build(actor, { kind: 'use', actionId: 'item.iecfawCz0pIwcPVg.use' })).toEqual({
-      endpoint: 'roll',
+      endpoint: 'use-and-roll',
+      use: 'use-item',
+      itemId: 'iecfawCz0pIwcPVg',
+      formula: '5d4',
+      flavor: 'Bead of Force — Damage',
+    });
+  });
+
+  it('optional-attunement items work unattuned (only "required" gates use)', () => {
+    // By the rules an attunement-optional item functions without attunement
+    // (it just forgoes the attuned benefit) — the gate must not block it
+    // even though isAttuneable offers it the attune toggle.
+    const actor = withAttunement('optional', false);
+    expect(build(actor, { kind: 'use', actionId: 'item.iecfawCz0pIwcPVg.use' })).toEqual({
+      endpoint: 'use-and-roll',
+      use: 'use-item',
+      itemId: 'iecfawCz0pIwcPVg',
       formula: '5d4',
       flavor: 'Bead of Force — Damage',
     });
@@ -647,7 +713,9 @@ describe('buildAction — attunement-required-to-use enforcement (M16)', () => {
 
   it('items that do not require attunement are unaffected (Bead of Force real data, Torch)', () => {
     expect(build(martialCaptured, { kind: 'use', actionId: 'item.iecfawCz0pIwcPVg.use' })).toEqual({
-      endpoint: 'roll',
+      endpoint: 'use-and-roll',
+      use: 'use-item',
+      itemId: 'iecfawCz0pIwcPVg',
       formula: '5d4',
       flavor: 'Bead of Force — Damage',
     });

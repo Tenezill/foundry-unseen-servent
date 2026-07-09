@@ -653,31 +653,24 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           // path as quantity/uses; no chat card, no roll.
           await relay.updateEntity(`Actor.${id}.Item.${action.itemId}`, action.data);
           break;
-        case 'roll-and-heal': {
-          // M15: the relay only auto-executes attack-type activities — a
-          // heal-type use/cast just posts an inert card (live-verified
-          // 2026-07-09: Second Wind consumed its use but rolled/applied
-          // nothing). So the adapter computed the formula itself; roll it,
-          // then write the result — clamped to max — directly onto the
-          // actor. `path` is adapter-supplied so this stays system-agnostic.
+        case 'use-and-roll': {
+          // M15/M16: the relay only auto-executes attack-type activities — a
+          // heal/save/utility use posts an inert card. So the activation
+          // goes through Foundry FIRST (it consumes slots/uses/quantity and
+          // auto-destroys per its own rules — never re-implemented here),
+          // then the adapter-computed display roll fires, then the optional
+          // self-heal write. All field paths are adapter-supplied so this
+          // stays system-agnostic.
+          await relay.useAbility(action.use, `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {});
           const rolled = extractRoll(await relay.rollFormula(`Actor.${id}`, action.formula, action.flavor));
           result = rolled;
-          if (rolled !== null) {
+          if (rolled !== null && action.heal) {
             // Floor at current: a heal total should never be negative in
             // practice (the adapter only builds this for heal formulas), but
             // an unusual negative bonus resolving a formula like "1d4 - 2"
             // must not let this endpoint reduce HP.
-            const newValue = Math.min(action.max, action.current + Math.max(0, rolled.total));
-            await relay.updateEntity(`Actor.${id}`, { [action.path]: newValue });
-            if (action.consumeUse) {
-              if (action.consumeUse.destroy) {
-                await relay.deleteEntity(`Actor.${id}.Item.${action.consumeUse.itemId}`);
-              } else {
-                await relay.updateEntity(`Actor.${id}.Item.${action.consumeUse.itemId}`, {
-                  'system.uses.spent': action.consumeUse.newSpent,
-                });
-              }
-            }
+            const newValue = Math.min(action.heal.max, action.heal.current + Math.max(0, rolled.total));
+            await relay.updateEntity(`Actor.${id}`, { [action.heal.path]: newValue });
           }
           break;
         }

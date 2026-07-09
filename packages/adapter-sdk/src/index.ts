@@ -245,27 +245,26 @@ export type RelayAction =
   /** Generic embedded-item field write (e.g. prepared state); executed via
    *  the same entity-update path as quantity/uses. */
   | { endpoint: 'update-item'; itemId: string; data: Record<string, number | string | boolean> }
-  /** M15: roll a formula, then write the result into the actor (self-heals
-   *  only — see the dnd5e adapter's buildHealAction). `path`/`current`/`max`
-   *  are resolved by the adapter so this stays system-agnostic here: the
-   *  gateway just computes `min(max, current + total)` and writes `path`.
-   *  `consumeUse` (M16): this endpoint bypasses Foundry's own activation
-   *  flow entirely (it never calls `useAbility`), so it never consumed the
-   *  source item/feature's limited use either — live-verified 2026-07-09,
-   *  Second Wind's `uses.spent` and a single-use Potion of Healing's
-   *  `autoDestroy` both silently no-opped. When present, the gateway also
-   *  writes the new `uses.spent` to the source item, or deletes it entirely
-   *  when `destroy` is true (a single-use, `autoDestroy` consumable at its
-   *  use cap) — same shape decision the adapter already makes for uses
-   *  tracking elsewhere, just carried alongside this roll. */
+  /** M15/M16: activate the item through Foundry's own usage flow, then roll
+   *  a client-computed formula for display. The relay only auto-executes
+   *  attack-type activities — a heal/save/utility use posts an inert card —
+   *  so the adapter computes the roll itself; but consumption (spell slots,
+   *  limited uses, quantity, auto-destroy, refusing when empty) must stay
+   *  Foundry's job, which is why the `use` call comes first. An earlier
+   *  design (`roll-and-heal` + a hand-computed `consumeUse` write) skipped
+   *  the activation entirely and re-implemented consumption in the gateway;
+   *  branch review 2026-07-09 confirmed that leaked free castings (slots
+   *  never consumed), infinite item reuse, and stack-wiping deletes — this
+   *  variant replaces it. `heal`, when present (self-targeted heals only),
+   *  makes the gateway also write `min(max, current + total)` to `path`;
+   *  all three fields are adapter-resolved so this stays system-agnostic. */
   | {
-      endpoint: 'roll-and-heal';
+      endpoint: 'use-and-roll';
+      use: 'use-item' | 'use-spell' | 'use-feature';
+      itemId: string;
       formula: string;
       flavor: string;
-      path: string;
-      current: number;
-      max: number;
-      consumeUse?: { itemId: string; newSpent: number; destroy: boolean };
+      heal?: { path: string; current: number; max: number };
     }
   | { endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration' };
 

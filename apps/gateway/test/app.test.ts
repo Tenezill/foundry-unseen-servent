@@ -479,182 +479,115 @@ describe('actions', () => {
     }
   });
 
-  it('roll-and-heal -> rolls the formula, then writes clamped HP into the actor', async () => {
+  /** Adapter stub whose buildAction returns a fixed use-and-roll action. */
+  function useAndRollAdapter(action: Record<string, unknown>, actionId = 'feature.sw.use'): SystemAdapter {
+    return {
+      systemId: 'fake',
+      toViewModel: (actor) => ({
+        actorId: actor._id,
+        systemId: 'fake',
+        name: actor.name,
+        headline: [],
+        sections: [],
+        resources: [],
+      }),
+      resources: () => [],
+      buildUpdate: () => {
+        throw new IntentError('not used in this test', 'UNKNOWN_RESOURCE');
+      },
+      actions: () => [{ id: actionId, label: 'Stub', kind: 'use', effectType: 'heal' }],
+      buildAction: () => action as never,
+    };
+  }
+
+  function useAndRollApp(relay: FakeRelay, adapter: SystemAdapter): FastifyInstance {
+    return buildApp({
+      relay,
+      players: makePlayers(),
+      registry: createRegistry([adapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+    });
+  }
+
+  it('use-and-roll -> activates via Foundry first (consumption is its job), rolls, then writes clamped HP', async () => {
     await app?.close();
     const relay = new FakeRelay();
     relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 20, 30));
     relay.rollResult = { formula: '1d10 + 5', total: 8, isCritical: false, isFumble: false };
-    const healAdapter: SystemAdapter = {
-      systemId: 'fake',
-      toViewModel: (actor) => ({
-        actorId: actor._id,
-        systemId: 'fake',
-        name: actor.name,
-        headline: [],
-        sections: [],
-        resources: [],
-      }),
-      resources: () => [],
-      buildUpdate: () => {
-        throw new IntentError('not used in this test', 'UNKNOWN_RESOURCE');
-      },
-      actions: () => [{ id: 'feature.sw.use', label: 'Second Wind', kind: 'use', effectType: 'heal' }],
-      buildAction: () => ({
-        endpoint: 'roll-and-heal',
+    app = useAndRollApp(
+      relay,
+      useAndRollAdapter({
+        endpoint: 'use-and-roll',
+        use: 'use-feature',
+        itemId: 'ft1',
         formula: '1d10 + 5',
         flavor: 'Second Wind — Healing',
-        path: 'system.attributes.hp.value',
-        current: 20,
-        max: 30,
+        heal: { path: 'system.attributes.hp.value', current: 20, max: 30 },
       }),
-    };
-    app = buildApp({
-      relay,
-      players: makePlayers(),
-      registry: createRegistry([healAdapter]),
-      defaultSystemId: 'fake',
-      livePollMs: 10_000,
-      pingMs: 60_000,
-    });
+    );
     const res = await post(app, 'a1', { kind: 'use', actionId: 'feature.sw.use' });
     expect(res.statusCode).toBe(200);
+    // Foundry's own activation ran (it consumes the use/slot) BEFORE the roll.
+    expect(relay.useAbilityCalls).toEqual([
+      { endpoint: 'use-feature', actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.ft1', opts: {} },
+    ]);
     expect(relay.rollCalls).toEqual([{ actorUuid: 'Actor.a1', formula: '1d10 + 5', flavor: 'Second Wind — Healing' }]);
     expect(relay.updates).toEqual([{ uuid: 'Actor.a1', data: { 'system.attributes.hp.value': 28 } }]);
-    const body = res.json();
-    expect(body.result).toEqual({ total: 8, formula: '1d10 + 5', isCritical: false, isFumble: false });
+    expect(res.json().result).toEqual({ total: 8, formula: '1d10 + 5', isCritical: false, isFumble: false });
   });
 
-  it('roll-and-heal clamps the written HP to max, never overhealing', async () => {
+  it('use-and-roll clamps the written HP to max, never overhealing', async () => {
     await app?.close();
     const relay = new FakeRelay();
     relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 28, 30));
     relay.rollResult = { formula: '1d10 + 5', total: 8, isCritical: false, isFumble: false };
-    const healAdapter: SystemAdapter = {
-      systemId: 'fake',
-      toViewModel: (actor) => ({
-        actorId: actor._id,
-        systemId: 'fake',
-        name: actor.name,
-        headline: [],
-        sections: [],
-        resources: [],
-      }),
-      resources: () => [],
-      buildUpdate: () => {
-        throw new IntentError('not used in this test', 'UNKNOWN_RESOURCE');
-      },
-      actions: () => [{ id: 'feature.sw.use', label: 'Second Wind', kind: 'use', effectType: 'heal' }],
-      buildAction: () => ({
-        endpoint: 'roll-and-heal',
+    app = useAndRollApp(
+      relay,
+      useAndRollAdapter({
+        endpoint: 'use-and-roll',
+        use: 'use-feature',
+        itemId: 'ft1',
         formula: '1d10 + 5',
         flavor: 'Second Wind — Healing',
-        path: 'system.attributes.hp.value',
-        current: 28,
-        max: 30,
+        heal: { path: 'system.attributes.hp.value', current: 28, max: 30 },
       }),
-    };
-    app = buildApp({
-      relay,
-      players: makePlayers(),
-      registry: createRegistry([healAdapter]),
-      defaultSystemId: 'fake',
-      livePollMs: 10_000,
-      pingMs: 60_000,
-    });
+    );
     const res = await post(app, 'a1', { kind: 'use', actionId: 'feature.sw.use' });
     expect(res.statusCode).toBe(200);
     expect(relay.updates).toEqual([{ uuid: 'Actor.a1', data: { 'system.attributes.hp.value': 30 } }]);
   });
 
-  it('roll-and-heal with consumeUse decrements the source item\'s uses.spent (M16)', async () => {
+  it('use-and-roll without a heal field activates and rolls but never writes HP (target-chosen heal)', async () => {
     await app?.close();
     const relay = new FakeRelay();
     relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 20, 30));
-    relay.rollResult = { formula: '1d10 + 5', total: 8, isCritical: false, isFumble: false };
-    const healAdapter: SystemAdapter = {
-      systemId: 'fake',
-      toViewModel: (actor) => ({
-        actorId: actor._id,
-        systemId: 'fake',
-        name: actor.name,
-        headline: [],
-        sections: [],
-        resources: [],
-      }),
-      resources: () => [],
-      buildUpdate: () => {
-        throw new IntentError('not used in this test', 'UNKNOWN_RESOURCE');
-      },
-      actions: () => [{ id: 'feature.sw.use', label: 'Second Wind', kind: 'use', effectType: 'heal' }],
-      buildAction: () => ({
-        endpoint: 'roll-and-heal',
-        formula: '1d10 + 5',
-        flavor: 'Second Wind — Healing',
-        path: 'system.attributes.hp.value',
-        current: 20,
-        max: 30,
-        consumeUse: { itemId: 'i1', newSpent: 1, destroy: false },
-      }),
-    };
-    app = buildApp({
+    relay.rollResult = { formula: '1d8 + 2', total: 7, isCritical: false, isFumble: false };
+    app = useAndRollApp(
       relay,
-      players: makePlayers(),
-      registry: createRegistry([healAdapter]),
-      defaultSystemId: 'fake',
-      livePollMs: 10_000,
-      pingMs: 60_000,
-    });
-    const res = await post(app, 'a1', { kind: 'use', actionId: 'feature.sw.use' });
+      useAndRollAdapter(
+        {
+          endpoint: 'use-and-roll',
+          use: 'use-spell',
+          itemId: 's1',
+          formula: '1d8 + 2',
+          flavor: 'Cure Wounds — Healing',
+        },
+        'spell.cw.cast',
+      ),
+    );
+    // The stub descriptor still uses kind 'use' — reuse it for the POST.
+    const res = await post(app, 'a1', { kind: 'use', actionId: 'spell.cw.cast' });
     expect(res.statusCode).toBe(200);
-    expect(relay.updates).toEqual([
-      { uuid: 'Actor.a1', data: { 'system.attributes.hp.value': 28 } },
-      { uuid: 'Actor.a1.Item.i1', data: { 'system.uses.spent': 1 } },
+    // Slot consumption is Foundry's job via the use-spell activation…
+    expect(relay.useAbilityCalls).toEqual([
+      { endpoint: 'use-spell', actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.s1', opts: {} },
     ]);
+    // …and no HP (or any other) write happens for a target-chosen heal.
+    expect(relay.updates).toEqual([]);
     expect(relay.deleteCalls).toEqual([]);
-  });
-
-  it('roll-and-heal with consumeUse.destroy deletes the source item instead of decrementing it (M16)', async () => {
-    await app?.close();
-    const relay = new FakeRelay();
-    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 20, 30));
-    relay.rollResult = { formula: '2d4 + 2', total: 6, isCritical: false, isFumble: false };
-    const healAdapter: SystemAdapter = {
-      systemId: 'fake',
-      toViewModel: (actor) => ({
-        actorId: actor._id,
-        systemId: 'fake',
-        name: actor.name,
-        headline: [],
-        sections: [],
-        resources: [],
-      }),
-      resources: () => [],
-      buildUpdate: () => {
-        throw new IntentError('not used in this test', 'UNKNOWN_RESOURCE');
-      },
-      actions: () => [{ id: 'item.potion.use', label: 'Potion of Healing', kind: 'use', effectType: 'heal' }],
-      buildAction: () => ({
-        endpoint: 'roll-and-heal',
-        formula: '2d4 + 2',
-        flavor: 'Potion of Healing — Healing',
-        path: 'system.attributes.hp.value',
-        current: 20,
-        max: 30,
-        consumeUse: { itemId: 'ft1', newSpent: 1, destroy: true },
-      }),
-    };
-    app = buildApp({
-      relay,
-      players: makePlayers(),
-      registry: createRegistry([healAdapter]),
-      defaultSystemId: 'fake',
-      livePollMs: 10_000,
-      pingMs: 60_000,
-    });
-    const res = await post(app, 'a1', { kind: 'use', actionId: 'item.potion.use' });
-    expect(res.statusCode).toBe(200);
-    expect(relay.updates).toEqual([{ uuid: 'Actor.a1', data: { 'system.attributes.hp.value': 26 } }]);
-    expect(relay.deleteCalls).toEqual(['Actor.a1.Item.ft1']);
+    expect(res.json().result).toEqual({ total: 7, formula: '1d8 + 2', isCritical: false, isFumble: false });
   });
 });
 

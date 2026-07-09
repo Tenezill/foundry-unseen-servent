@@ -780,14 +780,18 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
       // Weapon damage rolls carry their effect via the intent kind itself
       // (no effectType on 'damage' descriptors — Attacks stays unfiltered).
       // 'heal' from a cast/use descriptor is always a genuine heal roll —
-      // Task 4 routes every heal-type item through a client-computed
-      // formula, never through use-spell/use-feature. But a 'damage'
-      // *cast* (e.g. Guiding Bolt) still falls through to use-spell, whose
+      // every heal-type item routes through a client-computed formula,
+      // never through a bare use-spell/use-feature. But a 'damage' *cast*
+      // (e.g. Guiding Bolt) still falls through to use-spell, whose
       // auto-executed roll is the ATTACK (to-hit) roll, not damage — the
       // relay has no spell-damage-roll capability (same gap as weapons).
-      // So 'damage' wording must never come from the descriptor, only from
-      // the dedicated weapon-damage intent kind.
-      const effect = intent.kind === 'damage' ? 'damage' : effectType === 'heal' ? 'heal' : undefined
+      // Item USES are different: a damage-classified item (Bead of Force)
+      // returns its client-computed damage roll, so its descriptor
+      // effectType IS trustworthy — only spell casts must suppress it.
+      const itemDamageUse =
+        intent.kind === 'use' && intent.actionId.startsWith('item.') && effectType === 'damage'
+      const effect =
+        intent.kind === 'damage' || itemDamageUse ? 'damage' : effectType === 'heal' ? 'heal' : undefined
       showRoll(res.result, label, effect)
       return
     }
