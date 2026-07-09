@@ -183,13 +183,16 @@ consume, and already auto-destroys single-use consumables
 (`autoDestroy: true`, proven today by Rations). This design adds no new
 write path for charges.
 
-The one net-new piece: `usesInfo` currently returns only `{ spent, max }`
-(`index.ts:321`). It gains a third optional field, `recovery: string |
-undefined`, reading `uses.recovery[0]?.period` (e.g. `"dawn"`, `"dusk"`,
-`"sr"`, `"lr"`) when present. This flows into the existing uses resource
-(`index.ts:465-472`) as an added `recovery` field on the resource object,
-consumed only by the item detail view — everything else that reads uses
-(`gearStats`, the attunement cap counter) ignores the new field.
+**Simpler than originally planned:** rather than adding a new field to
+`ResourceDescriptor` (an actual `adapter-sdk` contract change, contradicting
+this design's "no contract changes" claim), reuse the existing free-form
+`ListItem.sub` string `inventoryListItem` (`index.ts:930-972`) already
+builds for the inventory row (today: `"×1 · consumable · 0.06 lb"`). A
+recovery period, when present, appends as one more `subParts` entry (e.g.
+`"recharges: dawn"`), mapping the raw `uses.recovery[0]?.period` value
+(`"dawn"`, `"dusk"`, `"sr"`, `"lr"`) through a small friendly-label table
+(`sr` → "short rest", `lr` → "long rest", else used as-is). No new type,
+no new field — `ResourceDescriptor`/`buildResources` are untouched.
 
 ## Frontend (`apps/web`)
 
@@ -201,10 +204,9 @@ consumed only by the item detail view — everything else that reads uses
 - Attunement-blocked taps surface the gateway's `422 INVALID_INTENT`
   message through the existing error-toast path (the same one that already
   handles e.g. "no spell slot available") — no new UI component.
-- Item detail view: when the uses resource's new `recovery` field is
-  present, render a small "recharges: `<period>`" line next to the existing
-  uses count (e.g. "3/7 — recharges at dawn"). Absent for items with no
-  recovery period (unchanged today).
+- Recharge display needs no frontend change at all — it's already part of
+  the inventory row's existing `sub` text, which the PWA already renders
+  verbatim.
 
 ## Live data groundwork
 
@@ -250,8 +252,8 @@ the implementation plan's first task for the exact objects.
   overrides its non-`"self"` `target.affects.type`); item damage → `roll`,
   display-only (Bead of Force); attunement-required + unattuned →
   `IntentError`; attunement-required + attuned → falls through normally;
-  non-effect item → unchanged `use-item`. `usesInfo`/resource test for the
-  new `recovery` field, present and absent cases.
+  non-effect item → unchanged `use-item`. `inventoryListItem` test for the
+  new recovery-period `sub` text, present and absent cases.
 - `apps/gateway`: no new executor logic (reuses `roll`/`roll-and-heal`/
   `use-item` cases verbatim) — existing tests already cover the 422 path
   for `IntentError`, so no new gateway tests required beyond confirming an
