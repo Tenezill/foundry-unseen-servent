@@ -36,6 +36,10 @@
         No characters are linked to your invite yet. Ask your game master.
       </p>
     </div>
+
+    <footer class="foot">
+      <NuxtLink class="admin-link" to="/admin">Admin</NuxtLink>
+    </footer>
   </div>
 </template>
 
@@ -193,5 +197,16 @@ onMounted(() => {
   color: var(--text-dim);
   font-size: 0.88rem;
   padding: 24px 12px;
+}
+
+.foot {
+  margin-top: 32px;
+  text-align: center;
+}
+
+.admin-link {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  opacity: 0.7;
 }
 </style>
