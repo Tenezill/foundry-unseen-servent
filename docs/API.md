@@ -81,7 +81,7 @@ lists everything legal; `actionId` must reference one of them.
 { "kind": "cast",   "actionId": "spell.k9Q2f.cast" }
 { "kind": "use",    "actionId": "feature.p0Wm1.use" }
 { "kind": "equip",  "actionId": "item.X3ab9.equip", "equipped": false }
-{ "kind": "move",   "actionId": "item.X3ab9.move", "containerId": "item.backpack.id" }
+{ "kind": "move",   "actionId": "item.X3ab9.move", "containerId": "wYUZWMKa6FntpIvv" }
 { "kind": "move",   "actionId": "item.X3ab9.move", "containerId": null }
 { "kind": "rest",   "actionId": "rest.short" }
 { "kind": "rest",   "actionId": "rest.long" }
@@ -95,7 +95,8 @@ item target; the gateway runs the matching relay command
 fresh sheet (`result` null — these post their own chat card). `cast` no longer
 takes `slotLevel`: the bridge casts at base level only (see M6 known limits).
 `move` (M19) relocates an item to a container or to carried; `containerId` is
-a container-type item id or `null` (carried). No roll or chat card.
+the container item's `_id` (a bare item id, not an action id) or `null`
+(carried). No roll or chat card.
 
 Semantics (server-enforced, in this order):
 1. Actor owned by token → else `404`.

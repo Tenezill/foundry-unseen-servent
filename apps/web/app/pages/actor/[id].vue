@@ -337,7 +337,10 @@ const walletResources = computed(() =>
 /** Container sections double as the move-target list. */
 const containerOptions = computed(() =>
   (sheet.value?.sections ?? [])
-    .filter((s): s is Extract<SheetSection, { kind: 'list' }> => s.kind === 'list' && s.header !== undefined)
+    .filter(
+      (s): s is Extract<SheetSection, { kind: 'list' }> =>
+        s.kind === 'list' && s.header !== undefined && s.id.startsWith('inventory.'),
+    )
     .map((s) => ({ id: s.id.slice('inventory.'.length), label: s.label })),
 )
 
@@ -362,6 +365,7 @@ function tabOf(section: SheetSection): TabId {
   if (section.kind === 'stats') {
     return /invent|item|equip|gear|loot/.test(key) ? 'inventory' : 'overview'
   }
+  if (/^inventory\./.test(section.id)) return 'inventory'
   if (/spell|cantrip/.test(key)) return 'spells'
   if (/invent|item|equip|gear|loot/.test(key)) return 'inventory'
   return 'overview'
@@ -706,7 +710,8 @@ function onDetail(item: ListItem): void {
   // Open the sheet when there is a description to read OR a reachable remove
   // action to host — description-less gear/feats are still removable (M13).
   // The actions map tells us whether a move descriptor exists (M19).
-  const moveActionId = actionMap.value[`item.${item.id}.move`] ? `item.${item.id}.move` : undefined
+  const moveActionId =
+    !offline.value && actionMap.value[`item.${item.id}.move`] ? `item.${item.id}.move` : undefined
   if (!item.detail && !(item.removable && !offline.value) && !moveActionId) return
   detailFor.value = {
     title: item.label,
@@ -741,6 +746,7 @@ const knownNames = computed(() => {
   const names: string[] = []
   for (const s of sheet.value?.sections ?? []) {
     if (s.kind === 'list') for (const i of s.items) if (i.removable === cid) names.push(i.label)
+    if (s.kind === 'list' && s.header?.removable === cid) names.push(s.header.label)
   }
   return names
 })
