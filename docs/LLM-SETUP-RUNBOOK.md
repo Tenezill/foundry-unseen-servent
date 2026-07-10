@@ -249,34 +249,7 @@ RELAY_URL=http://localhost:3010
 RELAY_API_KEY=<from Phase 4>
 RELAY_CLIENT_ID=<fvtt_... from Phase 3 Verify>
 PLAYERS_FILE=./players.yaml
-```
-
-Create invite tokens — one run per player (input #5), using the actor ids from
-Phase 3 step 5:
-
-```bash
-# from repo root
-node scripts/make-invite.mjs Anna kbXH9abc...
-node scripts/make-invite.mjs Ben  aa3F2def...
-```
-
-Each run prints a one-time join link (give it to that player ONCE) and a YAML
-block. Assemble `apps/gateway/players.yaml` (gitignored; template:
-`apps/gateway/players.example.yaml`):
-
-```yaml
-players:
-  - name: Anna
-    tokenHash: "…"
-    actorIds: ["kbXH9abc..."]
-  - name: Ben
-    tokenHash: "…"
-    actorIds: ["aa3F2def..."]
-  # GM entry (input #6): sees the world roll feed; list every actor it may play
-  - name: TheGM
-    tokenHash: "…"
-    actorIds: ["kbXH9abc...", "aa3F2def..."]
-    gm: true
+ADMIN_PASSWORD=<a strong password — enables the admin console below>
 ```
 
 Start it:
@@ -286,12 +259,36 @@ pnpm --filter @companion/gateway start     # or `dev` for tsx watch
 ```
 
 **Operational fact:** in practice the gateway does NOT reliably hot-reload —
-after changing `.env`, `players.yaml`, or gateway/adapter source, kill and
-restart the process.
+after changing `.env` or gateway/adapter source, kill and restart the process.
+(`players.yaml` itself is the exception — see Lifetimes below.)
 
 **Verify:** `curl -s http://localhost:8090/healthz` →
 `{"ok":true,"relay":"connected"}`. `"disconnected"` means Phase 3/4 is wrong
 (key, clientId, or the GM session dropped).
+
+Create players (input #5) through the admin console rather than by hand: with
+`ADMIN_PASSWORD` set and the gateway restarted once, open `<app>/admin` (the
+web PWA's own URL — e.g. `http://localhost:3001/admin`), log in with
+`ADMIN_PASSWORD`, and use **New player** for each player from input #5,
+searching for their actor by name (collected in Phase 3 step 5) and picking
+it from the results. Each create/rotate shows the one-time join link and QR
+code exactly once — hand it to that player immediately; it is never shown
+again.
+
+The console has no GM toggle yet: create the GM's (input #6) entry the same
+way as any other player, then hand-edit their line in
+`apps/gateway/players.yaml` to add `gm: true` (list every actor they may
+play in `actorIds`, same as before). The hot-reload picks this up within ~1s
+— no restart, and this edit is not lost on the next console-driven rewrite
+(the `gm` field is carried on the in-memory player record, unlike comments —
+see Lifetimes below).
+
+Scripting alternative: `node scripts/make-invite.mjs <name> <actorId>` still
+exists for bulk/unattended provisioning — it prints a join link and a YAML
+block, but you'd then have to hand-edit `apps/gateway/players.yaml` and
+restart the gateway to pick it up, which the console above avoids entirely;
+prefer the console unless you're scripting many players at once outside an
+interactive session.
 
 ---
 
@@ -364,8 +361,17 @@ in the player flow. Three independent links, three lifetimes:
 - **Player ↔ app: one-time join link, valid until revoked.** Opening
   `/join#<token>` once stores the token in that player's browser; afterward
   they just open the app URL. No expiry timer exists — the token works
-  until its entry is removed or replaced in `players.yaml` (rotate by
-  re-running `make-invite.mjs` and swapping the hash).
+  until its entry is removed or replaced in `players.yaml` (rotate via the
+  admin console's **New link**, or `make-invite.mjs` for scripted setups).
+- **`players.yaml`: gateway-managed, hot-reloaded — no restart for edits.**
+  The gateway owns this file once the admin console is in use: it carries a
+  `# Managed by the gateway` header, and every create/rotate/revoke writes it
+  atomically. Hand edits still work — the gateway watches the file and picks
+  up external changes within ~1s, no restart needed (this is the one
+  exception to "the gateway does not hot-reload," Phase 5 above). The
+  trade-off: comments you add by hand do NOT survive the next
+  console-driven rewrite (create/rotate/revoke), since the console
+  regenerates the file from its in-memory model.
 - **World online: only while a GM session is connected.** The pairing
   survives Foundry restarts, but reads/writes work only while a GM browser
   (or the VPS headless session) is attached to the world. Session flow for

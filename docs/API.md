@@ -132,3 +132,56 @@ response bodies verbatim.
 | `RELAY_API_KEY` | scoped relay key (entity read/write, search, events) |
 | `RELAY_CLIENT_ID` | Foundry world client id (`fvtt_…`) |
 | `PLAYERS_FILE` | path to `players.yaml` |
+| `ADMIN_PASSWORD` | optional; enables the `/api/admin/*` surface (M18). Unset or empty → those routes all answer `404`, indistinguishable from routes that don't exist |
+
+## Admin endpoints (M18)
+
+Separate credential from player tokens: `Authorization: Bearer <ADMIN_PASSWORD>`,
+checked with a timing-safe comparison. A player's invite token does **not**
+work on these routes (and `ADMIN_PASSWORD` does not work on player routes) —
+both directions answer `401`. When `ADMIN_PASSWORD` is unset, every route
+below answers `404` regardless of credential.
+
+`players.yaml` is gateway-managed once these routes are in use: writes are
+atomic (temp file + rename) and the file carries a `# Managed by the
+gateway` header. Hand edits are still picked up live (~1s, file watcher, no
+restart) but comments do not survive a console-driven rewrite.
+
+### `GET /api/admin/players`
+→ `200 { "players": [ { "name": "Anna", "gm": true, "actors": [ { "id": "kbXH9…", "name": "Sariel" } ] } ] }`
+
+Never returns token hashes. Actor names are resolved best-effort via the
+relay; an actor id that can't be resolved (e.g. deleted in Foundry) is
+returned bare — `{ "id": "ghost-id" }`, no `name` key.
+
+### `POST /api/admin/players`
+Body: `{ "name": string, "actorIds": string[] }`.
+→ `201 { "token": string, "player": { "name": string, "actorIds": string[], "gm": boolean } }`
+
+The plaintext `token` is the invite/join token — it exists **only in this
+response** (show-once: display it and its QR once, then discard; only its
+sha256 hash is ever persisted). Errors: `422` on a missing/empty `name`,
+empty/missing `actorIds`, or any empty-string actor id; `409` on a duplicate
+name (case-insensitive).
+
+### `POST /api/admin/players/:name/rotate`
+→ `200 { "token": string }` | `404` (unknown name)
+
+Replaces the player's token hash; the old token stops working immediately.
+Same show-once semantics as create — this is the only time the new token is
+ever visible.
+
+### `DELETE /api/admin/players/:name`
+→ `204` | `404` (unknown name)
+
+Removes the entry; the player's token (and any join link built from it)
+stops working immediately.
+
+### `GET /api/admin/actors?q=…`
+Search-driven picker for the **New player** actor field (deviation from the
+original spec, which implied a full world listing — the relay only exposes
+discovery via search, mirroring the M13 library UX). World character actors
+only; compendium hits are filtered out.
+→ `200 { "actors": [ { "id": string, "name": string, "img"?: string } ] }`
+
+Empty/missing `q` → `200 { "actors": [] }` without querying the relay.
