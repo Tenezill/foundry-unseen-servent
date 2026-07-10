@@ -45,7 +45,10 @@ Full `SheetViewModel` (see `packages/adapter-sdk`).
 The view model also carries (M8): `conditions` (active effects as badges),
 `concentration` (`{label}` of the concentrated spell or `null`), and, on list
 items, an optional `detail` (the item's own description HTML from the world,
-for a detail view — the client sanitizes it).
+for a detail view — the client sanitizes it). List sections (M19) may carry
+an optional `header` item (e.g. inventory sections: `inventory` for "Carried",
+`inventory.<containerId>` per container — each may have a header showing the
+container's name and weight).
 
 ### `POST /api/actors/:id/intents`
 Body: a single `ResourceIntent`:
@@ -78,6 +81,8 @@ lists everything legal; `actionId` must reference one of them.
 { "kind": "cast",   "actionId": "spell.k9Q2f.cast" }
 { "kind": "use",    "actionId": "feature.p0Wm1.use" }
 { "kind": "equip",  "actionId": "item.X3ab9.equip", "equipped": false }
+{ "kind": "move",   "actionId": "item.X3ab9.move", "containerId": "item.backpack.id" }
+{ "kind": "move",   "actionId": "item.X3ab9.move", "containerId": null }
 { "kind": "rest",   "actionId": "rest.short" }
 { "kind": "rest",   "actionId": "rest.long" }
 { "kind": "deathsave",       "actionId": "deathsave.roll" }
@@ -89,16 +94,22 @@ item target; the gateway runs the matching relay command
 (`short-rest`/`long-rest`/`death-save`/`break-concentration`) and returns the
 fresh sheet (`result` null — these post their own chat card). `cast` no longer
 takes `slotLevel`: the bridge casts at base level only (see M6 known limits).
+`move` (M19) relocates an item to a container or to carried; `containerId` is
+a container-type item id or `null` (carried). No roll or chat card.
 
 Semantics (server-enforced, in this order):
 1. Actor owned by token → else `404`.
 2. `actionId` present in the adapter's action list and `kind` matches →
    else `403 FORBIDDEN_RESOURCE`.
 3. Payload valid (known kind, legal `slotLevel`…) → else `422 INVALID_INTENT`.
-4. Execute via the relay (Foundry rolls, posts chat cards as the character,
+4. For `move`: target (`containerId`) must be a container-type item on the
+   same actor, or `null` → else `422`. No cycles: an item cannot move into
+   itself, and a container cannot move into its own (transitive) contents →
+   else `422`.
+5. Execute via the relay (Foundry rolls, posts chat cards as the character,
    consumes slots/uses itself), then:
    `200 { "result": { "total": 14, "formula": "1d20 + 5", "isCritical": false, "isFumble": false } | null, "sheet": SheetViewModel }`
-   (`result` is null for actions without a roll, e.g. equip.)
+   (`result` is null for actions without a roll, e.g. equip or move.)
 
 Shares the write rate limit with intents (30/min per token).
 
