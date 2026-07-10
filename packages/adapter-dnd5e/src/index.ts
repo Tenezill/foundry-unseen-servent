@@ -1803,13 +1803,11 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     { id: 'xp', label: 'XP', value: numAt(actor.system, 'details.xp.value') ?? 0 },
   ];
 
-  const inventory: ListItem[] = [];
   const features: ListItem[] = [];
   const spells: ListItem[] = [];
   const physicalIds = new Set((actor.items ?? []).filter((i) => PHYSICAL_ITEM_TYPES.has(i.type)).map((i) => i._id));
   for (const item of actor.items ?? []) {
-    if (PHYSICAL_ITEM_TYPES.has(item.type)) inventory.push(inventoryListItem(item, resourceIds, physicalIds));
-    else if (item.type === 'feat') features.push(featureListItem(item, resourceIds));
+    if (item.type === 'feat') features.push(featureListItem(item, resourceIds));
     else if (item.type === 'spell') spells.push(spellListItem(item));
   }
 
@@ -1841,7 +1839,46 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   if (slotIds.length > 0) {
     sections.push({ kind: 'tracks', id: 'slots', label: 'Spell Slots', resourceIds: slotIds });
   }
-  sections.push({ kind: 'list', id: 'inventory', label: 'Inventory', items: inventory });
+  const physicalItems = (actor.items ?? []).filter((i) => PHYSICAL_ITEM_TYPES.has(i.type));
+
+  /** Resolved location: a container id on this sheet, else undefined (Carried). */
+  const locationOf = (item: FoundryItemDoc): string | undefined => {
+    const c = strAt(item.system, 'container');
+    return c !== undefined && c !== '' && c !== item._id && physicalIds.has(c) ? c : undefined;
+  };
+
+  const carried: ListItem[] = [];
+  const byContainer = new Map<string, ListItem[]>();
+  for (const item of physicalItems) {
+    const loc = locationOf(item);
+    const row = inventoryListItem(item, resourceIds, physicalIds);
+    if (loc !== undefined) {
+      const list = byContainer.get(loc);
+      if (list) list.push(row);
+      else byContainer.set(loc, [row]);
+    } else if (item.type !== 'container') {
+      carried.push(row); // containers render as sections, not Carried rows
+    }
+  }
+
+  sections.push({ kind: 'list', id: 'inventory', label: 'Carried', items: carried });
+  for (const item of physicalItems) {
+    if (item.type !== 'container') continue;
+    const contents = byContainer.get(item._id) ?? [];
+    const header = inventoryListItem(item, resourceIds, physicalIds);
+    // Presentation-only contents weight (direct contents; same parsing as rows).
+    let total = 0;
+    let unit = 'lb';
+    for (const child of physicalItems) {
+      if (locationOf(child) !== item._id) continue;
+      const w = numAt(child.system, 'weight.value');
+      if (w === undefined || w <= 0) continue;
+      total += w * (numAt(child.system, 'quantity') ?? 1);
+      unit = strAt(child.system, 'weight.units') || unit;
+    }
+    if (total > 0) header.sub = `${header.sub} · Σ ${Number(total.toFixed(2))} ${unit}`;
+    sections.push({ kind: 'list', id: `inventory.${item._id}`, label: item.name, header, items: contents });
+  }
   sections.push({ kind: 'stats', id: 'gearstats', label: 'Gear', stats: gearStats(actor) });
   sections.push({ kind: 'list', id: 'features', label: 'Features', items: features });
   if (spells.length > 0) {

@@ -142,7 +142,7 @@ export interface RollEntry {
 
 export type SheetSection =
   | { kind: 'stats'; id: string; label: string; stats: Stat[] }
-  | { kind: 'list'; id: string; label: string; items: ListItem[] }
+  | { kind: 'list'; id: string; label: string; items: ListItem[]; header?: ListItem }
   /** Renders the referenced resources as interactive trackers. */
   | { kind: 'tracks'; id: string; label: string; resourceIds: string[] };
 

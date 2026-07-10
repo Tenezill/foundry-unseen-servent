@@ -199,15 +199,19 @@ describe('M12 inventory rows', () => {
   });
 
   it('containerId is set when system.container matches another physical item _id', () => {
-    // Rewire Torch into the actually-present Quiver (B2OSARI9hcSzaai9).
+    // Rewire Torch into the actually-present Quiver (B2OSARI9hcSzaai9). Torch
+    // now lives inside the Quiver's own location-first section (M19); the
+    // containerId field inventoryListItem sets is still correct there.
     const rewired: FoundryActorDoc = {
       ...martialCaptured,
       items: (martialCaptured.items ?? []).map((i) =>
         i.name === 'Torch' ? { ...i, system: { ...i.system, container: 'B2OSARI9hcSzaai9' } } : i,
       ),
     };
-    expect(inventoryRow(rewired, 'Torch').containerId).toBe('B2OSARI9hcSzaai9');
-    expect(inventoryRow(rewired, 'Quiver').containerId).toBeUndefined();
+    const quiver = section(rewired, 'inventory.B2OSARI9hcSzaai9');
+    if (quiver.kind !== 'list') throw new Error('quiver section must be a list section');
+    expect(quiver.items.find((i) => i.label === 'Torch')?.containerId).toBe('B2OSARI9hcSzaai9');
+    expect(quiver.header?.containerId).toBeUndefined();
   });
 
   it('dangling container refs yield no containerId (captured fixtures: all refs are compendium ids)', () => {
@@ -246,11 +250,13 @@ describe('M12 inventory rows', () => {
 // Gear stats section: attunement counter + carried weight
 
 describe('M12 gearstats section', () => {
-  it('sits right after the inventory section with id "gearstats", label "Gear"', () => {
+  it('sits right after the inventory sections (Carried + per-container) with id "gearstats", label "Gear"', () => {
+    // M19: 'inventory' (Carried) is followed by one 'inventory.<cid>' section
+    // per container (martialCaptured carries 3) before gearstats.
     const vm = dnd5eAdapter.toViewModel(martialCaptured);
-    const idx = vm.sections.findIndex((s) => s.id === 'inventory');
-    expect(idx).toBeGreaterThanOrEqual(0);
-    const gear = vm.sections[idx + 1];
+    const lastInventoryIdx = vm.sections.reduce((last, s, i) => (/^inventory/.test(s.id) ? i : last), -1);
+    expect(lastInventoryIdx).toBeGreaterThanOrEqual(0);
+    const gear = vm.sections[lastInventoryIdx + 1];
     expect(gear).toMatchObject({ kind: 'stats', id: 'gearstats', label: 'Gear' });
   });
 

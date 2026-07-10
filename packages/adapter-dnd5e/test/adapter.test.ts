@@ -24,6 +24,12 @@ function section(actor: FoundryActorDoc, id: string): SheetSection {
   return s;
 }
 
+// The workspace has no @types/node and this package's tsconfig lib is
+// ES2022, which doesn't declare the (Node 17+/browser) global structuredClone
+// used below to build a mutated copy of a fixture without touching the
+// original object other tests share (same declaration as actions.test.ts).
+declare const structuredClone: <T>(value: T) => T;
+
 function expectIntentError(fn: () => unknown, code: IntentError['code']): void {
   let caught: unknown;
   try {
@@ -1379,6 +1385,73 @@ describe('biography & personality (M11)', () => {
   it('an empty biography HTML string yields no bio row', () => {
     const blank = withDetails(martialCaptured, { biography: { value: '', public: '' } });
     expect(dnd5eAdapter.toViewModel(blank).sections.some((s) => s.id === 'biography')).toBe(false);
+  });
+});
+
+describe('inventory location sections', () => {
+  const withRealContainment = () => {
+    const actor = structuredClone(martialCaptured);
+    const items = actor.items as Array<{ _id: string; system: Record<string, unknown> }>;
+    // Repair the captured dangling refs into a real containment chain:
+    // Rations -> Backpack, Pouch -> Backpack (nested container).
+    items.find((i) => i._id === 'ulOW5qzq7q2edJTP')!.system.container = 'wYUZWMKa6FntpIvv';
+    items.find((i) => i._id === 'T8BW5LfQIDdur78q')!.system.container = 'wYUZWMKa6FntpIvv';
+    return actor;
+  };
+
+  const inventorySections = (actor: FoundryActorDoc) =>
+    dnd5eAdapter.toViewModel(actor).sections.filter(
+      (s): s is Extract<SheetSection, { kind: 'list' }> => s.kind === 'list' && /^inventory/.test(s.id),
+    );
+
+  it('emits Carried first, then one section per container in sheet order', () => {
+    const secs = inventorySections(withRealContainment());
+    expect(secs[0]).toMatchObject({ id: 'inventory', label: 'Carried' });
+    const containerSecs = secs.slice(1);
+    expect(containerSecs.map((s) => s.id)).toEqual(
+      expect.arrayContaining(['inventory.wYUZWMKa6FntpIvv', 'inventory.T8BW5LfQIDdur78q', 'inventory.B2OSARI9hcSzaai9']),
+    );
+    expect(containerSecs.every((s) => s.header !== undefined)).toBe(true);
+  });
+
+  it('direct contents land in their container section; containers are not Carried rows', () => {
+    const secs = inventorySections(withRealContainment());
+    const backpack = secs.find((s) => s.id === 'inventory.wYUZWMKa6FntpIvv')!;
+    expect(backpack.items.map((i) => i.id)).toEqual(
+      expect.arrayContaining(['ulOW5qzq7q2edJTP', 'T8BW5LfQIDdur78q']), // Rations + nested Pouch as a row
+    );
+    const carried = secs.find((s) => s.id === 'inventory')!;
+    expect(carried.items.map((i) => i.id)).not.toContain('wYUZWMKa6FntpIvv');
+    expect(carried.items.map((i) => i.id)).not.toContain('ulOW5qzq7q2edJTP');
+  });
+
+  it('a nested container still gets its own top-level section', () => {
+    const secs = inventorySections(withRealContainment());
+    expect(secs.some((s) => s.id === 'inventory.T8BW5LfQIDdur78q')).toBe(true);
+  });
+
+  it('dangling refs count as Carried (captured fixture, unrepaired)', () => {
+    const secs = inventorySections(martialCaptured);
+    const carried = secs.find((s) => s.id === 'inventory')!;
+    expect(carried.items.map((i) => i.id)).toContain('ulOW5qzq7q2edJTP'); // its captured ref dangles
+  });
+
+  it('an empty container renders as a section with zero items', () => {
+    const secs = inventorySections(withRealContainment());
+    const quiver = secs.find((s) => s.id === 'inventory.B2OSARI9hcSzaai9')!;
+    expect(quiver.items).toEqual([]);
+  });
+
+  it("the header's sub carries the contents weight total", () => {
+    const actor = withRealContainment();
+    // give Rations a known weight for a deterministic sum
+    const rations = (actor.items as Array<{ _id: string; system: Record<string, unknown> }>).find(
+      (i) => i._id === 'ulOW5qzq7q2edJTP',
+    )!;
+    rations.system.quantity = 2;
+    rations.system.weight = { value: 1, units: 'lb' };
+    const backpack = inventorySections(actor).find((s) => s.id === 'inventory.wYUZWMKa6FntpIvv')!;
+    expect(backpack.header!.sub).toMatch(/Σ [\d.]+ lb/);
   });
 });
 
