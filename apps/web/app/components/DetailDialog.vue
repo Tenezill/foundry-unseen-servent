@@ -7,6 +7,20 @@
       </div>
       <!-- eslint-disable-next-line vue/no-v-html -- sanitized world content -->
       <div class="body" v-html="clean" />
+      <div v-if="locations && locations.length" class="move-block">
+        <p class="move-title">Move to…</p>
+        <button
+          v-for="loc in locations"
+          :key="loc.id ?? 'carried'"
+          class="move-btn"
+          type="button"
+          :disabled="loc.current || moveBusy"
+          :class="{ current: loc.current, pending: moveBusy }"
+          @click="emit('move', loc.id)"
+        >
+          {{ loc.label }}<span v-if="loc.current" class="current-tag"> · here</span>
+        </button>
+      </div>
       <button
         v-if="danger"
         class="danger-btn"
@@ -28,8 +42,10 @@ const props = defineProps<{
   /** Label of an optional destructive action (e.g. "Forget spell"). */
   danger?: string
   dangerBusy?: boolean
+  locations?: Array<{ id: string | null; label: string; current: boolean }>
+  moveBusy?: boolean
 }>()
-const emit = defineEmits<{ (e: 'close'): void; (e: 'danger'): void }>()
+const emit = defineEmits<{ (e: 'close'): void; (e: 'danger'): void; (e: 'move', id: string | null): void }>()
 
 const clean = computed(() => sanitizeHtml(props.detail))
 </script>
@@ -122,6 +138,39 @@ const clean = computed(() => sanitizeHtml(props.detail))
   max-width: 100%;
   height: auto;
   border-radius: 8px;
+}
+
+.move-block {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.move-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.move-btn {
+  min-height: 42px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 0.85rem;
+  text-align: left;
+  padding: 0 14px;
+}
+
+.move-btn.current {
+  opacity: 0.55;
+}
+
+.move-btn.pending {
+  opacity: 0.55;
 }
 
 .danger-btn {

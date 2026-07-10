@@ -119,7 +119,7 @@
           </template>
 
           <CurrencyWallet
-            v-if="activeTab === 'resources' && walletResources.length"
+            v-if="activeTab === 'inventory' && walletResources.length"
             :resources="walletResources"
             :busy="busy"
             :readonly="offline"
@@ -166,7 +166,10 @@
         :detail="detailFor.detail"
         :danger="detailFor.removable && !offline ? REMOVE_LABELS[detailFor.removable] ?? 'Remove' : undefined"
         :danger-busy="removeBusy"
+        :locations="detailLocations"
+        :move-busy="moveBusy"
         @danger="onRemove"
+        @move="onMove"
         @close="detailFor = null"
       />
       <LibrarySearch
@@ -280,7 +283,14 @@ const activeTab = ref<TabId>('overview')
 const busy = ref<string | null>(null)
 const numpadFor = ref<string | null>(null)
 const confirmState = ref<{ message: string; resolve: (ok: boolean) => void } | null>(null)
-const detailFor = ref<{ title: string; detail: string; itemId?: string; removable?: string } | null>(null)
+const detailFor = ref<{
+  title: string
+  detail: string
+  itemId?: string
+  removable?: string
+  moveActionId?: string
+  currentContainerId?: string | null
+} | null>(null)
 const showLog = ref(false)
 
 const offline = computed(() => conn.value === 'offline')
@@ -323,6 +333,25 @@ const hasRest = computed(() => !!actionMap.value['rest.short'] || !!actionMap.va
 const walletResources = computed(() =>
   (sheet.value?.resources ?? []).filter((r) => r.group === 'currency'),
 )
+
+/** Container sections double as the move-target list. */
+const containerOptions = computed(() =>
+  (sheet.value?.sections ?? [])
+    .filter((s): s is Extract<SheetSection, { kind: 'list' }> => s.kind === 'list' && s.header !== undefined)
+    .map((s) => ({ id: s.id.slice('inventory.'.length), label: s.label })),
+)
+
+const detailLocations = computed(() => {
+  const d = detailFor.value
+  if (!d?.moveActionId || offline.value) return undefined
+  const current = d.currentContainerId ?? null
+  return [
+    { id: null as string | null, label: 'Carried', current: current === null },
+    ...containerOptions.value
+      .filter((c) => c.id !== d.itemId) // an item can't move into itself
+      .map((c) => ({ id: c.id as string | null, label: c.label, current: current === c.id })),
+  ]
+})
 
 /* ---- tab routing -------------------------------------------------------- */
 
@@ -414,9 +443,8 @@ const renderableSections = computed(() =>
 const tabEmpty = computed(() => {
   if (activeTab.value === 'actions') return false
   if (renderableSections.value.length > 0) return false
-  if (activeTab.value === 'resources' && (walletResources.value.length > 0 || hasRest.value || dying.value)) {
-    return false
-  }
+  if (activeTab.value === 'resources' && (hasRest.value || dying.value)) return false
+  if (activeTab.value === 'inventory' && walletResources.value.length > 0) return false
   return true
 })
 
@@ -677,12 +705,15 @@ function onEndConcentration(): void {
 function onDetail(item: ListItem): void {
   // Open the sheet when there is a description to read OR a reachable remove
   // action to host — description-less gear/feats are still removable (M13).
-  if (!item.detail && !(item.removable && !offline.value)) return
+  // The actions map tells us whether a move descriptor exists (M19).
+  const moveActionId = actionMap.value[`item.${item.id}.move`] ? `item.${item.id}.move` : undefined
+  if (!item.detail && !(item.removable && !offline.value) && !moveActionId) return
   detailFor.value = {
     title: item.label,
     detail: item.detail ?? '',
     itemId: item.id,
     ...(item.removable ? { removable: item.removable } : {}),
+    ...(moveActionId ? { moveActionId, currentContainerId: item.containerId ?? null } : {}),
   }
 }
 
@@ -696,6 +727,7 @@ const libPreviewUuid = ref<string | null>(null)
 const libBusy = ref(false)
 const libSearching = ref(false)
 const removeBusy = ref(false)
+const moveBusy = ref(false)
 
 const libraryAddLabel = computed(
   () =>
@@ -800,6 +832,26 @@ async function onRemove(): Promise<void> {
     toast.show('Couldn’t remove that.')
   } finally {
     removeBusy.value = false
+  }
+}
+
+async function onMove(targetId: string | null): Promise<void> {
+  const d = detailFor.value
+  if (!d?.moveActionId || moveBusy.value || offline.value) return
+  const destination = targetId === null ? 'Carried' : containerOptions.value.find((c) => c.id === targetId)?.label ?? 'container'
+  moveBusy.value = true
+  try {
+    const res = await api<ActionResponse>(`/api/actors/${actorId.value}/actions`, {
+      method: 'POST',
+      body: { kind: 'move', actionId: d.moveActionId, containerId: targetId },
+    })
+    applySheet(res.sheet)
+    detailFor.value = null
+    toast.show(`${d.title} → ${destination}`)
+  } catch {
+    toast.show('Couldn’t move that.')
+  } finally {
+    moveBusy.value = false
   }
 }
 
