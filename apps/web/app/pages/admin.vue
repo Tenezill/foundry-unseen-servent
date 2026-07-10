@@ -162,9 +162,14 @@ async function login(): Promise<void> {
     password.value = ''
   } catch (err) {
     clearAdminSecret()
-    loginError.value = errorStatus(err) === 404
-      ? 'Admin access is not enabled on this server.'
-      : 'Wrong password.'
+    const status = errorStatus(err)
+    if (status === 401) {
+      loginError.value = 'Wrong password.'
+    } else if (status === 404) {
+      loginError.value = 'Admin access is not enabled on this server.'
+    } else {
+      loginError.value = "Couldn't reach the server."
+    }
   } finally {
     busy.value = false
   }
@@ -313,6 +318,10 @@ async function copy(): Promise<void> {
 }
 
 onMounted(() => void boot())
+
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer)
+})
 </script>
 
 <style scoped>
