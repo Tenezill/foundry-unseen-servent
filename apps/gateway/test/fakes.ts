@@ -120,6 +120,11 @@ export class FakeRelay implements RelayPort {
     return structuredClone(this.rollResult);
   }
 
+  /** When true, useAbility throws a RelayError-shaped 408 (the relay's
+   *  timeout while Foundry's usage workflow waits on optional UI, e.g. an
+   *  area item's template prompt — M16). */
+  useAbilityTimeout = false;
+
   async useAbility(
     endpoint: 'use-item' | 'use-spell' | 'use-feature',
     actorUuid: string,
@@ -127,6 +132,12 @@ export class FakeRelay implements RelayPort {
     opts: { slotLevel?: number } = {},
   ): Promise<Record<string, unknown>> {
     this.useAbilityCalls.push({ endpoint, actorUuid, itemUuid, opts: { ...opts } });
+    if (this.useAbilityTimeout) {
+      const err = new Error(`relay /dnd5e/${endpoint} -> 408: request timed out`) as Error & { status: number };
+      err.name = 'RelayError';
+      err.status = 408;
+      throw err;
+    }
     if (this.actionError) this.throwActionError(`dnd5e/${endpoint}`);
     return structuredClone(this.useAbilityResult);
   }

@@ -661,7 +661,18 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           // then the adapter-computed display roll fires, then the optional
           // self-heal write. All field paths are adapter-supplied so this
           // stays system-agnostic.
-          await relay.useAbility(action.use, `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {});
+          try {
+            await relay.useAbility(action.use, `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {});
+          } catch (err) {
+            // A relay 408 means Foundry's usage workflow is waiting on
+            // optional UI (live-verified 2026-07-10: Bead of Force's
+            // area-template prompt) — consumption has already completed by
+            // then, so the display roll must still fire. Anything else
+            // (unknown item, permissions) stays fatal.
+            const status = (err as { status?: unknown }).status;
+            if (!(err instanceof Error && err.name === 'RelayError' && status === 408)) throw err;
+            req.log.warn({ err }, 'use-and-roll: activation timed out on Foundry UI; continuing with the roll');
+          }
           const rolled = extractRoll(await relay.rollFormula(`Actor.${id}`, action.formula, action.flavor));
           result = rolled;
           if (rolled !== null && action.heal) {

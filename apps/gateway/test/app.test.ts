@@ -589,6 +589,47 @@ describe('actions', () => {
     expect(relay.deleteCalls).toEqual([]);
     expect(res.json().result).toEqual({ total: 7, formula: '1d8 + 2', isCritical: false, isFumble: false });
   });
+
+  it('use-and-roll tolerates a relay 408 on the activation and still rolls (M16: Foundry UI wait)', async () => {
+    // Live-verified 2026-07-10: Bead of Force's use-item times out at the
+    // relay while Foundry waits on the area-template prompt — consumption
+    // has already completed by then, so the display roll must still fire.
+    await app?.close();
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 20, 30));
+    relay.useAbilityTimeout = true;
+    relay.rollResult = { formula: '5d4', total: 11, isCritical: false, isFumble: false };
+    app = useAndRollApp(
+      relay,
+      useAndRollAdapter(
+        { endpoint: 'use-and-roll', use: 'use-item', itemId: 'i1', formula: '5d4', flavor: 'Bead of Force — Damage' },
+        'item.i1.use',
+      ),
+    );
+    const res = await post(app, 'a1', { kind: 'use', actionId: 'item.i1.use' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.useAbilityCalls).toHaveLength(1);
+    expect(res.json().result).toEqual({ total: 11, formula: '5d4', isCritical: false, isFumble: false });
+  });
+
+  it('use-and-roll stays fatal on non-timeout activation failures', async () => {
+    await app?.close();
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 20, 30));
+    relay.actionError = true; // generic relay failure, not a 408
+    app = useAndRollApp(
+      relay,
+      useAndRollAdapter(
+        { endpoint: 'use-and-roll', use: 'use-item', itemId: 'i1', formula: '5d4', flavor: 'Bead of Force — Damage' },
+        'item.i1.use',
+      ),
+    );
+    const res = await post(app, 'a1', { kind: 'use', actionId: 'item.i1.use' });
+    expect(res.statusCode).toBe(502);
+    // The roll never fires when the activation genuinely failed.
+    expect(relay.rollCalls).toEqual([]);
+    expect(res.body).not.toContain(FAKE_API_KEY);
+  });
 });
 
 describe('SSE events', () => {
