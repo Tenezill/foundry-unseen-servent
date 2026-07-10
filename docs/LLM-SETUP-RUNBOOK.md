@@ -241,7 +241,8 @@ The gateway requires an empty `players.yaml` file at startup (the FilePlayerStor
 reads it synchronously); create it before the first start:
 
 ```bash
-echo "players: []" > apps/gateway/players.yaml
+# idempotent: never overwrite a live install's player hashes
+test -f apps/gateway/players.yaml || echo "players: []" > apps/gateway/players.yaml
 ```
 
 Then configure and start the gateway:
