@@ -1,4 +1,5 @@
 /** Thin $fetch wrapper: gateway base URL + bearer token on every request. */
+import { getAdminSecret } from './useAuth'
 
 export interface ApiRequestOptions {
   method?: 'GET' | 'POST' | 'DELETE'
@@ -34,4 +35,20 @@ export function errorStatus(err: unknown): number | undefined {
 export function errorData<T>(err: unknown): T | undefined {
   if (typeof err !== 'object' || err === null) return undefined
   return (err as { data?: T }).data
+}
+
+/** Same wrapper as useApi, but authenticated with the admin credential. */
+export function useAdminApi() {
+  const config = useRuntimeConfig()
+  const base = config.public.apiBase || ''
+
+  async function adminApi<T>(path: string, opts: ApiRequestOptions = {}): Promise<T> {
+    return await $fetch<T>(`${base}${path}`, {
+      method: opts.method ?? 'GET',
+      body: opts.body as Record<string, unknown> | undefined,
+      headers: { authorization: `Bearer ${getAdminSecret() ?? ''}` },
+    })
+  }
+
+  return { adminApi, base }
 }

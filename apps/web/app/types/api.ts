@@ -65,3 +65,24 @@ export interface LibrarySearchResponse {
 export interface LibraryPreviewResponse {
   preview: ListItem
 }
+
+// ---- admin console (M18) ----------------------------------------------------
+
+export interface AdminPlayer {
+  name: string
+  gm: boolean
+  actors: Array<{ id: string; name?: string }>
+}
+
+export interface AdminPlayersResponse {
+  players: AdminPlayer[]
+}
+
+export interface AdminInviteResponse {
+  token: string
+  player?: { name: string; actorIds: string[]; gm: boolean }
+}
+
+export interface AdminActorsResponse {
+  actors: Array<{ id: string; name: string; img?: string }>
+}

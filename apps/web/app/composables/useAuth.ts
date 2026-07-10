@@ -58,3 +58,21 @@ export function loadCachedSheet(actorId: string): SheetViewModel | null {
 export function saveCachedSheet(actorId: string, sheet: SheetViewModel): void {
   safeSet(sheetKey(actorId), JSON.stringify(sheet))
 }
+
+const ADMIN_KEY = 'fc:admin'
+
+export function getAdminSecret(): string | null {
+  return safeGet(ADMIN_KEY)
+}
+
+export function setAdminSecret(secret: string): void {
+  safeSet(ADMIN_KEY, secret)
+}
+
+export function clearAdminSecret(): void {
+  try {
+    localStorage.removeItem(ADMIN_KEY)
+  } catch {
+    /* noop */
+  }
+}
