@@ -237,6 +237,15 @@ actually used.
 
 ## Phase 5 — Gateway
 
+The gateway requires an empty `players.yaml` file at startup (the FilePlayerStore
+reads it synchronously); create it before the first start:
+
+```bash
+echo "players: []" > apps/gateway/players.yaml
+```
+
+Then configure and start the gateway:
+
 ```bash
 cd apps/gateway
 ```
@@ -285,10 +294,10 @@ see Lifetimes below).
 
 Scripting alternative: `node scripts/make-invite.mjs <name> <actorId>` still
 exists for bulk/unattended provisioning — it prints a join link and a YAML
-block, but you'd then have to hand-edit `apps/gateway/players.yaml` and
-restart the gateway to pick it up, which the console above avoids entirely;
-prefer the console unless you're scripting many players at once outside an
-interactive session.
+block. If you hand-edit `apps/gateway/players.yaml`, the hot-reload picks up
+the change live within ~1s — no restart needed, which the console above
+streamlines; prefer the console unless you're scripting many players at once
+outside an interactive session.
 
 ---
 
