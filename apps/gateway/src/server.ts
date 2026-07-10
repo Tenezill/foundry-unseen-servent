@@ -5,13 +5,13 @@
  */
 import { FoundryRelayClient } from '@companion/foundry-client';
 import { loadConfig, redactUrlToken } from './config.js';
-import { loadPlayers } from './players.js';
 import { createDefaultRegistry } from './registry.js';
 import { buildApp } from './app.js';
+import { FilePlayerStore } from './player-store.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  const players = loadPlayers(cfg.playersFile);
+  const store = new FilePlayerStore(cfg.playersFile);
   const relay = new FoundryRelayClient({
     baseUrl: cfg.relayUrl,
     apiKey: cfg.relayApiKey,
@@ -20,7 +20,7 @@ async function main(): Promise<void> {
 
   const app = buildApp({
     relay,
-    players,
+    players: store,
     registry: createDefaultRegistry(),
     defaultSystemId: cfg.defaultSystemId,
     livePollMs: cfg.livePollMs,
@@ -49,7 +49,10 @@ async function main(): Promise<void> {
     },
   });
 
+  store.startWatching({ warn: (obj, msg) => app.log.warn(obj, msg) });
+
   const close = async (): Promise<void> => {
+    store.stopWatching();
     await app.close().catch(() => undefined);
     process.exit(0);
   };

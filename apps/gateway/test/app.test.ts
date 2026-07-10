@@ -13,7 +13,7 @@ import { IntentError, type SystemAdapter } from '@companion/adapter-sdk';
 import { buildApp } from '../src/app.js';
 import { sha256Hex, type Player } from '../src/players.js';
 import { createRegistry } from '../src/registry.js';
-import { actionlessAdapter, actorDoc, fakeAdapter, FakeRelay, FAKE_API_KEY, FAKE_RELAY_URL } from './fakes.js';
+import { actionlessAdapter, actorDoc, fakeAdapter, FakeRelay, FAKE_API_KEY, FAKE_RELAY_URL, memoryPlayers } from './fakes.js';
 
 const ANNA_TOKEN = 'anna-invite-token-123';
 const BOB_TOKEN = 'bob-invite-token-456';
@@ -34,7 +34,7 @@ function setup(overrides: { rateLimitMax?: number } = {}): { app: FastifyInstanc
   relay.entities.set('Actor.b1', actorDoc('b1', 'Mysterious Stranger', 8, 8));
   app = buildApp({
     relay,
-    players: makePlayers(),
+    players: memoryPlayers(makePlayers()),
     registry: createRegistry([fakeAdapter]),
     defaultSystemId: 'fake',
     livePollMs: 10_000,
@@ -275,7 +275,7 @@ describe('actions', () => {
     relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
     app = buildApp({
       relay,
-      players: makePlayers(),
+      players: memoryPlayers(makePlayers()),
       registry: createRegistry([actionlessAdapter]),
       defaultSystemId: 'fake',
       livePollMs: 10_000,
@@ -503,7 +503,7 @@ describe('actions', () => {
   function useAndRollApp(relay: FakeRelay, adapter: SystemAdapter): FastifyInstance {
     return buildApp({
       relay,
-      players: makePlayers(),
+      players: memoryPlayers(makePlayers()),
       registry: createRegistry([adapter]),
       defaultSystemId: 'fake',
       livePollMs: 10_000,
@@ -748,7 +748,7 @@ describe('adapter enrichment', () => {
     };
     app = buildApp({
       relay,
-      players: makePlayers(),
+      players: memoryPlayers(makePlayers()),
       registry: createRegistry([enrichingAdapter]),
       defaultSystemId: 'fake',
       livePollMs: 10_000,
@@ -950,7 +950,7 @@ describe('library endpoints', () => {
     const { library: _library, ...libraryless } = fakeAdapter;
     const bare = buildApp({
       relay,
-      players: makePlayers(),
+      players: memoryPlayers(makePlayers()),
       registry: createRegistry([libraryless]),
       defaultSystemId: 'fake',
       livePollMs: 10_000,

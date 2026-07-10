@@ -32,6 +32,11 @@ import { verifyToken, type Player } from './players.js';
 import { LiveManager } from './live.js';
 import type { AdapterRegistry } from './registry.js';
 
+/** Live view of the player list; backed by FilePlayerStore in production. */
+export interface PlayersPort {
+  list(): readonly Player[];
+}
+
 /** The slice of FoundryRelayClient the gateway uses (fakeable in tests). */
 export interface RelayPort {
   listClients(): Promise<unknown>;
@@ -87,7 +92,7 @@ export interface RelayPort {
 
 export interface GatewayDeps {
   relay: RelayPort;
-  players: readonly Player[];
+  players: PlayersPort;
   registry: AdapterRegistry;
   /** Adapter used when the relay doc carries no system id. Default "dnd5e". */
   defaultSystemId?: string;
@@ -314,7 +319,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
     (allowQueryToken: boolean) =>
     async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
       const token = extractToken(req, allowQueryToken);
-      const player = token === null ? null : verifyToken(players, token);
+      const player = token === null ? null : verifyToken(players.list(), token);
       if (!player) {
         sendError(reply, 401, 'UNAUTHORIZED', 'missing or unknown token');
         return;

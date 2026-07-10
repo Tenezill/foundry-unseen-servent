@@ -12,11 +12,17 @@ import type {
 } from '@companion/adapter-sdk';
 import { clamp, IntentError } from '@companion/adapter-sdk';
 import type { RawRoll } from '@companion/foundry-client';
-import type { RelayPort } from '../src/app.js';
+import type { PlayersPort, RelayPort } from '../src/app.js';
+import type { Player } from '../src/players.js';
 
 /** Secret strings that must NEVER show up in any response body. */
 export const FAKE_API_KEY = 'super-secret-relay-key-a1b2c3d4e5';
 export const FAKE_RELAY_URL = 'http://relay-internal:3010';
+
+/** Wrap a fixed array as the live player source buildApp now expects. */
+export function memoryPlayers(players: Player[]): PlayersPort {
+  return { list: () => players };
+}
 
 function setPath(target: Record<string, unknown>, dotted: string, value: unknown): void {
   const parts = dotted.split('.');
