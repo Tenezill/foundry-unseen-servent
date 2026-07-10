@@ -26,7 +26,9 @@ afterEach(async () => {
   app = null;
 });
 
-async function setup(opts: { password?: string | undefined } = { password: ADMIN_PW }) {
+async function setup(
+  opts: { password?: string | undefined; adminNameTimeoutMs?: number } = { password: ADMIN_PW },
+) {
   const dir = await mkdtemp(join(tmpdir(), 'gw-admin-'));
   const file = join(dir, 'players.yaml');
   await writeFile(file, INITIAL, 'utf8');
@@ -40,6 +42,7 @@ async function setup(opts: { password?: string | undefined } = { password: ADMIN
     defaultSystemId: 'fake',
     livePollMs: 10_000,
     pingMs: 60_000,
+    ...(opts.adminNameTimeoutMs !== undefined ? { adminNameTimeoutMs: opts.adminNameTimeoutMs } : {}),
     ...(opts.password === undefined ? {} : { admin: { password: opts.password, store } }),
   });
   return { app, store, relay, file };
@@ -92,6 +95,31 @@ describe('GET /api/admin/players', () => {
     ]);
     expect(res.body).not.toMatch(/[0-9a-f]{64}/);
   });
+
+  it(
+    'a relay call that never settles cannot hang the route — the id renders bare',
+    { timeout: 2000 },
+    async () => {
+      const { app, store, relay } = await setup({ password: ADMIN_PW, adminNameTimeoutMs: 50 });
+      await store.create('Ben', ['stall-id']);
+      // The relay occasionally accepts a request and never responds; the
+      // route must treat that exactly like a rejected lookup (best-effort).
+      const original = relay.getEntity.bind(relay);
+      relay.getEntity = (uuid: string) =>
+        uuid === 'Actor.stall-id'
+          ? new Promise<Record<string, unknown> | null>(() => {})
+          : original(uuid);
+      const res = await app.inject({ method: 'GET', url: '/api/admin/players', headers: asAdmin });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as {
+        players: Array<{ name: string; gm: boolean; actors: Array<{ id: string; name?: string }> }>;
+      };
+      expect(body.players).toEqual([
+        { name: 'Anna', gm: true, actors: [{ id: 'a1', name: 'Sariel' }] },
+        { name: 'Ben', gm: false, actors: [{ id: 'stall-id' }] },
+      ]);
+    },
+  );
 
   it('renders unresolvable actor ids without a name', async () => {
     const { app, store } = await setup();

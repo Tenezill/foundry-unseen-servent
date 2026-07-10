@@ -120,6 +120,8 @@ export interface GatewayDeps {
   logger?: FastifyServerOptions['logger'];
   /** When present (non-empty password), enables the /api/admin/* surface. */
   admin?: { password: string; store: AdminStorePort };
+  /** Per-actor name-resolution budget for the admin console. Default 3000. */
+  adminNameTimeoutMs?: number;
 }
 
 type ErrorCode =
@@ -260,6 +262,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   const defaultSystemId = deps.defaultSystemId ?? 'dnd5e';
   const pingMs = deps.pingMs ?? 25_000;
   const livePollMs = deps.livePollMs ?? 3_000;
+  const adminNameTimeoutMs = deps.adminNameTimeoutMs ?? 3_000;
   const limiter = new SlidingWindowLimiter(deps.rateLimitMax ?? 30, deps.rateLimitWindowMs ?? 60_000);
   const { relay, players, registry } = deps;
 
@@ -409,7 +412,13 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
     await Promise.all(
       ids.map(async (id) => {
         try {
-          const doc = await relay.getEntity(`Actor.${id}`);
+          // The relay occasionally accepts a request and never responds; a
+          // never-settling promise defeats the catch below, so every lookup
+          // is raced against a budget. Timeout -> null -> id renders bare.
+          const doc = await Promise.race([
+            relay.getEntity(`Actor.${id}`),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), adminNameTimeoutMs)),
+          ]);
           if (doc !== null && typeof doc.name === 'string') names.set(id, doc.name);
         } catch {
           /* best-effort: unresolved ids render bare */
