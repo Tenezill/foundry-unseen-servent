@@ -24,6 +24,7 @@ async function main(): Promise<void> {
     registry: createDefaultRegistry(),
     defaultSystemId: cfg.defaultSystemId,
     livePollMs: cfg.livePollMs,
+    ...(cfg.adminPassword !== undefined ? { admin: { password: cfg.adminPassword, store } } : {}),
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
       redact: {

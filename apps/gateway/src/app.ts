@@ -28,13 +28,22 @@ import type {
 } from '@companion/adapter-sdk';
 import { IntentError } from '@companion/adapter-sdk';
 import type { RawRoll } from '@companion/foundry-client';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { verifyToken, type Player } from './players.js';
+import { PlayerStoreError } from './player-store.js';
 import { LiveManager } from './live.js';
 import type { AdapterRegistry } from './registry.js';
 
 /** Live view of the player list; backed by FilePlayerStore in production. */
 export interface PlayersPort {
   list(): readonly Player[];
+}
+
+/** Mutating store used by the admin console (FilePlayerStore in production). */
+export interface AdminStorePort extends PlayersPort {
+  create(name: string, actorIds: string[]): Promise<{ token: string; player: Player }>;
+  rotate(name: string): Promise<{ token: string }>;
+  remove(name: string): Promise<void>;
 }
 
 /** The slice of FoundryRelayClient the gateway uses (fakeable in tests). */
@@ -109,6 +118,8 @@ export interface GatewayDeps {
   /** Rate-limit window. Default 60000. */
   rateLimitWindowMs?: number;
   logger?: FastifyServerOptions['logger'];
+  /** When present (non-empty password), enables the /api/admin/* surface. */
+  admin?: { password: string; store: AdminStorePort };
 }
 
 type ErrorCode =
@@ -327,6 +338,26 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       req.player = player;
     };
 
+  // ---- admin (M18): env-credential surface, disabled unless configured -----
+
+  const adminHash =
+    deps.admin !== undefined && deps.admin.password !== ''
+      ? createHash('sha256').update(deps.admin.password, 'utf8').digest()
+      : null;
+  const adminStore = adminHash !== null ? (deps.admin as { store: AdminStorePort }).store : null;
+
+  const requireAdmin = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (adminHash === null) {
+      sendError(reply, 404, 'NOT_FOUND', 'not found');
+      return;
+    }
+    const presented = extractToken(req, false);
+    const ok =
+      presented !== null &&
+      timingSafeEqual(createHash('sha256').update(presented, 'utf8').digest(), adminHash);
+    if (!ok) sendError(reply, 401, 'UNAUTHORIZED', 'missing or unknown credential');
+  };
+
   // ---- envelope for framework-level errors ---------------------------------
 
   app.setErrorHandler((err, req, reply) => {
@@ -370,6 +401,112 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       player: { name: player.name, actorIds: player.actorIds, gm: player.gm === true },
     });
   });
+
+  app.get('/api/admin/players', { preHandler: requireAdmin }, async (_req, reply) => {
+    const entries = (adminStore as AdminStorePort).list();
+    const ids = [...new Set(entries.flatMap((p) => p.actorIds))];
+    const names = new Map<string, string>();
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const doc = await relay.getEntity(`Actor.${id}`);
+          if (doc !== null && typeof doc.name === 'string') names.set(id, doc.name);
+        } catch {
+          /* best-effort: unresolved ids render bare */
+        }
+      }),
+    );
+    return reply.code(200).send({
+      players: entries.map((p) => ({
+        name: p.name,
+        gm: p.gm === true,
+        actors: p.actorIds.map((id) => {
+          const name = names.get(id);
+          return name === undefined ? { id } : { id, name };
+        }),
+      })),
+    });
+  });
+
+  app.post<{ Body: { name?: unknown; actorIds?: unknown } }>(
+    '/api/admin/players',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const body = req.body ?? {};
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      const actorIds =
+        Array.isArray(body.actorIds) && body.actorIds.every((a) => typeof a === 'string' && a !== '')
+          ? (body.actorIds as string[])
+          : null;
+      if (name === '' || actorIds === null || actorIds.length === 0) {
+        return sendError(reply, 422, 'INVALID_INTENT', 'name and actorIds are required');
+      }
+      try {
+        const { token, player } = await (adminStore as AdminStorePort).create(name, actorIds);
+        // The plaintext token exists only in this response — it is never stored.
+        return reply.code(201).send({
+          token,
+          player: { name: player.name, actorIds: player.actorIds, gm: player.gm === true },
+        });
+      } catch (err) {
+        if (err instanceof PlayerStoreError && err.code === 'DUPLICATE') {
+          return sendError(reply, 409, 'CONFLICT', 'a player with that name already exists');
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.post<{ Params: { name: string } }>(
+    '/api/admin/players/:name/rotate',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      try {
+        const { token } = await (adminStore as AdminStorePort).rotate(req.params.name);
+        return reply.code(200).send({ token });
+      } catch (err) {
+        if (err instanceof PlayerStoreError && err.code === 'NOT_FOUND') {
+          return sendError(reply, 404, 'NOT_FOUND', 'not found');
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.delete<{ Params: { name: string } }>(
+    '/api/admin/players/:name',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      try {
+        await (adminStore as AdminStorePort).remove(req.params.name);
+        return reply.code(204).send();
+      } catch (err) {
+        if (err instanceof PlayerStoreError && err.code === 'NOT_FOUND') {
+          return sendError(reply, 404, 'NOT_FOUND', 'not found');
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.get<{ Querystring: { q?: string } }>(
+    '/api/admin/actors',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const q = (req.query.q ?? '').trim();
+      if (q === '') return reply.code(200).send({ actors: [] });
+      const entries = await relay.search({
+        query: q,
+        filter: 'documentType:Actor,subType:character',
+        limit: 20,
+      });
+      // World actors only — compendium uuids are premades, not table characters.
+      const actors = entries
+        .filter((e) => e.uuid.startsWith('Actor.'))
+        .map((e) => ({ id: e.id, name: e.name, ...(e.img !== undefined ? { img: e.img } : {}) }));
+      return reply.code(200).send({ actors });
+    },
+  );
 
   /** Map a raw relay roll to the client-facing RollEntry (M9). */
   const toRollEntry = (r: RawRoll): RollEntry => ({

@@ -14,6 +14,8 @@ export interface GatewayConfig {
   defaultSystemId: string;
   /** Poll interval for the live-update fallback when relay SSE fails. */
   livePollMs: number;
+  /** Enables /api/admin/* when set. Unset/empty = admin surface disabled. */
+  adminPassword?: string;
 }
 
 /**
@@ -50,5 +52,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     playersFile: required('PLAYERS_FILE'),
     defaultSystemId: env.DEFAULT_SYSTEM_ID ?? 'dnd5e',
     livePollMs: int('LIVE_POLL_MS', 3000),
+    ...(env.ADMIN_PASSWORD !== undefined && env.ADMIN_PASSWORD !== ''
+      ? { adminPassword: env.ADMIN_PASSWORD }
+      : {}),
   };
 }
