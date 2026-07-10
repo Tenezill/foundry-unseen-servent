@@ -1499,6 +1499,9 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
         attuned: isAttuned(item),
       });
     }
+    if (PHYSICAL_ITEM_TYPES.has(item.type)) {
+      out.push({ id: `item.${item._id}.move`, label: item.name, kind: 'move' });
+    }
     if (item.type === 'spell') {
       const level = numAt(item.system, 'level') ?? 0;
       const rawPrepared = getPath(item.system, 'prepared');
@@ -1695,6 +1698,39 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         endpoint: 'update-item',
         itemId: intent.actionId.slice('spell.'.length, -'.prepare'.length),
         data: { 'system.prepared': intent.prepared ? 1 : 0 },
+      };
+    }
+    case 'move': {
+      if (intent.containerId !== null && (typeof intent.containerId !== 'string' || intent.containerId === '')) {
+        throw new IntentError('move requires a container id or null', 'INVALID');
+      }
+      const itemId = intent.actionId.slice('item.'.length, -'.move'.length);
+      if (intent.containerId !== null) {
+        const items = new Map((actor.items ?? []).map((i) => [i._id, i]));
+        const target = items.get(intent.containerId);
+        if (!target || target.type !== 'container') {
+          throw new IntentError('move target must be a container on this sheet', 'INVALID');
+        }
+        if (intent.containerId === itemId) {
+          throw new IntentError('an item cannot contain itself', 'INVALID');
+        }
+        // No cycles: walk the target's containment chain upward; hitting the
+        // moved item means the target lives (transitively) inside it.
+        let cursor: string | undefined = intent.containerId;
+        const hops = new Set<string>();
+        while (cursor !== undefined && !hops.has(cursor)) {
+          hops.add(cursor);
+          const parent = strAt(items.get(cursor)?.system, 'container');
+          if (parent === itemId) {
+            throw new IntentError('cannot move a container into its own contents', 'INVALID');
+          }
+          cursor = parent !== undefined && parent !== '' && items.has(parent) ? parent : undefined;
+        }
+      }
+      return {
+        endpoint: 'update-item',
+        itemId,
+        data: { 'system.container': intent.containerId ?? '' },
       };
     }
     // M8 actor-scoped commands: no item target, no params. The descriptor

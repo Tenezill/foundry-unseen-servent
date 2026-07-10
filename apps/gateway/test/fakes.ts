@@ -321,6 +321,7 @@ function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
     { id: 'item.i1.equip', label: 'Arrows', kind: 'equip', equipped: false },
     { id: 'item.i1.attune', label: 'Arrows', kind: 'attune', attuned: false },
     { id: 'spell.s1.prepare', label: 'Zap', kind: 'prepare', prepared: false },
+    { id: 'item.i1.move', label: 'Arrows', kind: 'move' },
     { id: 'rest.short', label: 'Short Rest', kind: 'rest' },
     { id: 'rest.long', label: 'Long Rest', kind: 'rest' },
     { id: 'deathsave.roll', label: 'Death Save', kind: 'deathsave' },
@@ -415,6 +416,12 @@ export const fakeAdapter: SystemAdapter = {
         return { endpoint: 'attune-item', itemId: 'i1', attuned: intent.attuned };
       case 'prepare':
         return { endpoint: 'update-item', itemId: 's1', data: { 'system.prepared': intent.prepared ? 1 : 0 } };
+      case 'move':
+        return {
+          endpoint: 'update-item',
+          itemId: intent.actionId.slice('item.'.length, -'.move'.length),
+          data: { 'system.container': intent.containerId ?? '' },
+        };
       case 'rest':
         return { endpoint: intent.actionId === 'rest.long' ? 'long-rest' : 'short-rest' };
       case 'deathsave':

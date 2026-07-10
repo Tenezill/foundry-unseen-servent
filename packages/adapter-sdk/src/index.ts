@@ -189,6 +189,8 @@ export type SheetActionKind =
   | 'prepare'
   /** toggle an item's attuned state (M12; mirrors equip/prepare). */
   | 'attune'
+  /** push a physical item between carried and a container (M19). */
+  | 'move'
   // M8 actor-scoped commands (no item target):
   | 'rest'
   | 'deathsave'
@@ -226,6 +228,7 @@ export type ActionIntent =
   | { kind: 'equip'; actionId: string; equipped: boolean }
   | { kind: 'prepare'; actionId: string; prepared: boolean }
   | { kind: 'attune'; actionId: string; attuned: boolean }
+  | { kind: 'move'; actionId: string; containerId: string | null }
   | { kind: 'rest' | 'deathsave' | 'endconcentration'; actionId: string };
 
 /**

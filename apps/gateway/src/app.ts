@@ -223,6 +223,11 @@ function parseActionIntent(
     case 'attune':
       if (typeof body.attuned !== 'boolean') return null;
       return { kind, actionId, attuned: body.attuned };
+    case 'move':
+      if (body.containerId !== null && (typeof body.containerId !== 'string' || body.containerId === '')) {
+        return null;
+      }
+      return { kind, actionId, containerId: body.containerId as string | null };
     case 'rest':
     case 'deathsave':
     case 'endconcentration':

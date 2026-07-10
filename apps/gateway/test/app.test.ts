@@ -372,6 +372,25 @@ describe('actions', () => {
     expect(body.sheet.actorId).toBe('a1');
   });
 
+  it('move -> update-item writing system.container, result null', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'move', actionId: 'item.i1.move', containerId: 'c9' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.updates).toEqual([{ uuid: 'Actor.a1.Item.i1', data: { 'system.container': 'c9' } }]);
+    expect((res.json() as { result: unknown }).result).toBeNull();
+  });
+
+  it('move to carried sends an empty string; malformed containerId is 422', async () => {
+    const { app, relay } = setup();
+    const ok = await post(app, 'a1', { kind: 'move', actionId: 'item.i1.move', containerId: null });
+    expect(ok.statusCode).toBe(200);
+    expect(relay.updates).toEqual([{ uuid: 'Actor.a1.Item.i1', data: { 'system.container': '' } }]);
+    for (const bad of [{}, { containerId: '' }, { containerId: 7 }]) {
+      const res = await post(app, 'a1', { kind: 'move', actionId: 'item.i1.move', ...bad });
+      expect(res.statusCode, JSON.stringify(bad)).toBe(422);
+    }
+  });
+
   it('rest.short -> short-rest actor command, result null + fresh sheet', async () => {
     const { app, relay } = setup();
     const res = await post(app, 'a1', { kind: 'rest', actionId: 'rest.short' });

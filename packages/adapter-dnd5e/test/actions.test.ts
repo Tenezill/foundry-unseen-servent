@@ -14,6 +14,12 @@ const caster = casterJson as unknown as FoundryActorDoc;
 const martialCaptured = martialCapturedJson as unknown as FoundryActorDoc;
 const casterCaptured = casterCapturedJson as unknown as FoundryActorDoc;
 
+// The workspace has no @types/node and this package's tsconfig lib is
+// ES2022, which doesn't declare the (Node 17+/browser) global structuredClone
+// used below to build a mutated copy of a fixture without touching the
+// original object other tests share.
+declare const structuredClone: <T>(value: T) => T;
+
 function actions(actor: FoundryActorDoc): ActionDescriptor[] {
   if (!dnd5eAdapter.actions) throw new Error('adapter must expose actions()');
   return dnd5eAdapter.actions(actor);
@@ -137,7 +143,8 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
     // + 3 weapon damage rolls (M14) + 5 equips + 1 feature use + 7 item uses
     // (Waterskin, Torch, Rations, Piton, Rope, Horn, Bead of Force)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(52);
+    // + 21 move descriptors, one per physical item (M19)
+    expect(all).toHaveLength(73);
   });
 });
 
@@ -168,7 +175,8 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     // + 1 feature use + 7 item uses (Waterskin, Torch, Common Clothes,
     // Rations, Rope, Vestments, Potion of Healing)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
-    expect(all).toHaveLength(70);
+    // + 21 move descriptors, one per physical item (M19)
+    expect(all).toHaveLength(91);
   });
 
   it('a leveled spell with a base-level slot is directly castable (no slotLevels — the bridge casts at base only)', () => {
@@ -945,7 +953,7 @@ describe('view model wiring', () => {
 
   it('the sheet embeds the full action list', () => {
     expect(dnd5eAdapter.toViewModel(martialCaptured).actions).toEqual(actions(martialCaptured));
-    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(70);
+    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(91);
   });
 });
 
@@ -1183,5 +1191,81 @@ describe('spellbook management', () => {
       () => build(casterCaptured, { kind: 'prepare', actionId: `spell.${always._id}.prepare`, prepared: false }),
       'UNKNOWN_RESOURCE',
     );
+  });
+});
+
+describe('move', () => {
+  const withRealContainment = () => {
+    const actor = structuredClone(martialCaptured);
+    const items = actor.items as Array<{ _id: string; system: Record<string, unknown> }>;
+    // Repair the captured dangling refs into a real containment chain:
+    // Rations -> Backpack, Pouch -> Backpack (nested container).
+    items.find((i) => i._id === 'ulOW5qzq7q2edJTP')!.system.container = 'wYUZWMKa6FntpIvv';
+    items.find((i) => i._id === 'T8BW5LfQIDdur78q')!.system.container = 'wYUZWMKa6FntpIvv';
+    return actor;
+  };
+
+  it('every physical item gets a move descriptor', () => {
+    const ids = dnd5eAdapter.actions!(martialCaptured).filter((a) => a.kind === 'move').map((a) => a.id);
+    expect(ids).toContain('item.ulOW5qzq7q2edJTP.move'); // consumable
+    expect(ids).toContain('item.wYUZWMKa6FntpIvv.move'); // container itself
+    expect(ids).not.toContain('item.7r63kurEAM3GdEec.move'); // Second Wind (feat), not physical
+  });
+
+  it('move into a container writes system.container', () => {
+    expect(
+      build(withRealContainment(), {
+        kind: 'move',
+        actionId: 'item.ulOW5qzq7q2edJTP.move',
+        containerId: 'wYUZWMKa6FntpIvv',
+      }),
+    ).toEqual({
+      endpoint: 'update-item',
+      itemId: 'ulOW5qzq7q2edJTP',
+      data: { 'system.container': 'wYUZWMKa6FntpIvv' },
+    });
+  });
+
+  it('move to carried clears the ref with an empty string', () => {
+    expect(
+      build(withRealContainment(), { kind: 'move', actionId: 'item.ulOW5qzq7q2edJTP.move', containerId: null }),
+    ).toEqual({ endpoint: 'update-item', itemId: 'ulOW5qzq7q2edJTP', data: { 'system.container': '' } });
+  });
+
+  it('rejects a non-container target', () => {
+    expect(() =>
+      build(withRealContainment(), {
+        kind: 'move',
+        actionId: 'item.wYUZWMKa6FntpIvv.move',
+        containerId: 'ulOW5qzq7q2edJTP', // Rations: physical but not a container
+      }),
+    ).toThrow(IntentError);
+  });
+
+  it('rejects an unknown target id', () => {
+    expect(() =>
+      build(withRealContainment(), { kind: 'move', actionId: 'item.ulOW5qzq7q2edJTP.move', containerId: 'nope' }),
+    ).toThrow(IntentError);
+  });
+
+  it('rejects moving an item into itself', () => {
+    expect(() =>
+      build(withRealContainment(), {
+        kind: 'move',
+        actionId: 'item.wYUZWMKa6FntpIvv.move',
+        containerId: 'wYUZWMKa6FntpIvv',
+      }),
+    ).toThrow(IntentError);
+  });
+
+  it('rejects moving a container into its own contents (cycle)', () => {
+    // Pouch sits inside Backpack; Backpack -> Pouch would be a cycle.
+    expect(() =>
+      build(withRealContainment(), {
+        kind: 'move',
+        actionId: 'item.wYUZWMKa6FntpIvv.move',
+        containerId: 'T8BW5LfQIDdur78q',
+      }),
+    ).toThrow(IntentError);
   });
 });
