@@ -173,6 +173,12 @@ async function login(): Promise<void> {
 function logout(): void {
   clearAdminSecret()
   players.value = []
+  // Close every overlay: a modal must not survive into the login screen
+  // (the invite sheet may still hold a shown-once token).
+  createOpen.value = false
+  invite.value = null
+  confirmState.value?.resolve(false)
+  confirmState.value = null
   state.value = 'login'
 }
 
@@ -240,7 +246,13 @@ async function create(): Promise<void> {
     if (!res) return
     createOpen.value = false
     invite.value = { name: newName.value.trim(), link: joinLink(res.token) }
-    await loadPlayers()
+    // The invite itself succeeded — a failing list refresh must not relabel
+    // it as failed. A 401 here still drops the credential (guarded → logout).
+    try {
+      await guarded(() => loadPlayers())
+    } catch {
+      /* refresh failed — console keeps the stale list */
+    }
   } catch (err) {
     toast.show(errorStatus(err) === 409 ? 'That name already exists.' : 'Couldn’t create the invite.')
   } finally {
@@ -275,7 +287,13 @@ async function revoke(name: string): Promise<void> {
     })
     if (res) {
       toast.show(`Revoked ${name}`)
-      await loadPlayers()
+      // The revoke itself succeeded — a failing list refresh must not relabel
+      // it as failed. A 401 here still drops the credential (guarded → logout).
+      try {
+        await guarded(() => loadPlayers())
+      } catch {
+        /* refresh failed — console keeps the stale list */
+      }
     }
   } catch {
     toast.show('Couldn’t revoke that player.')
