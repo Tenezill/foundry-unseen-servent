@@ -192,7 +192,7 @@ async function main() {
 
   app = buildApp({
     relay,
-    players,
+    players: { list: () => players },
     registry: createDefaultRegistry(),
     defaultSystemId: cfg.defaultSystemId,
     livePollMs: 60_000, // force the SSE test to exercise real relay push, not polling
