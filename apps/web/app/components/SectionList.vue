@@ -15,7 +15,12 @@
           <path d="m9 6 6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
-      <button class="head-name" type="button" @click="emit('detail', section.header)">
+      <button
+        class="head-name"
+        type="button"
+        :aria-label="`Details for ${section.header.label}`"
+        @click="emit('detail', section.header)"
+      >
         <span class="section-title">{{ section.header.label }}</span>
         <span v-if="section.header.sub" class="row-sub">{{ section.header.sub }}</span>
       </button>
@@ -413,6 +418,8 @@ function tap(item: ListItem): void {
 }
 
 .head-name {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -421,6 +428,12 @@ function tap(item: ListItem): void {
   background: none;
   border: 0;
   color: inherit;
+}
+
+/* Let the title grow so .section-title::after (the gilded trailing line)
+   has room to expand, matching every other section heading. */
+.head-name .section-title {
+  flex: 1;
 }
 
 .empty-hint {
