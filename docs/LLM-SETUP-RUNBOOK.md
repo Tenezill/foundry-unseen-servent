@@ -351,6 +351,27 @@ All eight green = the installation is complete.
 - **dnd5e/module upgrades:** pins live in `VERSIONS.md`; bump ONE at a time,
   `pnpm -r test`, then one live read/write round-trip (`docs/OPERATIONS.md`).
 
+## Lifetimes — what stays connected, what expires
+
+Players never log into Foundry; there is no Foundry-login redirect anywhere
+in the player flow. Three independent links, three lifetimes:
+
+- **Module ↔ relay pairing: effectively permanent.** Paired once per world
+  (Phase 3 step 6); the token lives in the GM's browser and reconnects
+  automatically on every world reload. In live operation it has never
+  expired on its own — re-pairing was only ever needed after account
+  mix-ups (Phase 4 pitfall).
+- **Player ↔ app: one-time join link, valid until revoked.** Opening
+  `/join#<token>` once stores the token in that player's browser; afterward
+  they just open the app URL. No expiry timer exists — the token works
+  until its entry is removed or replaced in `players.yaml` (rotate by
+  re-running `make-invite.mjs` and swapping the hash).
+- **World online: only while a GM session is connected.** The pairing
+  survives Foundry restarts, but reads/writes work only while a GM browser
+  (or the VPS headless session) is attached to the world. Session flow for
+  a play night: GM launches the world and joins → pairing reconnects itself
+  → players open the app (already authenticated) and play.
+
 ## Values collected along the way (final inventory)
 
 | Name | Created in | Lives in |
