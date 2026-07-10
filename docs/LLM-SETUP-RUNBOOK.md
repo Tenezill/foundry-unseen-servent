@@ -1,0 +1,363 @@
+# LLM Setup Runbook — full infrastructure + Foundry connection
+
+This document is a hand-off plan for an LLM agent (or a careful human) to
+stand up the complete Foundry's Unseen Servant stack and connect it to a
+Foundry VTT instance. It is self-contained: every command, every expected
+output, and every piece of information the Foundry side needs is in here.
+`docs/HOSTING.md` is the longer human-oriented reference; where the two
+disagree, HOSTING.md wins.
+
+**How to execute this plan (instructions to the operator LLM):**
+
+- Work through the phases in order. Each phase ends with a **Verify** block —
+  do not continue until it passes.
+- Steps marked **⛔ HUMAN** cannot be done by you: they need credentials,
+  a purchase, or a click inside a logged-in browser. Stop, tell the human
+  exactly what to do (quote the step), and wait.
+- Never print secrets (license key, passwords, API keys, invite tokens) into
+  logs or chat beyond what the human must copy once.
+- If a command fails, read the Troubleshooting section at the bottom before
+  improvising.
+
+---
+
+## Inputs to collect from the human before starting
+
+| # | Input | Needed for | Notes |
+|---|-------|-----------|-------|
+| 1 | Deployment shape: **LOCAL** / **EXISTING-FOUNDRY** / **VPS** | everything | see next section |
+| 2 | foundryvtt.com username + password + **v13 license key** | LOCAL/VPS only | the container downloads Foundry with them |
+| 3 | Existing Foundry URL + admin access + a GM account | EXISTING-FOUNDRY only | instance must be **Foundry v13** with **dnd5e 5.3.3** (hard requirement, see version pins) |
+| 4 | A strong admin key string | LOCAL/VPS | protects Foundry's `/setup` |
+| 5 | Player list: name + which actor(s) each plays | Phase 5 | actor ids are collected in Phase 3 |
+| 6 | Who is GM in the app (sees the world roll feed) | Phase 5 | one `gm: true` entry |
+| 7 | VPS + domain with DNS control | VPS only | `vtt.<domain>`, `app.<domain>` A-records |
+
+## Version pins (do not deviate)
+
+From `VERSIONS.md`: Foundry `felddy/foundryvtt:13.351.0`, system
+**dnd5e 5.3.3**, module **foundry-rest-api 3.4.1**, relay image
+`threehats/foundryvtt-rest-api-relay:3.4.1`. The dnd5e adapter reads
+data paths pinned to dnd5e 5.3.3 on Foundry v13 — a different system version
+is NOT supported without code review. An EXISTING-FOUNDRY instance on another
+dnd5e version must be migrated to 5.3.3 first (or the plan aborted).
+
+## Architecture (what you are building)
+
+```
+[ Web PWA ] --HTTP(S)--> [ Gateway :8090 ] --REST/SSE--> [ Relay :3010 ] <==WebSocket== [ Foundry :30000 + REST module ]
+  phone browser            apps/gateway                    docker image                  module runs INSIDE a GM browser session
+```
+
+The single most important operational fact: **the REST module executes inside
+a logged-in GM browser session.** If no GM is connected to the world, the
+relay reports it offline and every read/write 404s. Locally that is a browser
+tab someone leaves open; on a VPS the relay's headless GM session does it.
+
+---
+
+## Phase 0 — Workstation prerequisites + repo baseline
+
+Requirements: Docker (Engine or Desktop, Compose v2), Node 22, pnpm 11
+(`corepack enable && corepack prepare pnpm@11 --activate`), the repo checked
+out.
+
+```bash
+pnpm install
+pnpm -r test
+```
+
+**Verify:** all workspaces green (as of 2026-07-10: 273 adapter-dnd5e + 86
+gateway + 3 foundry-client tests; `apps/web` and `adapter-sdk` are echo-only).
+A red baseline means a broken checkout — stop and report.
+
+---
+
+## Phase 1 — Foundry itself (shape-dependent)
+
+### Shape LOCAL — dockerized Foundry on this machine
+
+```bash
+cd stack
+cp .env.example .env
+# ⛔ HUMAN: fill stack/.env — FOUNDRY_USERNAME, FOUNDRY_PASSWORD,
+#          FOUNDRY_LICENSE_KEY, FOUNDRY_ADMIN_KEY (input #2/#4).
+docker compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml logs -f foundry
+# wait for: "Server started and listening on port 30000", then Ctrl-C the logs
+```
+
+Install the pinned system + module straight into the data volume:
+
+```bash
+# from repo root, stack running
+mkdir -p stack/foundry-data/Data/systems stack/foundry-data/Data/modules
+curl -L -o /tmp/dnd5e.zip https://github.com/foundryvtt/dnd5e/releases/download/release-5.3.3/dnd5e-release-5.3.3.zip
+unzip -o /tmp/dnd5e.zip -d stack/foundry-data/Data/systems/dnd5e
+curl -L -o /tmp/restapi.zip https://github.com/ThreeHats/foundryvtt-rest-api/releases/download/3.4.1/module.zip
+unzip -o /tmp/restapi.zip -d stack/foundry-data/Data/modules/foundry-rest-api
+docker compose -f stack/docker-compose.dev.yml restart foundry
+```
+
+⛔ HUMAN first-run at <http://localhost:30000>: accept EULA → enter the admin
+key → **Create World** (system: Dungeons & Dragons Fifth Edition) → Launch →
+join as **Gamemaster**.
+
+**Verify:** `curl -s http://localhost:30000/api/status` returns
+`{"active":true, ..., "system":"dnd5e","systemVersion":"5.3.3"}`.
+
+### Shape EXISTING-FOUNDRY — connect to an already-running instance
+
+Nothing from `stack/docker-compose.dev.yml`'s `foundry` service is used; you
+only run the **relay** (Phase 2) and point the existing instance's module at
+it. Confirm compatibility FIRST:
+
+```bash
+curl -s <FOUNDRY_URL>/api/status
+# must show "version": "13.x" and "systemVersion": "5.3.3" once the world is live
+```
+
+⛔ HUMAN: install the **Foundry REST API** module (v3.4.1) into the instance —
+either via Foundry's Setup → Add-on Modules → Install Module (search
+"Foundry REST API"; pick 3.4.1 explicitly), or by unzipping the release zip
+(URL above) into the instance's `Data/modules/foundry-rest-api`. Then enable
+it in the world (Game Settings → Manage Modules).
+
+Network requirement: the relay must be reachable **from the GM's browser**
+(the module dials out from there). If Foundry and the GM are not on this
+machine's network, the relay needs a public `wss://` endpoint (TLS proxy in
+front of :3010 — see HOSTING.md Part B4b for the Caddy block).
+
+### Shape VPS — everything on one server with HTTPS
+
+Follow `docs/HOSTING.md` Part B verbatim (Caddy + `docker-compose.prod.yml`,
+headless GM session). This runbook's Phases 3–7 still apply; substitute
+`https://vtt.<domain>` for `http://localhost:30000` and the internal relay
+for `http://localhost:3010`.
+
+---
+
+## Phase 2 — Relay
+
+LOCAL already started it with the compose file. EXISTING-FOUNDRY, run just the
+relay service:
+
+```bash
+cd stack
+docker compose -f docker-compose.dev.yml up -d relay
+```
+
+**Verify:** `curl -s http://localhost:3010/` responds (any HTTP answer means
+the relay is up; auth-guarded endpoints 401 without a key — that is fine).
+
+---
+
+## Phase 3 — Foundry-side configuration (the complete checklist)
+
+Everything the Foundry instance / GM must have or do. All ⛔ HUMAN unless the
+agent is driving the GM's browser with permission.
+
+1. **Module installed and enabled:** Foundry REST API **3.4.1** (Phase 1),
+   enabled in the world via Game Settings → Manage Modules.
+2. **Module setting — WebSocket Relay URL:** Module Settings → Foundry REST
+   API → WebSocket Relay URL = `ws://localhost:3010` (LOCAL) or
+   `ws://<relay-host>:3010` / `wss://relay.<domain>` (remote). Leave
+   "Allow Execute JavaScript" / macro permissions **off** (default) — the
+   gateway never needs them.
+3. **A GM session that stays open:** the module only works while a GM browser
+   is connected to the world. Locally: leave the GM tab open. VPS: the relay's
+   headless session (HOSTING.md B4a).
+4. **Users + actors + ownership:** create a Foundry user per player, a
+   character Actor per player, and set each Actor's Ownership so its player
+   is Owner. The companion app enforces its OWN access via `players.yaml`;
+   Foundry ownership governs what Foundry itself lets the module do.
+5. **Collect actor ids** (needed in Phase 5) — GM browser console (F12):
+
+   ```js
+   game.actors.contents.map(a => ({ id: a.id, name: a.name }))
+   ```
+
+6. **Pairing (links this world to the relay account — after Phase 4 creates
+   the account):**
+   - Rate-limit warning: the relay throttles `/auth/*` to ~20 req/15 min per
+     IP and the module polls while the dialog is open. If pairing stalls with
+     HTTP 429: `docker compose -f stack/docker-compose.dev.yml restart relay`,
+     then pair within ~15 seconds.
+   - GM opens the **REST API Connection** dialog (module button, or console:
+     `game.modules.get('foundry-rest-api').api.openConnectionDialog()`) →
+     **Pair**. It shows a CODE and opens a tab pointing at the public
+     foundryrestapi.com — **ignore that tab.**
+   - Open `http://localhost:3010/pair/<CODE>` (or your relay host) instead,
+     sign in with the Phase-4 account, **Approve Pairing**.
+   - The status in Foundry flips to paired; the token persists in that
+     browser, reconnecting automatically on reload.
+
+**Verify (after Phase 4's key exists):**
+
+```bash
+curl -s http://localhost:3010/clients -H "x-api-key: <RELAY_API_KEY>"
+# -> {"clients":[{"clientId":"fvtt_...","isOnline":true, ...}]}
+```
+
+`isOnline: true` is the proof the whole Foundry side is wired. Record the
+`clientId` → this is **RELAY_CLIENT_ID**.
+
+---
+
+## Phase 4 — Relay account + scoped API key
+
+The self-hosted relay has no default credentials; create them:
+
+```bash
+# 1. register (returns a sessionToken) — pick a strong password, store it
+curl -s -X POST http://localhost:3010/auth/register \
+  -H 'content-type: application/json' \
+  -d '{"email":"gateway@companion.local","password":"<STRONG-PASSWORD>"}'
+
+# 2. create a SCOPED key with the sessionToken from step 1
+curl -s -X POST http://localhost:3010/auth/api-keys \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer <sessionToken>' \
+  -d '{"name":"gateway","scopes":["entity:read","entity:write","search","events:subscribe","clients:read","dnd5e","roll:execute","chat:read","roll:read"]}'
+```
+
+The response's `key` is shown **once** → this is **RELAY_API_KEY**. Those
+scopes are exactly what the gateway uses (reads, scoped writes, live push,
+dnd5e actions, dice, GM roll feed) — do not widen them.
+
+Now do Phase 3 step 6 (pairing), then Phase 3's Verify.
+
+Pitfall from live operation: the world pairs to the **account that approved
+the pairing**. If `GET /clients` with your key shows no client, the world is
+paired to a different account — re-pair while signed in as
+`gateway@companion.local`, or mint the key on whichever account the pairing
+actually used.
+
+---
+
+## Phase 5 — Gateway
+
+```bash
+cd apps/gateway
+```
+
+Create `apps/gateway/.env` (gitignored — never commit):
+
+```
+PORT=8090
+RELAY_URL=http://localhost:3010
+RELAY_API_KEY=<from Phase 4>
+RELAY_CLIENT_ID=<fvtt_... from Phase 3 Verify>
+PLAYERS_FILE=./players.yaml
+```
+
+Create invite tokens — one run per player (input #5), using the actor ids from
+Phase 3 step 5:
+
+```bash
+# from repo root
+node scripts/make-invite.mjs Anna kbXH9abc...
+node scripts/make-invite.mjs Ben  aa3F2def...
+```
+
+Each run prints a one-time join link (give it to that player ONCE) and a YAML
+block. Assemble `apps/gateway/players.yaml` (gitignored; template:
+`apps/gateway/players.example.yaml`):
+
+```yaml
+players:
+  - name: Anna
+    tokenHash: "…"
+    actorIds: ["kbXH9abc..."]
+  - name: Ben
+    tokenHash: "…"
+    actorIds: ["aa3F2def..."]
+  # GM entry (input #6): sees the world roll feed; list every actor it may play
+  - name: TheGM
+    tokenHash: "…"
+    actorIds: ["kbXH9abc...", "aa3F2def..."]
+    gm: true
+```
+
+Start it:
+
+```bash
+pnpm --filter @companion/gateway start     # or `dev` for tsx watch
+```
+
+**Operational fact:** in practice the gateway does NOT reliably hot-reload —
+after changing `.env`, `players.yaml`, or gateway/adapter source, kill and
+restart the process.
+
+**Verify:** `curl -s http://localhost:8090/healthz` →
+`{"ok":true,"relay":"connected"}`. `"disconnected"` means Phase 3/4 is wrong
+(key, clientId, or the GM session dropped).
+
+---
+
+## Phase 6 — Web PWA
+
+```bash
+# dev server (proxies /api to the gateway on :8090):
+pnpm --filter @companion/web dev            # add --host for phones on the LAN
+# or a static production build (serve apps/web/.output/public behind the same host as /api):
+pnpm --filter @companion/web generate
+```
+
+**Verify:** open the printed URL (e.g. <http://localhost:3001>), then a join
+link `http://localhost:3001/join#<token>` — the character list loads and shows
+that player's actor(s). On a phone: same Wi-Fi,
+`http://<PC-LAN-IP>:3001/join#<token>`.
+
+---
+
+## Phase 7 — End-to-end acceptance checklist
+
+Run through as a player, on the actor's sheet:
+
+1. Sheet loads with LIVE badge; HP/AC/abilities match Foundry.
+2. Tap a skill → a roll result appears AND the roll lands in Foundry chat.
+3. Actions tab → weapon **Attack** rolls; **Dmg** rolls damage.
+4. Cast a cantrip → chat card in Foundry; a leveled heal (e.g. Cure Wounds)
+   rolls, displays `+N HP`, and **consumes a spell slot** in Foundry.
+5. Use a limited feature (e.g. Second Wind): heals AND decrements its use;
+   a second tap while spent returns a clear "no uses remaining" error.
+6. Tap any row's name on the Actions tab → its description opens.
+7. Change HP in Foundry → the app updates within seconds (SSE live push).
+8. `GET /healthz` still `{"ok":true,"relay":"connected"}`.
+
+All eight green = the installation is complete.
+
+---
+
+## Troubleshooting (verified in live operation)
+
+- **Everything 404s / app says "reconnecting":** no GM session → world
+  offline. Reopen the GM tab / restart the headless session, confirm with
+  `GET /clients` → `isOnline: true`.
+- **Pairing 429:** relay auth rate limit; restart the relay container, pair
+  within ~15 s.
+- **Pair page is foundryrestapi.com:** always swap the host for YOUR relay.
+- **`/clients` empty with your key:** world paired under another account
+  (see Phase 4 pitfall).
+- **Gateway ignores config changes:** it does not hot-reload — restart it.
+- **Compose warns about `$` in passwords:** the Foundry service must keep
+  `env_file: {path: .env, format: raw}` (already set in the repo).
+- **Area-effect item use (e.g. Bead of Force) takes ~10 s:** expected — the
+  relay times out while Foundry waits on its template prompt; consumption
+  already happened and the app continues with the roll.
+- **No upcasting:** the bridge casts at base level only; the app disables
+  Cast when no base-level slot remains. Documented limitation, not a bug.
+- **dnd5e/module upgrades:** pins live in `VERSIONS.md`; bump ONE at a time,
+  `pnpm -r test`, then one live read/write round-trip (`docs/OPERATIONS.md`).
+
+## Values collected along the way (final inventory)
+
+| Name | Created in | Lives in |
+|------|-----------|----------|
+| `FOUNDRY_ADMIN_KEY` | Phase 1 | `stack/.env` |
+| Relay account email/password | Phase 4 | password manager |
+| `RELAY_API_KEY` | Phase 4 | `apps/gateway/.env` |
+| `RELAY_CLIENT_ID` (`fvtt_…`) | Phase 3 Verify | `apps/gateway/.env` |
+| Actor ids | Phase 3 step 5 | `apps/gateway/players.yaml` |
+| Invite tokens (one per player) | Phase 5 | sent to players once; only hashes stored |
