@@ -110,6 +110,8 @@
               :busy="busy"
               :action-busy="actionBusy"
               :readonly="offline"
+              :collapsible="section.kind === 'list' && !!section.header"
+              :storage-key="section.kind === 'list' && section.header ? `fc:collapse:${actorId}:${section.id}` : undefined"
               @step="stepResource"
               @action="onAction"
               @detail="onDetail"

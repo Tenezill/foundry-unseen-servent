@@ -1,7 +1,26 @@
 <template>
   <section>
-    <h2 class="section-title">{{ section.label }}</h2>
-    <div class="list card">
+    <h2 v-if="!section.header" class="section-title">{{ section.label }}</h2>
+    <div v-else class="section-head">
+      <button
+        v-if="collapsible"
+        class="chev"
+        type="button"
+        :class="{ open: !sectionCollapsed }"
+        :aria-expanded="!sectionCollapsed"
+        :aria-label="`Toggle contents of ${section.header.label}`"
+        @click="toggleSection"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="m9 6 6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+      <button class="head-name" type="button" @click="emit('detail', section.header)">
+        <span class="section-title">{{ section.header.label }}</span>
+        <span v-if="section.header.sub" class="row-sub">{{ section.header.sub }}</span>
+      </button>
+    </div>
+    <div v-show="!sectionCollapsed" class="list card">
       <div
         v-for="{ item, depth, hasChildren } in rows"
         :key="item.id"
@@ -84,7 +103,7 @@
           {{ attuneOf(item)!.attuned ? 'Attuned' : 'Attune' }}
         </button>
       </div>
-      <p v-if="section.items.length === 0" class="empty">Nothing here yet.</p>
+      <p v-if="rows.length === 0" class="empty-hint">Empty</p>
     </div>
   </section>
 </template>
@@ -99,6 +118,8 @@ const props = defineProps<{
   busy: string | null
   actionBusy: string | null
   readonly: boolean
+  collapsible?: boolean
+  storageKey?: string
 }>()
 
 const emit = defineEmits<{
@@ -106,6 +127,28 @@ const emit = defineEmits<{
   (e: 'action', actionId: string): void
   (e: 'detail', item: ListItem): void
 }>()
+
+/** Whole-section collapse (container sections), persisted per device. */
+const sectionCollapsed = ref(false)
+
+onMounted(() => {
+  if (!props.storageKey) return
+  try {
+    sectionCollapsed.value = localStorage.getItem(props.storageKey) === '1'
+  } catch {
+    /* private mode — default expanded */
+  }
+})
+
+function toggleSection(): void {
+  sectionCollapsed.value = !sectionCollapsed.value
+  if (!props.storageKey) return
+  try {
+    localStorage.setItem(props.storageKey, sectionCollapsed.value ? '1' : '0')
+  } catch {
+    /* noop */
+  }
+}
 
 /* ---- container grouping (M12) ----------------------------------------- */
 
@@ -363,10 +406,27 @@ function tap(item: ListItem): void {
   opacity: 0.55;
 }
 
-.empty {
-  padding: 20px;
-  text-align: center;
-  color: var(--ink-dim);
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.head-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  text-align: left;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+}
+
+.empty-hint {
+  color: var(--text-dim);
   font-size: 0.85rem;
+  padding: 12px 14px;
+  font-style: italic;
 }
 </style>
