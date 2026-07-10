@@ -33,7 +33,7 @@ const HEADER =
 export class FilePlayerStore {
   private players: readonly Player[];
   private watcher: FSWatcher | null = null;
-  private reloadTimer: NodeJS.Timeout | null = null;
+  private reloadTimer: ReturnType<typeof setTimeout> | null = null;
   /** Mutations run strictly in sequence; a failed one does not block the next. */
   private writeQueue: Promise<unknown> = Promise.resolve();
   private log: StoreLog | null = null;
@@ -60,7 +60,7 @@ export class FilePlayerStore {
     if (log) this.log = log;
     if (this.watcher) return;
     const base = basename(this.filePath);
-    this.watcher = watch(dirname(this.filePath), (_event, filename) => {
+    this.watcher = watch(dirname(this.filePath), (_event: string, filename: string | null) => {
       if (filename !== null && filename !== base) return;
       if (this.reloadTimer) clearTimeout(this.reloadTimer);
       this.reloadTimer = setTimeout(() => this.reload(), 300);
