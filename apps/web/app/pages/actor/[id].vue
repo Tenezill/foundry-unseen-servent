@@ -46,7 +46,9 @@
             :actions="combatActions"
             :action-busy="actionBusy"
             :readonly="offline"
+            :detail-ids="actionDetailIds"
             @action="onCombatAction"
+            @detail="onCombatDetail"
           />
 
           <template v-if="activeTab === 'resources'">
@@ -354,6 +356,38 @@ const combatActions = computed(() =>
     (a) => a.kind === 'attack' || a.kind === 'cast' || a.kind === 'use' || a.kind === 'damage',
   ),
 )
+
+/** M17: Actions-tab info disclosure. The list sections already carry every
+ *  description, and action ids embed the Foundry item id — a row's detail
+ *  is a lookup away, no new data over the wire. */
+const ACTION_ITEM_ID = /^(?:item|spell|feature)\.([^.]+)\./
+
+const detailByItemId = computed(() => {
+  const m = new Map<string, { title: string; detail: string }>()
+  for (const section of sheet.value?.sections ?? []) {
+    if (section.kind !== 'list') continue
+    for (const item of section.items) {
+      if (item.detail) m.set(item.id, { title: item.label, detail: item.detail })
+    }
+  }
+  return m
+})
+
+const actionDetailIds = computed(() => {
+  const s = new Set<string>()
+  for (const a of combatActions.value) {
+    const itemId = ACTION_ITEM_ID.exec(a.id)?.[1]
+    if (itemId && detailByItemId.value.has(itemId)) s.add(a.id)
+  }
+  return s
+})
+
+function onCombatDetail(actionId: string): void {
+  const itemId = ACTION_ITEM_ID.exec(actionId)?.[1]
+  const entry = itemId ? detailByItemId.value.get(itemId) : undefined
+  if (!entry) return
+  detailFor.value = { title: entry.title, detail: entry.detail }
+}
 
 const visibleTabs = computed(() =>
   TABS.filter((t) => {

@@ -19,7 +19,20 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path :d="group.icon" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </span>
         <div class="row-main">
-          <span class="row-label">{{ action.label }}</span>
+          <button
+            v-if="detailIds.has(action.id)"
+            class="row-label detail"
+            type="button"
+            :aria-label="`Details for ${action.label}`"
+            @click="emit('detail', action.id)"
+          >
+            {{ action.label }}
+            <svg class="info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 11v5M12 8h.01" stroke-linecap="round" />
+            </svg>
+          </button>
+          <span v-else class="row-label">{{ action.label }}</span>
           <span v-if="noSlots(action)" class="row-sub">No spell slots left</span>
         </div>
         <button
@@ -54,10 +67,15 @@ const props = defineProps<{
   actions: ActionDescriptor[]
   actionBusy: string | null
   readonly: boolean
+  /** Action ids whose row name opens a description (M17) — computed by the
+   *  page from the sheet's list sections, so this component stays
+   *  lookup-agnostic. */
+  detailIds: Set<string>
 }>()
 
 const emit = defineEmits<{
   (e: 'action', actionId: string): void
+  (e: 'detail', actionId: string): void
 }>()
 
 const GROUP_DEFS = [
@@ -154,6 +172,27 @@ function damageOf(action: ActionDescriptor): ActionDescriptor | undefined {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.row-label.detail {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  color: var(--ink);
+  text-align: left;
+}
+
+.row-label.detail .info {
+  width: 14px;
+  height: 14px;
+  color: var(--gold);
+  opacity: 0.7;
+  flex: none;
+}
+
+.row-label.detail:active {
+  color: var(--gold-bright);
 }
 
 .row-sub {
