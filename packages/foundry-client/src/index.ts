@@ -91,6 +91,26 @@ export interface HookEvent {
   data: unknown;
 }
 
+export interface RelayCombatant {
+  id: string;
+  name: string;
+  tokenUuid?: string;
+  actorUuid?: string;
+  img?: string | null;
+  initiative?: number | null;
+  hidden?: boolean;
+  defeated?: boolean;
+}
+
+export interface RelayEncounter {
+  id: string;
+  name?: string;
+  round: number;
+  turn: number;
+  current: boolean;
+  combatants: RelayCombatant[];
+}
+
 export class FoundryRelayClient {
   constructor(private readonly cfg: RelayConfig) {}
 
@@ -195,6 +215,12 @@ export class FoundryRelayClient {
       details: JSON.stringify(details),
     });
     return body.data ?? body;
+  }
+
+  /** GET /encounters — active/all combats (requires encounter:read scope). */
+  async getEncounters(): Promise<RelayEncounter[]> {
+    const body = await this.request<{ encounters?: RelayEncounter[] }>('GET', '/encounters', {});
+    return Array.isArray(body.encounters) ? body.encounters : [];
   }
 
   /**
