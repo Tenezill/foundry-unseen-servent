@@ -1118,7 +1118,15 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
 
         writeEvent('encounter', JSON.stringify(encounterManager.view()));
         const detach = encounterManager.attach((view) => writeEvent('encounter', JSON.stringify(view)));
-        const ping = setInterval(() => writeEvent('ping', '{}'), pingMs);
+        // Keep-alive doubles as a level-triggered state re-emit: the relay's
+        // known SSE-drop-under-burst bug can lose a terminal {active:false}
+        // frame, leaving a client stuck (no further change frame ever arrives
+        // for an ended combat). Re-asserting current state every pingMs lets
+        // any missed frame self-heal; the web applies frames idempotently.
+        const ping = setInterval(
+          () => writeEvent('encounter', JSON.stringify(encounterManager.view())),
+          pingMs,
+        );
 
         let done = false;
         const cleanup = (): void => {
