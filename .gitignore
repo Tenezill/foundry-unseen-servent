@@ -8,9 +8,11 @@ coverage/
 # secrets & local runtime state
 .env
 stack/.env
+stack/.env.gateway
 stack/foundry-data/
 stack/relay-data/
 stack/caddy-data/
+stack/gateway-data/
 apps/gateway/players.yaml
 
 licence

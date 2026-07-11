@@ -1,12 +1,11 @@
-# Replace the two hostnames with your real DNS names before deploying.
-# Caddy provisions Let's Encrypt certificates automatically.
+# LAN default: plain HTTP on :80 — the PWA and its /api, same-origin.
+# For public HTTPS, comment this block and use the domain variant below.
 
-vtt.example.com {
-	reverse_proxy foundry:30000
-}
-
-app.example.com {
+:80 {
 	handle /api/* {
+		reverse_proxy gateway:8090
+	}
+	handle /healthz {
 		reverse_proxy gateway:8090
 	}
 	handle {
@@ -16,3 +15,22 @@ app.example.com {
 	}
 	encode gzip
 }
+
+# --- Public HTTPS variant (automatic Let's Encrypt) -------------------------
+# app.example.com {
+# 	handle /api/* {
+# 		reverse_proxy gateway:8090
+# 	}
+# 	handle /healthz {
+# 		reverse_proxy gateway:8090
+# 	}
+# 	handle {
+# 		root * /srv/app
+# 		try_files {path} /index.html
+# 		file_server
+# 	}
+# 	encode gzip
+# }
+# vtt.example.com {
+# 	reverse_proxy foundry:30000
+# }

@@ -1,43 +1,46 @@
 name: foundrys-unseen-servant
 
-# Production stack (PLAN.md M5). Public surface = Caddy only:
-#   https://vtt.<domain>  -> Foundry (normal play)
-#   https://app.<domain>  -> PWA static files + /api -> gateway
-# The relay is NOT published; gateway reaches it on the internal network.
+# Production stack (M21). One command:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# Add Foundry itself (license credentials in .env) with:
+#   docker compose -f docker-compose.prod.yml --profile foundry up -d --build
 #
-# Required: stack/.env (see .env.example) plus PROD_DOMAIN_* below,
-# and apps/gateway/players.yaml mounted as a secret.
+# Public surface: web (Caddy) on 80 — and Foundry on 30000 when profiled in.
+# Relay and gateway stay on the internal network.
+# Config: .env (Foundry, only with the profile) + .env.gateway (see example).
 
 services:
-  caddy:
-    image: caddy:2.10
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
     ports:
       - "80:80"
-      - "443:443"
+      # - "443:443"   # uncomment with the TLS Caddyfile variant
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ../apps/web/.output/public:/srv/app:ro
       - ./caddy-data:/data
     restart: unless-stopped
     depends_on:
-      - foundry
       - gateway
 
-  foundry:
-    image: felddy/foundryvtt:13.351.0
+  gateway:
+    build:
+      context: ..
+      dockerfile: apps/gateway/Dockerfile
     env_file:
-      - path: .env
-        format: raw
+      - .env.gateway
     environment:
-      - TIMEZONE=Europe/Vienna
-      - FOUNDRY_PROXY_SSL=true
-      - FOUNDRY_PROXY_PORT=443
-      - FOUNDRY_MINIFY_STATIC_FILES=true
+      - PORT=8090
+      - RELAY_URL=http://relay:3010
+      - PLAYERS_FILE=/data/players.yaml
     expose:
-      - "30000"
+      - "8090"
     volumes:
-      - ./foundry-data:/data
+      - ./gateway-data:/data
     restart: unless-stopped
+    depends_on:
+      - relay
 
   relay:
     image: threehats/foundryvtt-rest-api-relay:3.4.1
@@ -47,25 +50,26 @@ services:
       - DB_TYPE=sqlite
     expose:
       - "3010"
+    ports:
+      - "3010:3010"   # the Foundry module (GM browser) connects via ws://<host>:3010
     volumes:
       - ./relay-data:/app/data
     restart: unless-stopped
 
-  gateway:
-    image: node:22-alpine
-    working_dir: /repo
-    command: sh -c "corepack enable && pnpm install --frozen-lockfile --filter @companion/gateway... && pnpm --filter @companion/gateway start"
+  foundry:
+    profiles: ["foundry"]
+    image: felddy/foundryvtt:13.351.0
+    env_file:
+      - path: .env
+        format: raw
     environment:
-      - PORT=8090
-      - RELAY_URL=http://relay:3010
-      - RELAY_API_KEY=${RELAY_API_KEY}
-      - RELAY_CLIENT_ID=${RELAY_CLIENT_ID}
-      - PLAYERS_FILE=/run/secrets/players.yaml
-    expose:
-      - "8090"
+      - TIMEZONE=Europe/Vienna
+      - FOUNDRY_MINIFY_STATIC_FILES=true
+      # For a TLS deployment behind Caddy, also set:
+      # - FOUNDRY_PROXY_SSL=true
+      # - FOUNDRY_PROXY_PORT=443
+    ports:
+      - "30000:30000"
     volumes:
-      - ..:/repo
-      - ../apps/gateway/players.yaml:/run/secrets/players.yaml:ro
+      - ./foundry-data:/data
     restart: unless-stopped
-    depends_on:
-      - relay
