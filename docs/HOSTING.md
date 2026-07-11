@@ -31,20 +31,28 @@ headless GM browser (Part B).
 
 - Docker Desktop (or Docker Engine + Compose v2).
 - Node 22 + `pnpm` (`corepack enable && corepack prepare pnpm@11 --activate`)
-  — only needed on whatever machine *builds* the web app and runs the gateway.
-  Online, the compose file builds the gateway in a Node container for you.
+  — only needed to run `scripts/make-invite.mjs`. The gateway and web app
+  build as Docker images (`apps/gateway/Dockerfile`, `apps/web/Dockerfile`);
+  `docker compose ... up -d --build` builds and runs both for you.
 - A foundryvtt.com account and a **v13 license key**.
 - The repo checked out.
 
 ---
 
-## Part A — Local
+## Part A — Local (LAN)
+
+Uses `stack/docker-compose.prod.yml`: relay, gateway and web are always on;
+Foundry sits behind `--profile foundry` — add that flag to have this same
+compose run Foundry too (the normal case for a LAN game). Config lives in two
+files: `stack/.env` (Foundry credentials) and `stack/.env.gateway` (relay key,
+client id, admin password).
 
 ### A1. Configure secrets
 
 ```bash
 cd stack
 cp .env.example .env
+cp .env.gateway.example .env.gateway
 ```
 
 Edit `stack/.env`:
@@ -54,20 +62,31 @@ FOUNDRY_USERNAME=you@example.com
 FOUNDRY_PASSWORD=your-foundry-password
 FOUNDRY_LICENSE_KEY=XXXX-XXXX-XXXX-XXXX-XXXX-XXXX
 FOUNDRY_ADMIN_KEY=<any strong string — protects Foundry's /setup>
+# Optional, once a world exists (A4): auto-launch it on every container
+# start/restart, skipping the manual "Launch World" click:
+# FOUNDRY_WORLD=<world-id>
 ```
 
 The compose file reads this with `format: raw` so `$` in passwords is safe.
-`stack/.env` is gitignored — it never leaves your machine.
+Both `.env` files are gitignored — they never leave your machine.
+`stack/.env.gateway` starts empty; A6/A7/A8 below fill it in.
 
-### A2. Bring up Foundry + relay
+### A2. Bring up the stack
 
 ```bash
 cd stack
-docker compose -f docker-compose.dev.yml up -d
-docker compose -f docker-compose.dev.yml logs -f foundry   # watch until "Server started and listening on port 30000"
+docker compose -f docker-compose.prod.yml --profile foundry up -d --build
+docker compose -f docker-compose.prod.yml logs -f foundry   # watch until "Server started and listening on port 30000"
 ```
 
-Foundry is now on <http://localhost:30000>, the relay on <http://localhost:3010>.
+This builds the gateway and web images and starts relay, gateway, web and
+Foundry together. Foundry is on <http://localhost:30000>, the relay on
+<http://localhost:3010>, and the PWA (via Caddy) on <http://localhost>.
+
+**Hostname pitfall:** the compose pins `hostname: foundry` on the Foundry
+service — Foundry's license signature binds to the container hostname, so
+changing or removing it re-prompts the license + EULA on the next recreate.
+Leave it as-is.
 
 ### A3. Install the D&D 5e system + REST module
 
@@ -82,7 +101,7 @@ unzip -o /tmp/dnd5e.zip -d stack/foundry-data/Data/systems/dnd5e
 # REST API module 3.4.1
 curl -L -o /tmp/restapi.zip https://github.com/ThreeHats/foundryvtt-rest-api/releases/download/3.4.1/module.zip
 unzip -o /tmp/restapi.zip -d stack/foundry-data/Data/modules/foundry-rest-api
-docker compose -f stack/docker-compose.dev.yml restart foundry
+docker compose -f stack/docker-compose.prod.yml --profile foundry restart foundry
 ```
 
 (Or install both from Foundry's own Setup UI — same result.)
@@ -125,9 +144,9 @@ curl -s -X POST http://localhost:3010/auth/api-keys \
   -d '{"name":"gateway","scopes":["entity:read","entity:write","search","events:subscribe","clients:read","dnd5e","roll:execute","chat:read","roll:read"]}'
 ```
 
-Save the `key` from step 2 — this is your **RELAY_API_KEY**. It is shown once.
-(Those scopes cover reads, scoped writes, live push, the dnd5e actions, dice
-rolling, and the GM roll feed.)
+Save the `key` from step 2 into `stack/.env.gateway` as **RELAY_API_KEY**. It
+is shown once. (Those scopes cover reads, scoped writes, live push, the dnd5e
+actions, dice rolling, and the GM roll feed.)
 
 ### A7. Pair the module to the relay
 
@@ -152,35 +171,46 @@ curl -s http://localhost:3010/clients -H "x-api-key: <RELAY_API_KEY>"
 # -> {"clients":[{"clientId":"fvtt_....","isOnline":true, ...}]}
 ```
 
-Save that `clientId` — this is your **RELAY_CLIENT_ID**.
+Save that `clientId` into `stack/.env.gateway` — this is your
+**RELAY_CLIENT_ID**.
 
-### A8. Configure + run the gateway
+### A8. Finish configuring the gateway
 
-```bash
-cd apps/gateway
-cp .env.example .env 2>/dev/null || true   # or create it
-```
-
-`apps/gateway/.env`:
+Edit `stack/.env.gateway`:
 
 ```
-PORT=8090
-RELAY_URL=http://localhost:3010
 RELAY_API_KEY=<from A6>
 RELAY_CLIENT_ID=<from A7>
-PLAYERS_FILE=./players.yaml
+ADMIN_PASSWORD=<a strong password — enables the /admin invite console>
 ```
+
+Then apply it:
+
+```bash
+docker compose -f docker-compose.prod.yml restart gateway
+```
+
+`players.yaml` lives on the writable `stack/gateway-data/` volume
+(`PLAYERS_FILE=/data/players.yaml` inside the container); the gateway image's
+entrypoint bootstraps an empty `players: []` there on first start if it
+doesn't exist yet, so there's nothing to create by hand.
 
 ### A9. Create invite tokens (and a GM token)
 
+Either through the **admin console** (recommended): open
+`http://localhost/admin`, log in with `ADMIN_PASSWORD`, **New player** per
+player — searches actors by name, shows the one-time join link + QR code
+once.
+
+Or **scripted**, from the repo root:
+
 ```bash
-# from repo root, one per player:  node scripts/make-invite.mjs <name> <actorId...>
 node scripts/make-invite.mjs Anna kbXH9abc...
 node scripts/make-invite.mjs Ben  aa3F2def...
 ```
 
 Each run prints a one-time join link and a YAML block. Paste the blocks into
-`apps/gateway/players.yaml`:
+`stack/gateway-data/players.yaml`:
 
 ```yaml
 players:
@@ -197,66 +227,62 @@ players:
     gm: true
 ```
 
-Give each player their own link once; it stores the token in their browser.
+The file hot-reloads within ~1s — no restart needed either way. Give each
+player their own link once; it stores the token in their browser. The console
+has no GM toggle yet — hand-edit `gm: true` into that player's line.
 
-### A10. Run the gateway and the web app
+### A10. Play, including on a phone over your LAN
 
-```bash
-# gateway (from apps/gateway, with its .env exported or via a tool that loads .env)
-pnpm --filter @companion/gateway start
+Open <http://localhost> on your PC, then the join link, e.g.
+`http://localhost/join#<token>`.
 
-# web (from repo root) — dev server:
-pnpm --filter @companion/web dev
-# or a production build served statically:
-pnpm --filter @companion/web generate   # output in apps/web/.output/public
-```
-
-`nuxt dev` proxies `/api` to the gateway on :8090. Open the printed URL
-(e.g. <http://localhost:3001>) then visit the join link, e.g.
-`http://localhost:3001/join#<token>`.
-
-### A11. Play on a real phone over your LAN
-
-```bash
-pnpm --filter @companion/web dev --host
-```
-
-On the phone (same Wi-Fi), open `http://<your-PC-LAN-IP>:3001/join#<token>`.
-Keep the Foundry GM tab open on your PC so the world stays online.
+On a phone (same Wi-Fi): `http://<your-PC-LAN-IP>/join#<token>`. Caddy serves
+the PWA and proxies `/api` same-origin on port 80 — no separate port for the
+gateway. Keep the Foundry GM browser tab open so the world stays online (see
+"Connecting to Foundry" below).
 
 ---
 
 ## Part B — Online (one VPS, HTTPS)
 
-Uses `stack/docker-compose.prod.yml` + `stack/Caddyfile` (Caddy terminates TLS
-via Let's Encrypt automatically). Public surface is Caddy only:
-`vtt.<domain>` → Foundry, `app.<domain>` → the PWA and its `/api` → gateway.
-The relay stays on the internal Docker network.
+Uses `stack/docker-compose.prod.yml` + `stack/Caddyfile`. The Caddyfile ships
+two variants: a LAN default (plain `:80`, what Part A uses) and a
+commented-out public-HTTPS variant below it (Caddy provisions Let's Encrypt
+certs for your domains automatically). Public surface is Caddy only:
+`app.<domain>` → the PWA and its `/api` → gateway; `vtt.<domain>` → Foundry.
+The relay stays on the internal Docker network by default (see B4b for the
+one case where it's reachable from outside).
 
-### B1. DNS + files
+### B1. DNS + enable the TLS variant
 
-- Point `vtt.<domain>` and `app.<domain>` A-records at the VPS.
-- Edit `stack/Caddyfile`, replacing the two example hostnames.
-- Create `stack/.env` exactly as in A1 (add `FOUNDRY_PROXY_SSL=true` is already
-  set in the prod compose).
+- Point `app.<domain>` and `vtt.<domain>` A-records at the VPS.
+- Edit `stack/Caddyfile`: comment out (or delete) the `:80` block at the top,
+  uncomment the "Public HTTPS variant" block below it, and replace its two
+  example hostnames with your real domains.
+- Edit `stack/docker-compose.prod.yml`: uncomment `- "443:443"` under the
+  `web` service's `ports:`, and uncomment `FOUNDRY_PROXY_SSL=true` /
+  `FOUNDRY_PROXY_PORT=443` under the `foundry` service's `environment:`.
+- Create `stack/.env` and `stack/.env.gateway` exactly as in A1.
 
-### B2. Build the web app on the server
+### B2. ~~Build the web app on the server~~ — no longer needed
 
-```bash
-pnpm install
-pnpm --filter @companion/web generate   # Caddy serves apps/web/.output/public
-```
+`apps/web/Dockerfile` bakes `nuxt generate` into the Caddy image at build
+time, so B3's `--build` does this for you. Nothing to build by hand.
 
-### B3. Start Foundry + relay, do first-run
+### B3. Start everything + first-run
 
 ```bash
 cd stack
-docker compose -f docker-compose.prod.yml up -d foundry relay
+docker compose -f docker-compose.prod.yml --profile foundry up -d --build
 ```
 
 Do the Foundry first-run through `https://vtt.<domain>` (EULA, admin key,
 install dnd5e + module as in A3, create the world/users/actors, enable the
-module). This is the same as A3–A5.
+module) — same as A3–A5. Same hostname pitfall as A2: don't change
+`hostname: foundry` once the license is accepted, or the next recreate
+re-prompts it. Once the world exists, set `FOUNDRY_WORLD=<world-id>` in
+`stack/.env` so restarts relaunch it unattended (a GM browser session — B4
+below — is still needed for the world to actually go online).
 
 ### B4. Connect the world to the relay — pick ONE
 
@@ -277,37 +303,40 @@ Keep that session alive; `GET /clients` should show the world `isOnline: true`.
 (These session endpoints exist in the relay; exercise them once on first deploy
 and capture the exact payloads — treat like the pairing step in A7.)
 
-**B4b. A human GM keeps a browser open.** Then the relay's WebSocket must be
-publicly reachable: add a `relay.<domain>` block to the Caddyfile
-(`reverse_proxy relay:3010`), set the module's Relay URL to
-`wss://relay.<domain>`, and pair via `https://relay.<domain>/pair/<CODE>`.
-Simpler, but it exposes the relay and needs a machine with a GM tab always on.
+**B4b. A human GM keeps a browser open.** The relay's `:3010` is already
+published by the compose (`ports: "3010:3010"`), so point the module's Relay
+URL straight at `ws://<vps-ip>:3010` and pair via
+`http://<vps-ip>:3010/pair/<CODE>` — no Caddyfile edit required. For TLS,
+add a `relay.<domain>` block instead (`reverse_proxy relay:3010`), set the
+module's Relay URL to `wss://relay.<domain>`, and pair via
+`https://relay.<domain>/pair/<CODE>`. Simpler than B4a, but needs a machine
+with a GM tab always on.
 
 Either way, note the `clientId` (`GET /clients`) → **RELAY_CLIENT_ID**.
 
 ### B5. Gateway env + secrets
 
-The prod compose runs the gateway in a Node container. Provide, via the VPS
-shell environment (or a root `.env` compose reads):
+Fill `stack/.env.gateway` (same as A8):
 
 ```
-RELAY_API_KEY=<scoped key>
-RELAY_CLIENT_ID=<fvtt_...>
+RELAY_API_KEY=<scoped key from B4>
+RELAY_CLIENT_ID=<fvtt_... from B4>
+ADMIN_PASSWORD=<a strong password — enables the /admin invite console>
 ```
-
-Mount your real `apps/gateway/players.yaml` (it's gitignored) with player
-entries + a `gm: true` entry, as in A9.
-
-### B6. Launch everything + invite
 
 ```bash
-cd stack
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml restart gateway
 ```
 
-Generate invite links with `node scripts/make-invite.mjs …`, add the YAML to
-`players.yaml`, `docker compose … restart gateway`, and send each player their
-`https://app.<domain>/join#<token>` link.
+`players.yaml` lives on the writable `stack/gateway-data/` volume, same as A8
+— the gateway bootstraps it empty on first start.
+
+### B6. Invite players
+
+Same as A9: the admin console at `https://app.<domain>/admin`, or
+`node scripts/make-invite.mjs …` + paste the YAML into
+`stack/gateway-data/players.yaml` (hot-reloaded, no restart). Send each
+player their `https://app.<domain>/join#<token>` link.
 
 ---
 
@@ -343,6 +372,9 @@ and `GET <relay>/clients` (with the key) → world `isOnline: true`.
 - **Compose warns "variable is not set" / password mangled:** ensure the
   Foundry service uses `env_file: {path: .env, format: raw}` (already set) so
   `$` in the password isn't interpolated.
+- **Foundry re-prompts the license/EULA after a routine restart:** the
+  container's `hostname` changed. The compose pins `hostname: foundry` — the
+  license signature binds to it; don't edit or remove that line.
 - **dnd5e or module update breaks the sheet:** the adapter is pinned to dnd5e
   5.3.3; bump one pin at a time in `VERSIONS.md`, run `pnpm test`, then one live
   read/write round-trip. See `docs/OPERATIONS.md`.

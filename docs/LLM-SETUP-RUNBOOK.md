@@ -135,6 +135,22 @@ headless GM session). This runbook's Phases 3–7 still apply; substitute
 `https://vtt.<domain>` for `http://localhost:30000` and the internal relay
 for `http://localhost:3010`.
 
+**Production installs, in general** (VPS or a LAN box you want unattended):
+use `stack/docker-compose.prod.yml` instead of `docker-compose.dev.yml` for
+Phase 1/2 — it runs relay + gateway + web always-on (built from
+`apps/gateway/Dockerfile` / `apps/web/Dockerfile`) with Foundry behind
+`--profile foundry`:
+
+```bash
+cd stack
+cp .env.gateway.example .env.gateway   # RELAY_API_KEY, RELAY_CLIENT_ID, ADMIN_PASSWORD — Phase 4/5
+docker compose -f docker-compose.prod.yml --profile foundry up -d --build
+```
+
+Phases 3–7 below are unchanged; only the compose invocation and where the
+gateway's secrets live differ — see `docs/HOSTING.md` Part A/B for the full
+walkthrough.
+
 ---
 
 ## Phase 2 — Relay
@@ -245,6 +261,12 @@ reads it synchronously); create it before the first start:
 test -f apps/gateway/players.yaml || echo "players: []" > apps/gateway/players.yaml
 ```
 
+(This manual guard is only for a host-run gateway, as below. Under
+`docker-compose.prod.yml` the gateway image's own entrypoint
+(`apps/gateway/docker-entrypoint.sh`) does the same idempotent bootstrap
+automatically against the writable `stack/gateway-data/` volume — nothing to
+run by hand there.)
+
 Then configure and start the gateway:
 
 ```bash
@@ -350,6 +372,11 @@ All eight green = the installation is complete.
 - **Gateway ignores config changes:** it does not hot-reload — restart it.
 - **Compose warns about `$` in passwords:** the Foundry service must keep
   `env_file: {path: .env, format: raw}` (already set in the repo).
+- **Foundry re-prompts the license/EULA after a routine restart:** its
+  license signature binds to the container **hostname**. Both
+  `docker-compose.dev.yml` and `docker-compose.prod.yml` pin
+  `hostname: foundry` for exactly this reason — never edit or remove it once
+  the license has been accepted, or the next recreate invalidates it.
 - **Area-effect item use (e.g. Bead of Force) takes ~10 s:** expected — the
   relay times out while Foundry waits on its template prompt; consumption
   already happened and the app continues with the roll.
@@ -387,6 +414,11 @@ in the player flow. Three independent links, three lifetimes:
   (or the VPS headless session) is attached to the world. Session flow for
   a play night: GM launches the world and joins → pairing reconnects itself
   → players open the app (already authenticated) and play.
+- **World launch itself can be automated.** Once a world exists, set
+  `FOUNDRY_WORLD=<world-id>` in `stack/.env` (both compose files read it) and
+  the container auto-launches that world on every start/restart — no manual
+  "Launch World" click. This only removes the launch click; a GM session
+  still has to attach for the world to go online (previous bullet).
 
 ## Values collected along the way (final inventory)
 
