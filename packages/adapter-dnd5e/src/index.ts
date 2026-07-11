@@ -528,7 +528,30 @@ function buildUpdate(actor: FoundryActorDoc, intent: ResourceIntent): FoundryUpd
   const target = clamp(raw, descriptor.min, descriptor.max);
   const id = intent.resourceId;
 
-  if (id === 'hp') return { data: { 'system.attributes.hp.value': target } };
+  if (id === 'hp') {
+    // dnd5e rule: damage drains temporary HP before hp.value. This only
+    // applies to `delta` intents with a negative amount (damage) — that's
+    // the only shape the PWA's "− Damage" / stepper controls ever send for
+    // hp. A `set` intent is a direct, literal write (e.g. GM/admin tooling)
+    // and intentionally bypasses temp-HP absorption — see the "hp set is a
+    // direct, literal write" test.
+    if (intent.kind === 'delta' && intent.amount < 0) {
+      const damage = -intent.amount;
+      const currentTemp = numAt(actor.system, 'attributes.hp.temp') ?? 0;
+      const tempAbsorbed = Math.min(currentTemp, damage);
+      const remaining = damage - tempAbsorbed;
+      const newValue = clamp(descriptor.value - remaining, descriptor.min, descriptor.max);
+      return tempAbsorbed > 0
+        ? {
+            data: {
+              'system.attributes.hp.value': newValue,
+              'system.attributes.hp.temp': currentTemp - tempAbsorbed,
+            },
+          }
+        : { data: { 'system.attributes.hp.value': newValue } };
+    }
+    return { data: { 'system.attributes.hp.value': target } };
+  }
   if (id === 'hp.temp') return { data: { 'system.attributes.hp.temp': target } };
   if (id === 'deathsaves.success') return { data: { 'system.attributes.death.success': target } };
   if (id === 'deathsaves.failure') return { data: { 'system.attributes.death.failure': target } };

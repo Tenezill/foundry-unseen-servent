@@ -328,6 +328,58 @@ describe('buildUpdate — clamping and paths', () => {
     expect(u.data['system.attributes.hp.value']).toBe(20);
   });
 
+  it('hp set is a direct, literal write — temp HP is untouched even though value drops (martial has temp 5)', () => {
+    // `set` is used by administrative/GM-style writes, not the PWA's damage
+    // controls (those always send `delta`). A set below the current value
+    // is NOT treated as "damage" — see the delta-only branch below.
+    const u = dnd5eAdapter.buildUpdate(martial, { kind: 'set', resourceId: 'hp', value: 20 });
+    expect(u.data['system.attributes.hp.temp']).toBeUndefined();
+  });
+
+  it('damage (delta) smaller than temp HP: temp absorbs it all, hp.value unchanged (martial: value 34, temp 5)', () => {
+    const u = dnd5eAdapter.buildUpdate(martial, { kind: 'delta', resourceId: 'hp', amount: -3 });
+    expect(u.data['system.attributes.hp.value']).toBe(34);
+    expect(u.data['system.attributes.hp.temp']).toBe(2);
+  });
+
+  it('damage (delta) larger than temp HP: temp drains to 0, remainder comes off hp.value (martial: value 34, temp 5)', () => {
+    const u = dnd5eAdapter.buildUpdate(martial, { kind: 'delta', resourceId: 'hp', amount: -8 });
+    expect(u.data['system.attributes.hp.value']).toBe(31);
+    expect(u.data['system.attributes.hp.temp']).toBe(0);
+  });
+
+  it('regression: 44/44 +2 temp taking 5 damage ends at temp 0, hp.value 41 (live bug report)', () => {
+    const randal: FoundryActorDoc = structuredClone(martial);
+    (randal.system as { attributes: { hp: { value: number; max: number; temp: number } } }).attributes.hp = {
+      value: 44,
+      max: 44,
+      temp: 2,
+    };
+    const u = dnd5eAdapter.buildUpdate(randal, { kind: 'delta', resourceId: 'hp', amount: -5 });
+    expect(u.data['system.attributes.hp.value']).toBe(41);
+    expect(u.data['system.attributes.hp.temp']).toBe(0);
+  });
+
+  it('damage (delta) with temp HP at 0: behaves exactly as before (no temp key written)', () => {
+    const noTemp: FoundryActorDoc = structuredClone(martial);
+    (noTemp.system as { attributes: { hp: { value: number; max: number; temp: number } } }).attributes.hp.temp = 0;
+    const u = dnd5eAdapter.buildUpdate(noTemp, { kind: 'delta', resourceId: 'hp', amount: -10 });
+    expect(u).toEqual({ data: { 'system.attributes.hp.value': 24 } });
+  });
+
+  it('damage (delta) with temp HP undefined: behaves exactly as before (no temp key written)', () => {
+    const noTemp: FoundryActorDoc = structuredClone(martial);
+    const hp = (noTemp.system as { attributes: { hp: Record<string, unknown> } }).attributes.hp;
+    delete hp.temp;
+    const u = dnd5eAdapter.buildUpdate(noTemp, { kind: 'delta', resourceId: 'hp', amount: -10 });
+    expect(u).toEqual({ data: { 'system.attributes.hp.value': 24 } });
+  });
+
+  it('healing (positive delta) leaves temp HP untouched even when not clamped at max (martial: value 34, temp 5)', () => {
+    const u = dnd5eAdapter.buildUpdate(martial, { kind: 'delta', resourceId: 'hp', amount: 3 });
+    expect(u).toEqual({ data: { 'system.attributes.hp.value': 37 } });
+  });
+
   it('hp.temp floors at 0 and has no upper clamp', () => {
     expect(
       dnd5eAdapter.buildUpdate(martial, { kind: 'set', resourceId: 'hp.temp', value: -3 }).data[
