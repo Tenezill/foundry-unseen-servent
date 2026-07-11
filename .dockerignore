@@ -1,0 +1,13 @@
+.git
+node_modules
+**/node_modules
+**/.output
+**/dist
+stack/foundry-data
+stack/relay-data
+stack/caddy-data
+stack/gateway-data
+.superpowers
+.remember
+docs
+*.md
