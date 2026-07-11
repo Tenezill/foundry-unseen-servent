@@ -257,6 +257,11 @@ function parseActionIntent(
     case 'endconcentration':
       // Actor-scoped commands carry only {kind, actionId} — no extra fields.
       return { kind, actionId };
+    default:
+      // M23 kinds ('pool', 'rouse'): no adapter declares them yet, so the
+      // gateway has no per-kind body extras to validate. Reject as an
+      // invalid intent rather than widen this switch speculatively.
+      return null;
   }
 }
 

@@ -502,6 +502,10 @@ export const fakeAdapter: SystemAdapter = {
         return { endpoint: 'death-save' };
       case 'endconcentration':
         return { endpoint: 'break-concentration' };
+      default:
+        // M23 kinds ('pool', 'rouse'): this fake never declares actions of
+        // these kinds, so the branch is unreachable in tests today.
+        throw new IntentError(`unsupported action kind "${String((intent as { kind: unknown }).kind)}"`, 'UNKNOWN_RESOURCE');
     }
   },
 };
