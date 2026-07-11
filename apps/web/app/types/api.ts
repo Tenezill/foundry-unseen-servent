@@ -86,3 +86,35 @@ export interface AdminInviteResponse {
 export interface AdminActorsResponse {
   actors: Array<{ id: string; name: string; img?: string }>
 }
+
+// ---- encounters (M22) -------------------------------------------------------
+
+/** One combatant as the gateway serializes it (docs/API.md, mirrors
+ *  apps/gateway/src/encounters.ts). Exact hp is only ever attached to PCs —
+ *  NPCs carry a derived `health` state instead, never both. */
+export interface EncounterCombatantView {
+  id: string
+  actorId?: string
+  name: string
+  img?: string
+  initiative: number | null
+  isPC: boolean
+  defeated: boolean
+  health?: 'healthy' | 'wounded' | 'bloodied' | 'down'
+  hp?: { value: number; max: number }
+}
+
+/** GET /api/encounter response body (bare, not envelope-wrapped) and the
+ *  payload of every `event: encounter` SSE frame from /api/encounter/events. */
+export interface EncounterView {
+  active: boolean
+  round?: number
+  turn?: { combatantId: string | null }
+  /** Initiative-desc order; hidden combatants already dropped. */
+  combatants?: EncounterCombatantView[]
+}
+
+/** POST /api/encounter/combatants/:id/hp response. */
+export interface EncounterHpResponse {
+  encounter: EncounterView
+}

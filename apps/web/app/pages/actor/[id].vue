@@ -1,7 +1,7 @@
 <template>
   <div class="sheet-root">
     <template v-if="sheet">
-      <div class="frame">
+      <div class="frame" :class="{ 'with-carousel': showCarousel }">
         <div class="toolbar">
           <NuxtLink to="/" class="tool back" aria-label="Back to characters">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -49,6 +49,13 @@
             :detail-ids="actionDetailIds"
             @action="onCombatAction"
             @detail="onCombatDetail"
+          />
+
+          <CombatantList
+            v-if="activeTab === 'combat'"
+            :combatants="encounter.combatants ?? []"
+            :readonly="offline"
+            @select="openCombatant"
           />
 
           <template v-if="activeTab === 'resources'">
@@ -130,6 +137,15 @@
         </main>
       </div>
 
+      <div v-if="showCarousel" class="carousel-dock">
+        <InitiativeCarousel
+          :combatants="encounter.combatants ?? []"
+          :round="encounter.round"
+          :turn-combatant-id="encounter.turn?.combatantId ?? null"
+          :actor-id="actorId"
+        />
+      </div>
+
       <nav class="tabbar" aria-label="Sheet sections">
         <button
           v-for="tab in visibleTabs"
@@ -152,6 +168,13 @@
         :resource="numpadResource"
         @apply="applyNumpad"
         @close="numpadFor = null"
+      />
+      <CombatantHpSheet
+        v-if="combatantFor"
+        :combatant="combatantFor"
+        :busy="combatantHpBusy"
+        @apply="applyCombatantHp"
+        @close="combatantForId = null"
       />
       <ActionSheet
         v-if="sheetAction"
@@ -229,6 +252,8 @@ import type {
   ActionResponse,
   ActionRollResult,
   ApiErrorBody,
+  EncounterHpResponse,
+  EncounterView,
   LibraryPreviewResponse,
   LibrarySearchEntry,
   LibrarySearchResponse,
@@ -239,7 +264,7 @@ import type {
 const LARGE_DELTA = 10
 const ROLL_HISTORY_MAX = 20
 
-type TabId = 'overview' | 'actions' | 'resources' | 'inventory' | 'spells'
+type TabId = 'overview' | 'actions' | 'resources' | 'inventory' | 'spells' | 'combat'
 
 interface TabDef {
   id: TabId
@@ -250,6 +275,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'overview', label: 'Overview', icon: 'M3 11l9-8 9 8M5 10v10h14V10' },
   { id: 'actions', label: 'Actions', icon: 'M13 2 4 14h6l-1 8 9-12h-6z' },
+  { id: 'combat', label: 'Combat', icon: 'M12 2 3 6v6c0 5 4 8 9 10 5-2 9-5 9-10V6l-9-4Z' },
   { id: 'resources', label: 'Vitals', icon: 'M12 21s-7-4.5-7-10a4 4 0 0 1 8-1 4 4 0 0 1 8 1c0 5.5-7 10-7 10z' },
   { id: 'inventory', label: 'Gear', icon: 'M4 7h16v13H4zM9 7V4h6v3' },
   { id: 'spells', label: 'Spells', icon: 'M12 3l2 5 5 .5-4 3.5 1.5 5-4.5-3-4.5 3 1.5-5-4-3.5 5-.5z' },
@@ -294,6 +320,20 @@ const detailFor = ref<{
 const showLog = ref(false)
 
 const offline = computed(() => conn.value === 'offline')
+
+/* ---- M22 encounter mirror ------------------------------------------------ */
+
+const encounter = ref<EncounterView>({ active: false })
+const encounterActive = computed(() => encounter.value.active === true)
+/** The carousel needs the freshest possible turn order — hide it whenever the
+ *  combat stream itself isn't confirmed live, on top of the general offline
+ *  treatment. The COMBAT tab is coarser (a list, not a live turn pointer) and
+ *  follows the app's usual offline idiom instead: it keeps showing the last
+ *  known roster, read-only, rather than vanishing on every reconnect blip. */
+const showCarousel = computed(() => encounterActive.value && combatConn.value === 'live')
+const combatantForId = ref<string | null>(null)
+const combatantHpBusy = ref(false)
+const combatantFor = computed(() => encounter.value.combatants?.find((c) => c.id === combatantForId.value) ?? null)
 
 const isDark = computed(() => {
   void theme.choice.value // recompute when the override changes
@@ -375,6 +415,7 @@ const sectionsByTab = computed<Record<TabId, SheetSection[]>>(() => {
   const groups: Record<TabId, SheetSection[]> = {
     overview: [],
     actions: [],
+    combat: [],
     resources: [],
     inventory: [],
     spells: [],
@@ -428,6 +469,7 @@ const visibleTabs = computed(() =>
   TABS.filter((t) => {
     if (t.id === 'overview') return true
     if (t.id === 'actions') return combatActions.value.length > 0
+    if (t.id === 'combat') return encounterActive.value
     return sectionsByTab.value[t.id].length > 0
   }),
 )
@@ -445,7 +487,7 @@ const renderableSections = computed(() =>
 )
 
 const tabEmpty = computed(() => {
-  if (activeTab.value === 'actions') return false
+  if (activeTab.value === 'actions' || activeTab.value === 'combat') return false
   if (renderableSections.value.length > 0) return false
   if (activeTab.value === 'resources' && (hasRest.value || dying.value)) return false
   if (activeTab.value === 'inventory' && walletResources.value.length > 0) return false
@@ -490,6 +532,7 @@ function reload(): void {
   loadError.value = ''
   void fetchSheet()
   connectEvents()
+  connectCombatEvents()
 }
 
 /* ---- intents ------------------------------------------------------------ */
@@ -975,16 +1018,105 @@ function connectEvents(): void {
   }
 }
 
+/** Second, independent EventSource for the M22 encounter mirror — own
+ *  connection, own backoff state, closed on unmount alongside the sheet
+ *  stream but otherwise unrelated to it (a hiccup on one stream must not
+ *  affect the other). */
+let esCombat: EventSource | null = null
+let combatRetries = 0
+let combatReconnectTimer: ReturnType<typeof setTimeout> | undefined
+const combatConn = ref<'live' | 'reconnecting' | 'offline'>('reconnecting')
+
+function closeCombatEvents(): void {
+  esCombat?.close()
+  esCombat = null
+  if (combatReconnectTimer !== undefined) clearTimeout(combatReconnectTimer)
+  combatReconnectTimer = undefined
+}
+
+function connectCombatEvents(): void {
+  closeCombatEvents()
+  if (!navigator.onLine) {
+    combatConn.value = 'offline'
+    return
+  }
+  const token = getToken() ?? ''
+  esCombat = new EventSource(`${base}/api/encounter/events?token=${encodeURIComponent(token)}`)
+  esCombat.onopen = () => {
+    combatConn.value = 'live'
+    combatRetries = 0
+  }
+  esCombat.addEventListener('encounter', (event) => {
+    combatConn.value = 'live'
+    combatRetries = 0
+    try {
+      encounter.value = JSON.parse((event as MessageEvent<string>).data) as EncounterView
+    } catch {
+      /* malformed frame — keep current encounter mirror */
+    }
+  })
+  esCombat.onerror = () => {
+    closeCombatEvents()
+    if (!navigator.onLine) {
+      combatConn.value = 'offline'
+      return
+    }
+    combatConn.value = 'reconnecting'
+    const delay = Math.min(30_000, 1000 * 2 ** Math.min(combatRetries, 5))
+    combatRetries += 1
+    combatReconnectTimer = setTimeout(connectCombatEvents, delay)
+  }
+}
+
+function openCombatant(id: string): void {
+  if (offline.value) return
+  combatantForId.value = id
+}
+
+async function applyCombatantHp(delta: number): Promise<void> {
+  const target = combatantFor.value
+  if (!target || combatantHpBusy.value || delta === 0) return
+  combatantHpBusy.value = true
+  try {
+    const res = await api<EncounterHpResponse>(`/api/encounter/combatants/${target.id}/hp`, {
+      method: 'POST',
+      body: { kind: 'delta', amount: delta },
+    })
+    encounter.value = res.encounter
+    toast.show(`${Math.abs(delta)} ${delta < 0 ? 'dmg' : 'heal'} → ${target.name}`)
+    combatantForId.value = null
+  } catch (err) {
+    const status = errorStatus(err)
+    if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else if (status === 429) {
+      toast.show('Slow down — too many changes at once')
+    } else {
+      toast.show('Change didn’t go through. Try again.')
+    }
+    // Error keeps the sheet open (brief) — combatantForId stays set so the
+    // player can retry or cancel explicitly.
+  } finally {
+    combatantHpBusy.value = false
+  }
+}
+
 function onOnline(): void {
   conn.value = 'reconnecting'
   retries = 0
   void fetchSheet()
   connectEvents()
+  combatConn.value = 'reconnecting'
+  combatRetries = 0
+  connectCombatEvents()
 }
 
 function onOffline(): void {
   conn.value = 'offline'
   closeEvents()
+  combatConn.value = 'offline'
+  closeCombatEvents()
 }
 
 /* ---- lifecycle ------------------------------------------------------------ */
@@ -1007,6 +1139,7 @@ onMounted(() => {
 
   if (!navigator.onLine) {
     conn.value = 'offline'
+    combatConn.value = 'offline'
     loading.value = false
     if (!sheet.value) loadError.value = 'You are offline and no saved sheet exists yet.'
     return
@@ -1014,11 +1147,13 @@ onMounted(() => {
 
   void fetchSheet()
   connectEvents()
+  connectCombatEvents()
 })
 
 onBeforeUnmount(() => {
   if (rollTimer !== undefined) clearTimeout(rollTimer)
   closeEvents()
+  closeCombatEvents()
   window.removeEventListener('online', onOnline)
   window.removeEventListener('offline', onOffline)
 })
@@ -1033,6 +1168,10 @@ onBeforeUnmount(() => {
   max-width: 480px;
   margin: 0 auto;
   padding: calc(10px + var(--safe-top)) 16px calc(100px + var(--safe-bottom));
+}
+
+.frame.with-carousel {
+  padding-bottom: calc(170px + var(--safe-bottom));
 }
 
 /* ---- top toolbar ---- */
@@ -1121,6 +1260,23 @@ onBeforeUnmount(() => {
 
 .lib-add:active {
   transform: scale(0.98);
+}
+
+/* ---- combat carousel dock (M22) ---- */
+
+.carousel-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 68px;
+  z-index: 39;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 8px 16px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid var(--line);
 }
 
 /* ---- bottom tabs ---- */
