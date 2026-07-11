@@ -305,8 +305,9 @@ relay reachable from outside, comment out the relay's `"3010:3010"` port
 mapping in `stack/docker-compose.prod.yml` (or bind it to localhost instead:
 `"127.0.0.1:3010:3010"`) — only B4b needs it public. Create the relay account
 + scoped key the same way as A6, reaching the relay over the Docker network
-(e.g. `docker compose exec gateway curl ...`, or temporarily binding the port
-to localhost as above), then lock it back down:
+(e.g. `docker compose exec gateway wget -qO- ...` — the gateway image ships
+wget, not curl — or temporarily binding the port to localhost as above), then
+lock it back down:
 
 ```
 POST /session-handshake   headers: x-api-key, x-foundry-url: http://foundry:30000, x-username: <GM user>
