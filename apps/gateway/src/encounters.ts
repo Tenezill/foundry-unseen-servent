@@ -334,12 +334,20 @@ export class EncounterManager {
         return;
       }
       case 'deleteCombat': {
+        if (this.combat === null) return;
         const doc = firstArg(ev.data);
         const id = doc !== null && typeof doc._id === 'string' ? doc._id : undefined;
-        if (this.combat !== null && (id === undefined || id === this.combat.id)) {
+        if (id === this.combat.id) {
+          // Well-formed frame naming the tracked combat: clear immediately.
           this.combat = null;
           this.emit();
+        } else if (id === undefined) {
+          // Unparseable frame (no id): keep-state-on-uncertainty — never
+          // blind-clear a live combat on a malformed frame. A bounded,
+          // coalesced REST re-read settles what actually happened.
+          void this.reseed();
         }
+        // A well-formed id for a DIFFERENT combat: not ours; ignore.
         return;
       }
       case 'createCombatant':

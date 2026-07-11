@@ -125,36 +125,39 @@ On connect the current sheet is sent immediately as a `sheet` event.
 
 ### `GET /api/encounter`
 Retrieve the active encounter state. Active means a combat exists with round >= 1.
-→ `200 { "encounter": EncounterView }`
+→ `200 <EncounterView>` (the bare view — no wrapper object).
 
-`EncounterView` shape:
+`EncounterView` shape. When no encounter is active the response is exactly
+`{ "active": false }` — `round`, `turn` and `combatants` are omitted, not null:
 
 ```json
 {
-  "active": boolean,
-  "round": number | null,
-  "turn": { "combatantId": string | null } | null,
+  "active": true,
+  "round": number,
+  "turn": { "combatantId": string | null },
   "combatants": [
     {
       "id": string,
-      "actorId": string | null,
+      "actorId": string,      // omitted when the combatant has no linked actor
       "name": string,
-      "img": string | null,
+      "img": string,           // omitted when the combatant has no image
       "initiative": number | null,
       "isPC": boolean,
       "defeated": boolean,
-      "health": "healthy" | "wounded" | "bloodied" | "down" | null,
-      "hp": { "value": number, "max": number } | null
+      "health": "healthy" | "wounded" | "bloodied" | "down",  // non-PCs only; omitted for PCs
+      "hp": { "value": number, "max": number }                // PCs only; omitted for non-PCs
     }
   ]
 }
 ```
 
-Combatants are sorted by initiative (descending). Hidden combatants are omitted from the view.
+Every combatant carries exactly one of `health` (non-PCs) or `hp` (PCs) — the
+other key is omitted, never null. Combatants are sorted by initiative
+(descending). Hidden combatants are omitted from the view.
 
 **Privacy contract:** Exact NPC hit points never appear in any player payload. NPCs
 carry only a `health` state indicator; PCs carry exact `hp` values. This contract
-is enforced by the relay and gateway.
+is enforced by the gateway.
 
 ### `GET /api/encounter/events` (SSE)
 `Content-Type: text/event-stream`. Query param: `token=<invite token>` (required;
@@ -179,15 +182,16 @@ Body:
 ```
 
 Semantics (server-enforced, in this order):
-1. Combatant must exist → else `404 NOT_FOUND`.
-2. Combat must be active (round >= 1) → else `409 CONFLICT`.
-3. Payload must validate (`kind` known, `amount` finite) → else `422 INVALID_INTENT`.
+1. Shared write limiter (30/min per token) → else `429 RATE_LIMITED`.
+2. Combat must be active (round >= 1) → else `409 CONFLICT` (regardless of
+   whether `:id` names a real combatant).
+3. Combatant must exist in the active encounter → else `404 NOT_FOUND`.
 4. Combatant must have a linked actor; if not (broken reference) → `422 INVALID_INTENT`.
-5. Damage/healing is relayed to Foundry, temp HP consumed first (D&D 5e rule), then
+5. Payload must validate: `kind` must be `"delta"`, `amount` a finite, non-zero
+   number (`amount: 0` is rejected) → else `422 INVALID_INTENT`.
+6. Damage/healing is relayed to Foundry, temp HP consumed first (D&D 5e rule), then
    the fresh encounter view is returned:
-   `200 { "encounter": EncounterView }`
-
-Rate limit: shared write limiter (30/min per token) → `429 RATE_LIMITED`.
+   `200 { "encounter": EncounterView }` (this endpoint wraps the view; the GET does not).
 
 Additional errors:
 - `502 UPSTREAM` — relay timeout or unreachable.

@@ -610,6 +610,48 @@ describe('hook handling — deleteCombat + updateActor', () => {
     expect(view.combatants).toHaveLength(1);
   });
 
+  it('an id-less deleteCombat frame never blind-clears state — it reseeds to settle the uncertainty', async () => {
+    const { relay, manager } = setup();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 24, 30));
+    await manager.start();
+    relay.emitUpdateCombat(
+      combatDoc({ id: 'combat1', round: 1, turn: 0, combatants: [{ id: 'c1', actorId: 'a1', initiative: 9 }] }),
+    );
+    expect(manager.view().round).toBe(1);
+
+    // The REST fixture restores DIFFERENTLY (round 5) so the final state
+    // proves the reseed path ran — an incidental restore of identical state
+    // could not fake this (round-2 review: the old survival test was masked
+    // exactly that way).
+    relay.encounters = [
+      {
+        id: 'combat1',
+        name: 'Combat Encounter',
+        round: 5,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'c1', name: 'c1', actorUuid: 'Actor.a1', img: null, initiative: 9, hidden: false, defeated: false },
+        ],
+      },
+    ];
+
+    for (const onEvent of [...relay.hookSubscribers]) {
+      onEvent({ event: 'deleteCombat', data: { data: { args: [{ noId: true }, {}, {}, 'gm'] } } });
+    }
+    // Synchronous: the malformed frame must not have cleared the live state.
+    expect(manager.view().active).toBe(true);
+    expect(manager.view().round).toBe(1);
+
+    // Async: the bounded reseed settles what actually happened (round 5).
+    let view = manager.view();
+    for (let i = 0; i < 100 && view.round !== 5; i++) {
+      await sleep(5);
+      view = manager.view();
+    }
+    expect(view).toMatchObject({ active: true, round: 5 });
+  });
+
   it('updateActor for a cached NPC updates health from the frame — no re-fetch — and emits', async () => {
     const { relay, manager } = setup();
     relay.entities.set('Actor.n1', dnd5eActor('n1', 'Goblin', 'npc', 8, 30));
@@ -828,16 +870,22 @@ describe('stream resilience (fix round 2 — live-verified failure modes)', () =
       },
       type: 'hook-event',
     });
-    // (c) garbage in every position the wire could produce it.
+    // (c) garbage in every position the wire could produce it. The two
+    // id-less deleteCombat frames are asserted SYNCHRONOUSLY: the round-2
+    // code blind-cleared state right in the handler and only an in-flight
+    // reseed restored it later — that masking must never pass again
+    // (round-2 review finding).
     emit('updateCombat', 'unparsed raw string data');
     emit('updateCombat', { data: { args: null } });
     emit('updateCombat', { data: { args: [42] } });
     emit('deleteCombat', {});
+    expect(manager.view().active).toBe(true); // not blind-cleared (sync)
     emit('deleteCombat', null);
+    expect(manager.view().active).toBe(true); // not blind-cleared (sync)
     emit('updateActor', { data: { args: [null] } });
     emit('whatEvenIsThis', { some: 'thing' });
 
-    await sleep(100); // let the reseed from (b) settle
+    await sleep(100); // let the reseeds from (b) and the id-less deletes settle
     expect(relay.hookSubscribers.size).toBe(1); // stream never died
     expect(manager.view().active).toBe(true); // state never corrupted
 
