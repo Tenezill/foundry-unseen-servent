@@ -64,7 +64,9 @@ function dnd5eActor(
 let currentApp: FastifyInstance | null = null;
 let currentManager: EncounterManager | null = null;
 
-function setup(overrides: { rateLimitMax?: number; fetchTimeoutMs?: number } = {}): {
+function setup(
+  overrides: { rateLimitMax?: number; fetchTimeoutMs?: number; encounterFetchTimeoutMs?: number } = {},
+): {
   app: FastifyInstance;
   relay: FakeRelay;
   manager: EncounterManager;
@@ -84,11 +86,33 @@ function setup(overrides: { rateLimitMax?: number; fetchTimeoutMs?: number } = {
     livePollMs: 10_000,
     pingMs: 60_000,
     encounters: manager,
+    encounterFetchTimeoutMs: overrides.encounterFetchTimeoutMs ?? 3_000,
     ...(overrides.rateLimitMax !== undefined ? { rateLimitMax: overrides.rateLimitMax } : {}),
   });
   currentApp = app;
   currentManager = manager;
   return { app, relay, manager };
+}
+
+/**
+ * Structural NPC-hp-privacy walk (Global Constraints): EVERY non-PC
+ * combatant must carry a valid `health` and no `hp`; every PC the inverse.
+ * Applied to parsed views/frames — string scans over the raw body can't
+ * distinguish an NPC leak from a PC's legitimate hp numbers.
+ */
+function assertHpPrivacy(view: unknown): void {
+  const combatants = (view as { combatants?: unknown[] }).combatants ?? [];
+  expect(combatants.length).toBeGreaterThan(0); // walking nothing proves nothing
+  for (const raw of combatants) {
+    const c = raw as { id: string; isPC: boolean; health?: string; hp?: unknown };
+    if (c.isPC) {
+      expect(c.hp, `PC ${c.id} must carry hp`).toBeDefined();
+      expect(c.health, `PC ${c.id} must not carry health`).toBeUndefined();
+    } else {
+      expect(c.hp, `non-PC ${c.id} must never carry hp`).toBeUndefined();
+      expect(['healthy', 'wounded', 'bloodied', 'down']).toContain(c.health);
+    }
+  }
 }
 
 afterEach(async () => {
@@ -206,13 +230,14 @@ describe('active encounter — serialization', () => {
     expect(pc1?.health).toBeUndefined();
     expect(pc1?.isPC).toBe(true);
 
-    // Belt-and-suspenders: scan the raw HTTP response for any NPC-hp leak.
+    // Belt-and-suspenders: walk the actual HTTP response structurally —
+    // every non-PC hp-free with a valid health, every PC the inverse.
     const res = await app.inject({ method: 'GET', url: '/api/encounter', headers: asAnna });
     const body = res.json();
+    expect(body.combatants).toHaveLength(3);
+    assertHpPrivacy(body);
     const npcInBody = body.combatants.find((c: { id: string }) => c.id === 'cN');
-    expect(npcInBody.hp).toBeUndefined();
     expect(npcInBody.health).toBe('bloodied');
-    expect(res.body).not.toContain('"value":30'); // n1's max would only appear via a leaked hp
   });
 
   it('0/0 hp -> down; hidden combatant dropped; hidden acting combatant -> turn.combatantId null; initiative-desc order', async () => {
@@ -267,6 +292,25 @@ describe('active encounter — serialization', () => {
     expect(view.turn?.combatantId).toBe('c2');
   });
 
+  it('an out-of-range turn index yields turn.combatantId null without crashing', async () => {
+    const { relay, manager } = setup();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 20, 20));
+    await manager.start();
+
+    relay.emitUpdateCombat(
+      combatDoc({
+        round: 1,
+        turn: 5, // only one combatant — index 5 points past the list
+        combatants: [{ id: 'c1', actorId: 'a1', initiative: 15 }],
+      }),
+    );
+
+    const view = manager.view();
+    expect(view.active).toBe(true);
+    expect(view.turn?.combatantId).toBeNull();
+    expect(view.combatants).toHaveLength(1);
+  });
+
   it('a never-settling actor fetch degrades that combatant without blocking the view', async () => {
     const { relay, manager } = setup({ fetchTimeoutMs: 30 });
     relay.hangUuid = 'Actor.stuck';
@@ -293,6 +337,252 @@ describe('active encounter — serialization', () => {
     expect(stuckCombatant?.health).toBe('healthy'); // degraded default
     const okCombatant = view.combatants?.find((c) => c.id === 'c2');
     expect(okCombatant?.hp).toEqual({ value: 20, max: 20 });
+  });
+});
+
+describe('REST seeding — start() → reseed() → getEncounters (production boot path)', () => {
+  /** Task 0 §2a shaped REST encounter (combatants carry actorUuid, not actorId). */
+  function restEncounter(opts: {
+    id: string;
+    round: number;
+    turn?: number;
+    current: boolean;
+    combatants?: Array<{ id: string; name: string; actorUuid?: string; initiative?: number | null }>;
+  }): {
+    id: string;
+    name: string;
+    round: number;
+    turn: number;
+    current: boolean;
+    combatants: Array<{
+      id: string;
+      name: string;
+      tokenUuid?: string;
+      actorUuid?: string;
+      img?: string | null;
+      initiative?: number | null;
+      hidden?: boolean;
+      defeated?: boolean;
+    }>;
+  } {
+    return {
+      id: opts.id,
+      name: 'Combat Encounter',
+      round: opts.round,
+      turn: opts.turn ?? 0,
+      current: opts.current,
+      combatants: (opts.combatants ?? []).map((c) => ({
+        id: c.id,
+        name: c.name,
+        ...(c.actorUuid !== undefined ? { actorUuid: c.actorUuid } : {}),
+        img: null,
+        initiative: c.initiative ?? null,
+        hidden: false,
+        defeated: false,
+      })),
+    };
+  }
+
+  it('seeds from the current:true entry among multiple, slicing actorUuid to actorId', async () => {
+    const { relay, manager } = setup();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 24, 30));
+    relay.entities.set('Actor.n1', dnd5eActor('n1', 'Goblin', 'npc', 8, 30));
+    relay.encounters = [
+      restEncounter({ id: 'old', round: 0, current: false }),
+      restEncounter({
+        id: 'live',
+        round: 2,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'cA', name: 'Randal', actorUuid: 'Actor.a1', initiative: 12 },
+          { id: 'cN', name: 'Goblin', actorUuid: 'Actor.n1', initiative: 5 },
+        ],
+      }),
+    ];
+    await manager.start();
+    expect(relay.getEncountersCalls).toHaveLength(1); // exactly one seed read
+
+    // Slicing 'Actor.a1' -> 'a1' is proven end-to-end: the combatant carries
+    // the bare actorId AND the actor cache resolved via GET Actor.a1.
+    let view = manager.view();
+    for (let i = 0; i < 100 && view.combatants?.find((c) => c.id === 'cA')?.hp === undefined; i++) {
+      await sleep(5);
+      view = manager.view();
+    }
+    expect(view.active).toBe(true);
+    expect(view.round).toBe(2);
+    const pc = view.combatants?.find((c) => c.id === 'cA');
+    expect(pc?.actorId).toBe('a1');
+    expect(pc?.hp).toEqual({ value: 24, max: 30 });
+    expect(relay.getEntityCalls).toContain('Actor.a1');
+    assertHpPrivacy(view);
+  });
+
+  it('falls back to the single round>=1 entry when nothing is current', async () => {
+    const { relay, manager } = setup();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 24, 30));
+    relay.encounters = [
+      restEncounter({ id: 'unstarted', round: 0, current: false }),
+      restEncounter({
+        id: 'started',
+        round: 3,
+        current: false,
+        combatants: [{ id: 'cA', name: 'Randal', actorUuid: 'Actor.a1', initiative: 12 }],
+      }),
+    ];
+    await manager.start();
+    const view = manager.view();
+    expect(view.active).toBe(true);
+    expect(view.round).toBe(3);
+  });
+
+  it('stays inactive when nothing is current and nothing has started', async () => {
+    const { relay, manager } = setup();
+    relay.encounters = [restEncounter({ id: 'unstarted', round: 0, current: false })];
+    await manager.start();
+    expect(manager.view()).toEqual({ active: false });
+    expect(relay.getEncountersCalls).toHaveLength(1);
+  });
+
+  it('treats a non-Actor actorUuid (token-synthetic Scene.x.Token.y.Actor.z) as no linked actor — degraded view, no fetch, 422 on write', async () => {
+    // Intentional: actorIdFromUuid only slices uuids that START with
+    // 'Actor.' — a token-synthetic actor is not addressable as a world
+    // Actor.<id>, so the combatant degrades (isPC false, health healthy)
+    // and the hp-write route 422s it, per the plan's "linked actors only" v1.
+    const { app, relay, manager } = setup();
+    relay.encounters = [
+      restEncounter({
+        id: 'live',
+        round: 1,
+        current: true,
+        combatants: [{ id: 'cT', name: 'Token Goblin', actorUuid: 'Scene.s1.Token.t1.Actor.z9', initiative: 7 }],
+      }),
+    ];
+    await manager.start();
+    await sleep(20); // any (wrong) actor fetch would have been kicked off by now
+
+    const view = manager.view();
+    const tokenCombatant = view.combatants?.find((c) => c.id === 'cT');
+    expect(tokenCombatant?.actorId).toBeUndefined();
+    expect(tokenCombatant?.isPC).toBe(false);
+    expect(tokenCombatant?.health).toBe('healthy');
+    expect(relay.getEntityCalls.filter((u) => u.includes('z9'))).toHaveLength(0);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/encounter/combatants/cT/hp',
+      headers: asAnna,
+      payload: { kind: 'delta', amount: -1 },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('INVALID_INTENT');
+  });
+
+  it('combatant hooks trigger a full REST re-read (reseed) that updates state', async () => {
+    const { relay, manager } = setup();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 24, 30));
+    relay.entities.set('Actor.n1', dnd5eActor('n1', 'Goblin', 'npc', 8, 30));
+    relay.encounters = [
+      restEncounter({
+        id: 'live',
+        round: 1,
+        current: true,
+        combatants: [{ id: 'cA', name: 'Randal', actorUuid: 'Actor.a1', initiative: 12 }],
+      }),
+    ];
+    await manager.start();
+    expect(relay.getEncountersCalls).toHaveLength(1);
+    expect(manager.view().combatants).toHaveLength(1);
+
+    // GM adds a goblin: the createCombatant frame carries only the combatant,
+    // so the manager re-reads the whole combat over REST.
+    relay.encounters = [
+      restEncounter({
+        id: 'live',
+        round: 1,
+        current: true,
+        combatants: [
+          { id: 'cA', name: 'Randal', actorUuid: 'Actor.a1', initiative: 12 },
+          { id: 'cN', name: 'Goblin', actorUuid: 'Actor.n1', initiative: 5 },
+        ],
+      }),
+    ];
+    for (const onEvent of relay.hookSubscribers) {
+      onEvent({ event: 'createCombatant', data: { data: { args: [{ _id: 'cN' }, {}, {}, 'gm'] } } });
+    }
+
+    let view = manager.view();
+    for (let i = 0; i < 100 && (view.combatants?.length ?? 0) < 2; i++) {
+      await sleep(5);
+      view = manager.view();
+    }
+    expect(view.combatants?.map((c) => c.id)).toEqual(['cA', 'cN']);
+    expect(relay.getEncountersCalls).toHaveLength(2); // seed + reseed
+  });
+});
+
+describe('hook handling — deleteCombat + updateActor', () => {
+  it('deleteCombat with the matching id flips the view inactive and emits to subscribers', async () => {
+    const { relay, manager } = setup();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 24, 30));
+    await manager.start();
+    relay.emitUpdateCombat(
+      combatDoc({ id: 'combat1', round: 1, turn: 0, combatants: [{ id: 'c1', actorId: 'a1', initiative: 9 }] }),
+    );
+    expect(manager.view().active).toBe(true);
+
+    const frames: Array<{ active: boolean }> = [];
+    const detach = manager.attach((view) => frames.push(view));
+    relay.emitDeleteCombat('combat1');
+
+    expect(manager.view()).toEqual({ active: false });
+    expect(frames.some((f) => f.active === false)).toBe(true);
+    detach();
+  });
+
+  it('deleteCombat with a non-matching id keeps the tracked combat', async () => {
+    const { relay, manager } = setup();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 24, 30));
+    await manager.start();
+    relay.emitUpdateCombat(
+      combatDoc({ id: 'combat1', round: 1, turn: 0, combatants: [{ id: 'c1', actorId: 'a1', initiative: 9 }] }),
+    );
+
+    relay.emitDeleteCombat('someOtherCombat');
+    const view = manager.view();
+    expect(view.active).toBe(true);
+    expect(view.combatants).toHaveLength(1);
+  });
+
+  it('updateActor for a cached NPC updates health from the frame — no re-fetch — and emits', async () => {
+    const { relay, manager } = setup();
+    relay.entities.set('Actor.n1', dnd5eActor('n1', 'Goblin', 'npc', 8, 30));
+    await manager.start();
+    relay.emitUpdateCombat(
+      combatDoc({ round: 1, turn: 0, combatants: [{ id: 'cN', actorId: 'n1', initiative: 4 }] }),
+    );
+
+    // Wait for the initial cache fill (bloodied at 8/30).
+    let view = manager.view();
+    for (let i = 0; i < 100 && view.combatants?.find((c) => c.id === 'cN')?.health !== 'bloodied'; i++) {
+      await sleep(5);
+      view = manager.view();
+    }
+
+    const fetchesBefore = relay.getEntityCalls.length;
+    const frames: Array<{ combatants?: Array<{ id: string; health?: string }> }> = [];
+    const detach = manager.attach((v) => frames.push(v));
+
+    // GM heals the goblin in Foundry: the updateActor frame carries the full
+    // doc — the manager must consume it directly, without a getEntity call.
+    relay.mutate('Actor.n1', 'system.attributes.hp.value', 25);
+    relay.emitUpdateActor('n1');
+
+    expect(manager.view().combatants?.find((c) => c.id === 'cN')?.health).toBe('wounded');
+    expect(relay.getEntityCalls.length).toBe(fetchesBefore); // frame-driven, no re-fetch
+    expect(frames.some((f) => f.combatants?.find((c) => c.id === 'cN')?.health === 'wounded')).toBe(true);
+    detach();
   });
 });
 
@@ -406,6 +696,28 @@ describe('hp write', () => {
     expect(res3.statusCode).toBe(429);
     expect(res3.json().error.code).toBe('RATE_LIMITED');
   });
+
+  it(
+    '502s (bounded) when the target actor fetch never settles instead of hanging the route',
+    async () => {
+      const { app, relay, manager } = setup({ encounterFetchTimeoutMs: 40 });
+      await seedActiveEncounter(relay, manager);
+      relay.hangUuid = 'Actor.a1'; // set AFTER seeding so the cache filled normally
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/encounter/combatants/cA/hp',
+        headers: asAnna,
+        payload: { kind: 'delta', amount: -1 },
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().error.code).toBe('UPSTREAM');
+      expect(relay.updates).toHaveLength(0); // no blind write on a stale/missing doc
+    },
+    // Tight per-test timeout: if the bound regresses, this hangs — fail fast
+    // and visibly rather than riding vitest's default budget.
+    2_000,
+  );
 });
 
 describe('SSE /api/encounter/events', () => {
@@ -455,8 +767,18 @@ describe('SSE /api/encounter/events', () => {
       combatDoc({ round: 1, turn: 0, combatants: [{ id: 'c1', actorId: 'a1', initiative: 12 }] }),
     );
 
-    const updated = await readUntil(stream, (b) => b.includes('"active":true'));
+    // Wait past the immediate (cache-miss) frame for the one where the PC's
+    // actor resolved, then apply the same structural hp-privacy walk the
+    // snapshot route gets — SSE frames are just as much a leak surface.
+    const updated = await readUntil(stream, (b) => b.includes('"isPC":true'));
     expect(updated).toContain('event: encounter');
+    const dataLines = updated
+      .split('\n')
+      .filter((l) => l.startsWith('data: '))
+      .map((l) => JSON.parse(l.slice('data: '.length)) as { active: boolean; combatants?: unknown[] });
+    const lastActive = dataLines.filter((f) => f.active).pop();
+    expect(lastActive).toBeDefined();
+    assertHpPrivacy(lastActive);
 
     stream.destroy();
   });

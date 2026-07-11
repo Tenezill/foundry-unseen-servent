@@ -143,6 +143,9 @@ export interface GatewayDeps {
   adminNameTimeoutMs?: number;
   /** M22: live combat mirror + hp-write routes. Absent -> those routes 404. */
   encounters?: EncounterManagerPort;
+  /** M22: budget for the hp-write route's actor fetch (every relay await on
+   *  the encounter path is bounded — Global Constraints). Default 3000. */
+  encounterFetchTimeoutMs?: number;
 }
 
 type ErrorCode =
@@ -289,6 +292,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   const pingMs = deps.pingMs ?? 25_000;
   const livePollMs = deps.livePollMs ?? 3_000;
   const adminNameTimeoutMs = deps.adminNameTimeoutMs ?? 3_000;
+  const encounterFetchTimeoutMs = deps.encounterFetchTimeoutMs ?? 3_000;
   const limiter = new SlidingWindowLimiter(deps.rateLimitMax ?? 30, deps.rateLimitWindowMs ?? 60_000);
   const { relay, players, registry } = deps;
 
@@ -1173,7 +1177,12 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           return sendError(reply, 422, 'INVALID_INTENT', 'invalid hp intent');
         }
 
-        const actor = await fetchActor(actorId);
+        // Bounded (M18 pattern): a stalled relay must not hang the route —
+        // timeout degrades to the same 502 envelope a missing actor gets.
+        const actor = await Promise.race([
+          fetchActor(actorId),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), encounterFetchTimeoutMs)),
+        ]);
         if (!actor) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
         const adapter = adapterFor(actor);
         if (!adapter) return sendError(reply, 502, 'UPSTREAM', 'no adapter for actor system');

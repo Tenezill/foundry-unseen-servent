@@ -57,7 +57,12 @@ export class FakeRelay implements RelayPort {
     return [{ clientId: 'fvtt_test', isOnline: true }];
   }
 
+  /** Every uuid getEntity was called with, in call order (M22: lets tests
+   *  assert a hook-driven cache update did NOT trigger a re-fetch). */
+  readonly getEntityCalls: string[] = [];
+
   async getEntity(uuid: string): Promise<Record<string, unknown> | null> {
+    this.getEntityCalls.push(uuid);
     if (uuid === this.failUuid) {
       throw new Error(`relay GET ${FAKE_RELAY_URL}/get?uuid=${uuid} failed: x-api-key ${FAKE_API_KEY} rejected`);
     }
