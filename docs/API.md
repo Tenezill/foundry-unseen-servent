@@ -123,6 +123,75 @@ Shares the write rate limit with intents (30/min per token).
 
 On connect the current sheet is sent immediately as a `sheet` event.
 
+### `GET /api/encounter`
+Retrieve the active encounter state. Active means a combat exists with round >= 1.
+→ `200 { "encounter": EncounterView }`
+
+`EncounterView` shape:
+
+```json
+{
+  "active": boolean,
+  "round": number | null,
+  "turn": { "combatantId": string | null } | null,
+  "combatants": [
+    {
+      "id": string,
+      "actorId": string | null,
+      "name": string,
+      "img": string | null,
+      "initiative": number | null,
+      "isPC": boolean,
+      "defeated": boolean,
+      "health": "healthy" | "wounded" | "bloodied" | "down" | null,
+      "hp": { "value": number, "max": number } | null
+    }
+  ]
+}
+```
+
+Combatants are sorted by initiative (descending). Hidden combatants are omitted from the view.
+
+**Privacy contract:** Exact NPC hit points never appear in any player payload. NPCs
+carry only a `health` state indicator; PCs carry exact `hp` values. This contract
+is enforced by the relay and gateway.
+
+### `GET /api/encounter/events` (SSE)
+`Content-Type: text/event-stream`. Query param: `token=<invite token>` (required;
+SSE cannot set `Authorization` headers).
+
+Events:
+
+- `event: encounter` — `data: <EncounterView JSON>` on initial connect and on
+  every combat state change (round, turn, combatant HP/status).
+- `event: ping` — every 25 s keep-alive.
+
+On connect the current encounter view is sent immediately as an `encounter` event.
+
+### `POST /api/encounter/combatants/:id/hp`
+Apply a delta to a combatant's HP (damage or healing). Temporary hit points are
+consumed before the pool, per D&D 5e rules.
+
+Body:
+
+```json
+{ "kind": "delta", "amount": -7 }
+```
+
+Semantics (server-enforced, in this order):
+1. Combatant must exist → else `404 NOT_FOUND`.
+2. Combat must be active (round >= 1) → else `409 CONFLICT`.
+3. Payload must validate (`kind` known, `amount` finite) → else `422 INVALID_INTENT`.
+4. Combatant must have a linked actor; if not (broken reference) → `422 INVALID_INTENT`.
+5. Damage/healing is relayed to Foundry, temp HP consumed first (D&D 5e rule), then
+   the fresh encounter view is returned:
+   `200 { "encounter": EncounterView }`
+
+Rate limit: shared write limiter (30/min per token) → `429 RATE_LIMITED`.
+
+Additional errors:
+- `502 UPSTREAM` — relay timeout or unreachable.
+
 ### `GET /healthz` (no auth)
 → `200 { "ok": true, "relay": "connected" | "disconnected" }`
 
