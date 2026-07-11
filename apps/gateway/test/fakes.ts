@@ -11,7 +11,7 @@ import type {
   SystemAdapter,
 } from '@companion/adapter-sdk';
 import { clamp, IntentError } from '@companion/adapter-sdk';
-import type { RawRoll } from '@companion/foundry-client';
+import type { RawRoll, RelayEncounter } from '@companion/foundry-client';
 import type { PlayersPort, RelayPort } from '../src/app.js';
 import type { Player } from '../src/players.js';
 
@@ -44,6 +44,10 @@ export class FakeRelay implements RelayPort {
   readonly hookSubscriptions: string[][] = [];
   /** When set, getEntity for this uuid throws an error embedding the secrets. */
   failUuid: string | null = null;
+  /** When set, getEntity for this uuid returns a promise that never settles
+   *  (M22: exercises the EncounterManager's bounded-fetch degrade path —
+   *  `failUuid`'s synchronous throw doesn't cover a genuinely stalled relay). */
+  hangUuid: string | null = null;
   listClientsError = false;
 
   async listClients(): Promise<unknown> {
@@ -57,8 +61,35 @@ export class FakeRelay implements RelayPort {
     if (uuid === this.failUuid) {
       throw new Error(`relay GET ${FAKE_RELAY_URL}/get?uuid=${uuid} failed: x-api-key ${FAKE_API_KEY} rejected`);
     }
+    if (uuid === this.hangUuid) return new Promise(() => undefined); // never settles
     const doc = this.entities.get(uuid);
     return doc === undefined ? null : (structuredClone(doc) as Record<string, unknown>);
+  }
+
+  // ---- encounters (M22) -----------------------------------------------------
+
+  /** Combats returned by getEncounters(); tests seed this for start()/reseed. */
+  encounters: RelayEncounter[] = [];
+  readonly getEncountersCalls: number[] = [];
+
+  async getEncounters(): Promise<RelayEncounter[]> {
+    this.getEncountersCalls.push(this.getEncountersCalls.length);
+    return structuredClone(this.encounters);
+  }
+
+  /** Simulate the relay pushing an `updateCombat`/`createCombat` hook-event
+   *  carrying the full Combat doc in args[0] (Task 0 §2b nesting, mirrors
+   *  emitUpdateActor). */
+  emitUpdateCombat(combatDoc: Record<string, unknown>): void {
+    const payload = { data: { args: [structuredClone(combatDoc), {}, {}, 'gm'] } };
+    for (const onEvent of this.hookSubscribers) onEvent({ event: 'updateCombat', data: payload });
+  }
+
+  /** Simulate the relay pushing a `deleteCombat` hook-event; args[0] is just
+   *  the deleted combat's `_id` per Foundry's deleteDocument hook shape. */
+  emitDeleteCombat(id: string): void {
+    const payload = { data: { args: [{ _id: id }, {}, {}, 'gm'] } };
+    for (const onEvent of this.hookSubscribers) onEvent({ event: 'deleteCombat', data: payload });
   }
 
   /** Calls recorded as [systemPath, actorUuid, details]. */

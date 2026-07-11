@@ -27,11 +27,12 @@ import type {
   SystemAdapter,
 } from '@companion/adapter-sdk';
 import { IntentError } from '@companion/adapter-sdk';
-import type { RawRoll } from '@companion/foundry-client';
+import type { RawRoll, RelayEncounter } from '@companion/foundry-client';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { verifyToken, type Player } from './players.js';
 import { PlayerStoreError } from './player-store.js';
 import { LiveManager } from './live.js';
+import type { EncounterView } from './encounters.js';
 import type { AdapterRegistry } from './registry.js';
 
 /** Live view of the player list; backed by FilePlayerStore in production. */
@@ -97,6 +98,24 @@ export interface RelayPort {
     onEvent: (ev: { event: string; data: unknown }) => void,
     signal: AbortSignal,
   ): Promise<void>;
+  /** GET /encounters — active/all combats (M22, requires encounter:read scope). */
+  getEncounters(): Promise<RelayEncounter[]>;
+}
+
+/**
+ * The slice of EncounterManager (encounters.ts) the routes need (M22).
+ * Structural — EncounterManager satisfies this without an explicit
+ * `implements`. Absent from GatewayDeps -> the three /api/encounter* routes
+ * are never registered and fall through to the standard 404 envelope.
+ */
+export interface EncounterManagerPort {
+  isActive(): boolean;
+  combatant(id: string): { id: string; actorId?: string } | undefined;
+  view(): EncounterView;
+  attach(send: (view: EncounterView) => void): () => void;
+  /** Re-fetch one actor (bounded) and refresh cached hp/type before the
+   *  caller re-reads view() — used right after an hp write. */
+  refreshActor(actorId: string): Promise<void>;
 }
 
 export interface GatewayDeps {
@@ -122,6 +141,8 @@ export interface GatewayDeps {
   admin?: { password: string; store: AdminStorePort };
   /** Per-actor name-resolution budget for the admin console. Default 3000. */
   adminNameTimeoutMs?: number;
+  /** M22: live combat mirror + hp-write routes. Absent -> those routes 404. */
+  encounters?: EncounterManagerPort;
 }
 
 type ErrorCode =
@@ -1058,6 +1079,133 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       if (req.raw.destroyed || rawRes.destroyed || rawRes.writableEnded) cleanup();
     },
   );
+
+  // ---- encounters (M22): live combat mirror + player-applied hp writes -----
+  // Only registered when a manager is wired (server.ts in production); tests
+  // inject a real EncounterManager over FakeRelay. Absent -> 404 (feature
+  // requires wiring), via the standard setNotFoundHandler envelope above.
+
+  const encounterManager = deps.encounters;
+  if (encounterManager) {
+    app.get('/api/encounter', { preHandler: auth(false) }, async (_req, reply) => {
+      return reply.code(200).send(encounterManager.view());
+    });
+
+    app.get<{ Querystring: { token?: string } }>(
+      '/api/encounter/events',
+      { preHandler: auth(true) },
+      async (req, reply) => {
+        reply.hijack();
+        const rawRes = reply.raw;
+        rawRes.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+          'x-accel-buffering': 'no',
+        });
+
+        const writeEvent = (name: string, data: string): void => {
+          try {
+            rawRes.write(`event: ${name}\ndata: ${data}\n\n`);
+          } catch {
+            /* client is gone; cleanup runs on close */
+          }
+        };
+
+        writeEvent('encounter', JSON.stringify(encounterManager.view()));
+        const detach = encounterManager.attach((view) => writeEvent('encounter', JSON.stringify(view)));
+        const ping = setInterval(() => writeEvent('ping', '{}'), pingMs);
+
+        let done = false;
+        const cleanup = (): void => {
+          if (done) return;
+          done = true;
+          clearInterval(ping);
+          detach();
+          sseCleanups.delete(cleanup);
+          try {
+            rawRes.end();
+          } catch {
+            /* already closed */
+          }
+        };
+        sseCleanups.add(cleanup);
+        req.raw.on('close', cleanup);
+        rawRes.on('close', cleanup);
+        // A write on an already-destroyed socket emits an async 'error' event
+        // that try/catch around write() cannot catch — swallow it and clean up.
+        rawRes.on('error', cleanup);
+        // The client may have disconnected while we awaited above; in that
+        // case 'close' fired before the listeners existed and would never
+        // run cleanup — the ping would leak.
+        if (req.raw.destroyed || rawRes.destroyed || rawRes.writableEnded) cleanup();
+      },
+    );
+
+    app.post<{ Params: { id: string } }>(
+      '/api/encounter/combatants/:id/hp',
+      { preHandler: auth(false) },
+      async (req, reply) => {
+        const player = req.player as Player;
+        if (!limiter.allow(player.tokenHash)) {
+          return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
+        }
+
+        // Order matters: no active encounter is a blanket 409 regardless of
+        // whether :id even names a real combatant (M22 plan).
+        const target = encounterManager.combatant(req.params.id);
+        if (!encounterManager.isActive()) return sendError(reply, 409, 'CONFLICT', 'no active encounter');
+        if (!target) return sendError(reply, 404, 'NOT_FOUND', 'not found');
+        if (!target.actorId) return sendError(reply, 422, 'INVALID_INTENT', 'combatant has no linked actor');
+        const actorId = target.actorId;
+
+        const body = req.body;
+        if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+          return sendError(reply, 422, 'INVALID_INTENT', 'body must be an object');
+        }
+        const raw = body as Record<string, unknown>;
+        if (
+          raw.kind !== 'delta' ||
+          typeof raw.amount !== 'number' ||
+          !Number.isFinite(raw.amount) ||
+          raw.amount === 0
+        ) {
+          return sendError(reply, 422, 'INVALID_INTENT', 'invalid hp intent');
+        }
+
+        const actor = await fetchActor(actorId);
+        if (!actor) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+        const adapter = adapterFor(actor);
+        if (!adapter) return sendError(reply, 502, 'UPSTREAM', 'no adapter for actor system');
+
+        // Never hand-roll hp math here — buildUpdate owns clamping and the
+        // M20 temp-HP-absorbs-first rule for damage.
+        let update: FoundryUpdate;
+        try {
+          update = adapter.buildUpdate(actor, { kind: 'delta', resourceId: 'hp', amount: raw.amount });
+        } catch (err) {
+          if (err instanceof IntentError) {
+            switch (err.code) {
+              case 'UNKNOWN_RESOURCE':
+              case 'READ_ONLY':
+                return sendError(reply, 403, 'FORBIDDEN_RESOURCE', err.message);
+              case 'INVALID':
+                return sendError(reply, 422, 'INVALID_INTENT', err.message);
+              case 'CONFLICT':
+                return sendError(reply, 409, 'CONFLICT', err.message);
+            }
+          }
+          throw err;
+        }
+
+        const targetUuid =
+          update.itemId !== undefined ? `Actor.${actorId}.Item.${update.itemId}` : `Actor.${actorId}`;
+        await relay.updateEntity(targetUuid, update.data);
+        await encounterManager.refreshActor(actorId);
+        return reply.code(200).send({ encounter: encounterManager.view() });
+      },
+    );
+  }
 
   return app;
 }

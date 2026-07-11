@@ -7,6 +7,7 @@ import { FoundryRelayClient } from '@companion/foundry-client';
 import { loadConfig, redactUrlToken } from './config.js';
 import { createDefaultRegistry } from './registry.js';
 import { buildApp } from './app.js';
+import { EncounterManager } from './encounters.js';
 import { FilePlayerStore } from './player-store.js';
 
 async function main(): Promise<void> {
@@ -18,12 +19,22 @@ async function main(): Promise<void> {
     clientId: cfg.relayClientId,
   });
 
+  // The manager must exist before buildApp (it registers the /api/encounter*
+  // routes only when a manager is present), but its logger should be the
+  // real app's once built — a mutable indirection bridges the ordering.
+  let logRef: { warn(obj: object, msg: string): void } = { warn: () => undefined };
+  const encounters = new EncounterManager({
+    relay,
+    log: { warn: (obj, msg) => logRef.warn(obj, msg) },
+  });
+
   const app = buildApp({
     relay,
     players: store,
     registry: createDefaultRegistry(),
     defaultSystemId: cfg.defaultSystemId,
     livePollMs: cfg.livePollMs,
+    encounters,
     ...(cfg.adminPassword !== undefined ? { admin: { password: cfg.adminPassword, store } } : {}),
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
@@ -50,10 +61,12 @@ async function main(): Promise<void> {
     },
   });
 
+  logRef = { warn: (obj, msg) => app.log.warn(obj, msg) };
   store.startWatching({ warn: (obj, msg) => app.log.warn(obj, msg) });
 
   const close = async (): Promise<void> => {
     store.stopWatching();
+    encounters.stop();
     await app.close().catch(() => undefined);
     process.exit(0);
   };
@@ -61,6 +74,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void close());
 
   await app.listen({ port: cfg.port, host: '0.0.0.0' });
+  await encounters.start();
 }
 
 main().catch((err) => {
