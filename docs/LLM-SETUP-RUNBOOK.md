@@ -426,7 +426,7 @@ in the player flow. Three independent links, three lifetimes:
 |------|-----------|----------|
 | `FOUNDRY_ADMIN_KEY` | Phase 1 | `stack/.env` |
 | Relay account email/password | Phase 4 | password manager |
-| `RELAY_API_KEY` | Phase 4 | `apps/gateway/.env` |
-| `RELAY_CLIENT_ID` (`fvtt_…`) | Phase 3 Verify | `apps/gateway/.env` |
+| `RELAY_API_KEY` | Phase 4 | `apps/gateway/.env` or `stack/.env.gateway` (prod compose) |
+| `RELAY_CLIENT_ID` (`fvtt_…`) | Phase 3 Verify | `apps/gateway/.env` or `stack/.env.gateway` (prod compose) |
 | Actor ids | Phase 3 step 5 | `apps/gateway/players.yaml` |
 | Invite tokens (one per player) | Phase 5 | sent to players once; only hashes stored |

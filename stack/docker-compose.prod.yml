@@ -6,7 +6,8 @@ name: foundrys-unseen-servant
 #   docker compose -f docker-compose.prod.yml --profile foundry up -d --build
 #
 # Public surface: web (Caddy) on 80 — and Foundry on 30000 when profiled in.
-# Relay and gateway stay on the internal network.
+# The relay is also published on 3010 (for the GM-browser Foundry module to
+# connect directly); gateway stays on the internal network only.
 # Config: .env (Foundry, only with the profile) + .env.gateway (see example).
 
 services:
@@ -48,8 +49,6 @@ services:
       - APP_ENV=production
       - PORT=3010
       - DB_TYPE=sqlite
-    expose:
-      - "3010"
     ports:
       - "3010:3010"   # the Foundry module (GM browser) connects via ws://<host>:3010
     volumes:

@@ -11,3 +11,7 @@ stack/gateway-data
 .remember
 docs
 *.md
+**/.env
+**/.env.*
+apps/gateway/players.yaml
+stack/.env*

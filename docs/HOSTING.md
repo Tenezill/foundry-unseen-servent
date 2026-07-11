@@ -83,6 +83,11 @@ This builds the gateway and web images and starts relay, gateway, web and
 Foundry together. Foundry is on <http://localhost:30000>, the relay on
 <http://localhost:3010>, and the PWA (via Caddy) on <http://localhost>.
 
+The `gateway` container will show `Restarting` (crash-looping on missing
+relay credentials) until `stack/.env.gateway` is filled in and the `up -d
+gateway` recreate below (A8) runs — that's expected at this point, not a
+broken install.
+
 **Hostname pitfall:** the compose pins `hostname: foundry` on the Foundry
 service — Foundry's license signature binds to the container hostname, so
 changing or removing it re-prompts the license + EULA on the next recreate.
@@ -187,8 +192,12 @@ ADMIN_PASSWORD=<a strong password — enables the /admin invite console>
 Then apply it:
 
 ```bash
-docker compose -f docker-compose.prod.yml restart gateway
+docker compose -f docker-compose.prod.yml up -d gateway
 ```
+
+`env_file` values are injected at container creation, so a plain `restart`
+won't pick up your edits — `up -d` recreates the container when its config
+changed.
 
 `players.yaml` lives on the writable `stack/gateway-data/` volume
 (`PLAYERS_FILE=/data/players.yaml` inside the container); the gateway image's
@@ -250,8 +259,9 @@ two variants: a LAN default (plain `:80`, what Part A uses) and a
 commented-out public-HTTPS variant below it (Caddy provisions Let's Encrypt
 certs for your domains automatically). Public surface is Caddy only:
 `app.<domain>` → the PWA and its `/api` → gateway; `vtt.<domain>` → Foundry.
-The relay stays on the internal Docker network by default (see B4b for the
-one case where it's reachable from outside).
+The gateway stays on the internal Docker network; the relay's `:3010` is
+published by default (see B4b) — for a B4a-only (headless) deployment,
+comment it out or bind it to localhost instead (see B4a).
 
 ### B1. DNS + enable the TLS variant
 
@@ -289,10 +299,14 @@ below — is still needed for the world to actually go online).
 The module needs a live GM browser. Two ways:
 
 **B4a. Relay headless GM session (recommended).** The relay image ships Chrome
-+ Xvfb and can log into Foundry itself and hold the world online — so the relay
-stays internal and you don't need a human browser connected. After creating the
-relay account + scoped key (same as A6, against the relay — reach it with a
-temporary `docker compose exec` or a one-off published port, then close it):
++ Xvfb and can log into Foundry itself and hold the world online — so you
+don't need a human browser connected. Since this deployment doesn't need the
+relay reachable from outside, comment out the relay's `"3010:3010"` port
+mapping in `stack/docker-compose.prod.yml` (or bind it to localhost instead:
+`"127.0.0.1:3010:3010"`) — only B4b needs it public. Create the relay account
++ scoped key the same way as A6, reaching the relay over the Docker network
+(e.g. `docker compose exec gateway curl ...`, or temporarily binding the port
+to localhost as above), then lock it back down:
 
 ```
 POST /session-handshake   headers: x-api-key, x-foundry-url: http://foundry:30000, x-username: <GM user>
@@ -325,8 +339,11 @@ ADMIN_PASSWORD=<a strong password — enables the /admin invite console>
 ```
 
 ```bash
-docker compose -f docker-compose.prod.yml restart gateway
+docker compose -f docker-compose.prod.yml up -d gateway
 ```
+
+Same as A8: `env_file` values are injected at container creation, so a plain
+`restart` won't pick up your edits — `up -d` recreates the container instead.
 
 `players.yaml` lives on the writable `stack/gateway-data/` volume, same as A8
 — the gateway bootstraps it empty on first start.
