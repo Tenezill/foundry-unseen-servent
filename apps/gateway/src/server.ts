@@ -13,16 +13,18 @@ import { FilePlayerStore } from './player-store.js';
 async function main(): Promise<void> {
   const cfg = loadConfig();
   const store = new FilePlayerStore(cfg.playersFile);
+
+  // The relay client and manager must exist before buildApp (the manager
+  // registers the /api/encounter* routes only when present), but their
+  // logger should be the real app's once built — a mutable indirection
+  // bridges the ordering.
+  let logRef: { warn(obj: object, msg: string): void } = { warn: () => undefined };
   const relay = new FoundryRelayClient({
     baseUrl: cfg.relayUrl,
     apiKey: cfg.relayApiKey,
     clientId: cfg.relayClientId,
+    log: { warn: (obj, msg) => logRef.warn(obj, msg) },
   });
-
-  // The manager must exist before buildApp (it registers the /api/encounter*
-  // routes only when a manager is present), but its logger should be the
-  // real app's once built — a mutable indirection bridges the ordering.
-  let logRef: { warn(obj: object, msg: string): void } = { warn: () => undefined };
   const encounters = new EncounterManager({
     relay,
     log: { warn: (obj, msg) => logRef.warn(obj, msg) },

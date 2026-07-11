@@ -48,6 +48,16 @@ export class FakeRelay implements RelayPort {
    *  (M22: exercises the EncounterManager's bounded-fetch degrade path —
    *  `failUuid`'s synchronous throw doesn't cover a genuinely stalled relay). */
   hangUuid: string | null = null;
+  /**
+   * M22 cache-swap bug simulation: this FakeRelay is instant and keyed
+   * correctly, so genuine concurrent cross-wiring (the live-verified relay
+   * bug — see foundry-client's getEntity comment) can't happen here by
+   * accident. When set, the NEXT getEntity(when) call returns
+   * `returnUuidInstead`'s stored doc rather than its own (one-shot, then
+   * clears — mirrors the real bug's intermittency), letting tests prove
+   * the manager degrades instead of being poisoned by a mismatched entity.
+   */
+  crossWire: { when: string; returnUuidInstead: string } | null = null;
   listClientsError = false;
 
   async listClients(): Promise<unknown> {
@@ -67,6 +77,12 @@ export class FakeRelay implements RelayPort {
       throw new Error(`relay GET ${FAKE_RELAY_URL}/get?uuid=${uuid} failed: x-api-key ${FAKE_API_KEY} rejected`);
     }
     if (uuid === this.hangUuid) return new Promise(() => undefined); // never settles
+    if (this.crossWire !== null && uuid === this.crossWire.when) {
+      const wrongUuid = this.crossWire.returnUuidInstead;
+      this.crossWire = null;
+      const wrongDoc = this.entities.get(wrongUuid);
+      return wrongDoc === undefined ? null : (structuredClone(wrongDoc) as Record<string, unknown>);
+    }
     const doc = this.entities.get(uuid);
     return doc === undefined ? null : (structuredClone(doc) as Record<string, unknown>);
   }

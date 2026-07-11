@@ -12,6 +12,9 @@ export interface RelayConfig {
   apiKey: string;
   /** Foundry world client id, e.g. fvtt_3a9f1c2e4b7d8e0f */
   clientId: string;
+  /** Optional structured-log sink for defensive warnings (e.g. cross-wired
+   *  GET /get responses — see getEntity). Silent no-op if omitted. */
+  log?: { warn(obj: object, msg: string): void };
 }
 
 export interface RelayClientInfo {
@@ -181,11 +184,39 @@ export class FoundryRelayClient {
   /**
    * GET /get?uuid=Actor.xyz — full serialized entity document.
    * Returns null when the entity does not exist.
+   *
+   * Defense-in-depth (M22 cache-swap bug, live-verified against
+   * threehats/foundryvtt-rest-api-relay 3.4.1): under CONCURRENT GET /get
+   * calls, the relay was observed returning a 200 whose envelope `uuid` AND
+   * whose `data._id` both belong to a DIFFERENT, concurrently-requested
+   * uuid — i.e. it delivers the wrong client's response (a request/response
+   * correlation bug upstream, not a transient field glitch). 25 rounds of 2
+   * truly-concurrent GET /get against the live dev relay produced 14/50
+   * cross-wired responses. Since the caller cannot fix the relay, every
+   * response is checked for identity here: if the envelope uuid or the
+   * document's own _id don't match what was requested, the fetch is treated
+   * as failed (null) rather than trusted — callers already have a degrade
+   * path for a failed/timed-out fetch (EncounterManager, admin console,
+   * /api/actors all treat null as "not yet resolved").
    */
   async getEntity(uuid: string): Promise<Record<string, unknown> | null> {
     try {
       const body = await this.request<Record<string, unknown>>('GET', '/get', { uuid });
-      return unwrapEntity(body);
+      const doc = unwrapEntity(body);
+      if (doc === null) return null;
+      const expectedId = uuid.split('.').pop();
+      const envelopeUuid = typeof body.uuid === 'string' ? body.uuid : undefined;
+      const docId = typeof doc._id === 'string' ? doc._id : undefined;
+      const envelopeMismatch = envelopeUuid !== undefined && envelopeUuid !== uuid;
+      const docMismatch = docId !== undefined && expectedId !== undefined && expectedId !== '' && docId !== expectedId;
+      if (envelopeMismatch || docMismatch) {
+        this.cfg.log?.warn(
+          { requestedUuid: uuid, envelopeUuid, docId },
+          'relay GET /get returned a mismatched entity (cross-wired response) — treating as a failed fetch',
+        );
+        return null;
+      }
+      return doc;
     } catch (err) {
       if (err instanceof RelayError && err.status === 404) return null;
       throw err;

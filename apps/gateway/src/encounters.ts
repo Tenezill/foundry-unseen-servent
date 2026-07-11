@@ -112,6 +112,8 @@ export class EncounterManager {
   private combat: CombatRecord | null = null;
   private readonly actorCache = new Map<string, ActorCacheEntry | null>();
   private readonly fetchingActorIds = new Set<string>();
+  /** Serializes ensureActorCached's relay fetches — see its doc comment. */
+  private seedQueue: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<(view: EncounterView) => void>();
   private loopAc: AbortController | null = null;
   private readonly fetchTimeoutMs: number;
@@ -238,16 +240,26 @@ export class EncounterManager {
   }
 
   /** Kick off a bounded fetch for an actor not yet cached (and not already
-   *  in flight); fire-and-forget — callers don't block on this. */
+   *  in flight); fire-and-forget — callers don't block on this.
+   *
+   *  Defense-in-depth (M22 cache-swap bug): fetches are chained onto
+   *  `seedQueue` rather than launched concurrently. The relay has been
+   *  live-verified to cross-wire responses under concurrent `GET /get`
+   *  calls — foundry-client's `getEntity` now detects and rejects a
+   *  mismatched response (returns null), so a corrupted cache entry can no
+   *  longer happen even under concurrency, but a two-PC encounter seeding
+   *  both actors at once is exactly the shape that triggers the relay bug
+   *  most often. Serializing removes that trigger too: correctness over a
+   *  hundred milliseconds of parallelism at table scale. */
   private ensureActorCached(actorId: string): void {
     if (this.actorCache.has(actorId) || this.fetchingActorIds.has(actorId)) return;
     this.fetchingActorIds.add(actorId);
-    void (async () => {
+    this.seedQueue = this.seedQueue.then(async () => {
       const entry = await this.fetchActorEntry(actorId);
       this.fetchingActorIds.delete(actorId);
       this.actorCache.set(actorId, entry);
       this.emit();
-    })();
+    });
   }
 
   private async fetchActorEntry(actorId: string): Promise<ActorCacheEntry | null> {
@@ -258,6 +270,20 @@ export class EncounterManager {
       ]);
       if (doc === null) {
         this.deps.log?.warn({ actorId }, 'encounter: actor fetch timed out or unavailable; degrading');
+        return null;
+      }
+      // Defense-in-depth (M22 cache-swap bug, live-verified against the
+      // relay): RelayPort is a thin interface — foundry-client's own
+      // getEntity now rejects a cross-wired response, but don't assume
+      // every RelayPort implementation does. Re-check identity against the
+      // actorId we actually asked for before trusting the doc into the
+      // cache; a mismatch degrades exactly like a timed-out fetch.
+      const docId = typeof doc._id === 'string' ? doc._id : undefined;
+      if (docId !== undefined && docId !== actorId) {
+        this.deps.log?.warn(
+          { actorId, docId },
+          'encounter: actor fetch returned a mismatched entity (cross-wired response); degrading',
+        );
         return null;
       }
       return toActorCacheEntry(actorId, doc);

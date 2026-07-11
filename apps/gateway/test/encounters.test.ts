@@ -338,6 +338,61 @@ describe('active encounter — serialization', () => {
     const okCombatant = view.combatants?.find((c) => c.id === 'c2');
     expect(okCombatant?.hp).toEqual({ value: 20, max: 20 });
   });
+
+  it(
+    'a cross-wired actor fetch (relay returns the OTHER concurrently-seeded actor\'s doc) ' +
+      'degrades that combatant instead of poisoning the cache with the wrong name/hp',
+    async () => {
+      // M22 cache-swap bug reproduction: live-verified against the dev
+      // relay, concurrently seeding two PCs' actor caches produced a 200
+      // response whose doc._id belonged to the OTHER actor (see
+      // foundry-client's getEntity comment for the raw evidence). FakeRelay
+      // is instant/correctly-keyed by construction, so `crossWire` simulates
+      // the bug directly rather than relying on real concurrency.
+      const { relay, manager } = setup();
+      relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal (Human Fighter)', 'character', 44, 44));
+      relay.entities.set('Actor.a2', dnd5eActor('a2', 'Akra (Dragonborn Cleric)', 'character', 38, 38));
+      relay.crossWire = { when: 'Actor.a2', returnUuidInstead: 'Actor.a1' };
+      await manager.start();
+
+      relay.emitUpdateCombat(
+        combatDoc({
+          round: 1,
+          turn: 0,
+          combatants: [
+            { id: 'cA', actorId: 'a1', initiative: 10 },
+            { id: 'cB', actorId: 'a2', initiative: 5 },
+          ],
+        }),
+      );
+
+      // Wait for both actor-cache entries to settle (cA resolves normally;
+      // cB's fetch is the cross-wired one and must degrade).
+      let view = manager.view();
+      for (
+        let i = 0;
+        i < 100 && (view.combatants?.find((c) => c.id === 'cA')?.hp === undefined || view.combatants?.find((c) => c.id === 'cB')?.isPC !== false);
+        i++
+      ) {
+        await sleep(5);
+        view = manager.view();
+      }
+
+      const randal = view.combatants?.find((c) => c.id === 'cA');
+      expect(randal?.isPC).toBe(true);
+      expect(randal?.hp).toEqual({ value: 44, max: 44 });
+      expect(randal?.name).toBe('Randal (Human Fighter)');
+
+      // The cross-wired combatant must NOT show Randal's name/hp/isPC — it
+      // must degrade exactly like a timed-out fetch (never poison the cache
+      // with a mismatched entity).
+      const akra = view.combatants?.find((c) => c.id === 'cB');
+      expect(akra?.isPC).toBe(false);
+      expect(akra?.hp).toBeUndefined();
+      expect(akra?.health).toBe('healthy');
+      expect(akra?.name).not.toBe('Randal (Human Fighter)');
+    },
+  );
 });
 
 describe('REST seeding — start() → reseed() → getEncounters (production boot path)', () => {
