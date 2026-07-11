@@ -94,7 +94,7 @@ export interface EncounterDeps {
   reconnectMinMs?: number;
   /** Hooks-stream reconnect backoff ceiling. Default 30000. */
   reconnectMaxMs?: number;
-  log?: { warn(obj: object, msg: string): void };
+  log?: { warn(obj: object, msg: string): void; debug?(obj: object, msg: string): void };
 }
 
 /** World hooks the manager subscribes to (Global Constraints, M22 plan). */
@@ -209,28 +209,57 @@ export class EncounterManager {
     return out;
   }
 
-  private async boundedGetEncounters(): Promise<RelayEncounter[]> {
+  /** Bounded REST read. `null` = the fetch FAILED or timed out — callers must
+   *  keep their current state (live-verified 2026-07-11: a relay-side stalled
+   *  /encounters (408 after 10s) raced past our bound and, when this returned
+   *  `[]` for it, clobbered a freshly-seeded live combat back to inactive).
+   *  A genuine `[]` (relay answered: no combats) still clears state. */
+  private async boundedGetEncounters(): Promise<RelayEncounter[] | null> {
     try {
       return await Promise.race([
         this.deps.relay.getEncounters(),
-        new Promise<RelayEncounter[]>((resolve) => setTimeout(() => resolve([]), this.fetchTimeoutMs)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), this.fetchTimeoutMs)),
       ]);
     } catch (err) {
-      this.deps.log?.warn({ err }, 'encounter: getEncounters failed');
-      return [];
+      this.deps.log?.warn({ err: (err as Error).message }, 'encounter: getEncounters failed; keeping last state');
+      return null;
     }
   }
 
-  /** Full re-read via REST — used at start() and after any
+  /** True while a reseed is in flight (concurrent requests coalesce). */
+  private reseeding = false;
+  private reseedPending = false;
+
+  /** Full re-read via REST — used at start(), after any
    *  createCombatant/updateCombatant/deleteCombatant hook (those frames
    *  carry only the combatant, not the whole combat; a full re-read is
-   *  simpler and rare — task-3 brief). */
+   *  simpler and rare — task-3 brief), and on every stream reconnect
+   *  (frames missed while the stream was down are lost forever).
+   *
+   *  Concurrent calls coalesce into one in-flight read + at most one
+   *  follow-up (live-verified 2026-07-11: a combat-creation burst fires
+   *  4+ combatant hooks at once; the resulting concurrent /encounters
+   *  calls stalled the relay into 408s, and out-of-order resolutions can
+   *  write stale state last). A failed/timed-out read keeps current state. */
   private async reseed(): Promise<void> {
-    const encounters = await this.boundedGetEncounters();
-    const chosen = pickCurrentEncounter(encounters);
-    this.combat = chosen ? normalizeRestCombat(chosen) : null;
-    if (this.combat) this.seedActorCache(this.combat.combatants);
-    this.emit();
+    if (this.reseeding) {
+      this.reseedPending = true;
+      return;
+    }
+    this.reseeding = true;
+    try {
+      do {
+        this.reseedPending = false;
+        const encounters = await this.boundedGetEncounters();
+        if (encounters === null) continue; // failed/timed out: keep last state
+        const chosen = pickCurrentEncounter(encounters);
+        this.combat = chosen ? normalizeRestCombat(chosen) : null;
+        if (this.combat) this.seedActorCache(this.combat.combatants);
+        this.emit();
+      } while (this.reseedPending);
+    } finally {
+      this.reseeding = false;
+    }
   }
 
   private seedActorCache(combatants: CombatantRecord[]): void {
@@ -331,6 +360,9 @@ export class EncounterManager {
         return;
       }
       default:
+        // Non-hook frames ride the same stream (live-verified: the relay
+        // greets every (re)connect with `event: connected`) — ignore them.
+        this.deps.log?.debug?.({ event: ev.event }, 'encounter: ignoring non-combat stream event');
         return;
     }
   }
@@ -341,13 +373,33 @@ export class EncounterManager {
     const minMs = this.deps.reconnectMinMs ?? 1_000;
     const maxMs = this.deps.reconnectMaxMs ?? 30_000;
     let backoff = minMs;
+    let firstConnect = true;
     while (!ac.signal.aborted) {
+      // Reconnects re-seed BEFORE resuming frame handling: frames missed
+      // while the stream was down are lost forever, so REST is the only
+      // recovery (live-verified 2026-07-11: the relay dropped the stream
+      // mid-combat-creation — undici `TypeError: terminated` — and the
+      // manager stayed stale on {active:false} until restart). start()
+      // already seeded before the first connect.
+      if (!firstConnect) await this.reseed();
+      firstConnect = false;
+      if (ac.signal.aborted) return;
       try {
         await this.deps.relay.subscribeHooks(
           COMBAT_HOOKS,
           (ev) => {
             backoff = minMs; // any frame proves the connection is healthy
-            this.handleHookEvent(ev);
+            // Total handler: a malformed frame must never kill the stream
+            // (a throw here rejects the subscribeHooks promise and drops
+            // every future frame until reconnect).
+            try {
+              this.handleHookEvent(ev);
+            } catch (err) {
+              this.deps.log?.warn(
+                { err: (err as Error).message, event: ev.event },
+                'encounter: ignoring malformed hook frame',
+              );
+            }
           },
           ac.signal,
         );
@@ -357,7 +409,12 @@ export class EncounterManager {
       } catch (err) {
         if (!ac.signal.aborted) {
           this.deps.log?.warn(
-            { err: (err as Error).name, backoffMs: backoff },
+            {
+              err: (err as Error).name,
+              message: (err as Error).message,
+              stack: (err as Error).stack,
+              backoffMs: backoff,
+            },
             'encounter hooks stream failed; reconnecting',
           );
         }

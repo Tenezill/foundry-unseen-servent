@@ -18,7 +18,10 @@ async function main(): Promise<void> {
   // registers the /api/encounter* routes only when present), but their
   // logger should be the real app's once built — a mutable indirection
   // bridges the ordering.
-  let logRef: { warn(obj: object, msg: string): void } = { warn: () => undefined };
+  let logRef: { warn(obj: object, msg: string): void; debug(obj: object, msg: string): void } = {
+    warn: () => undefined,
+    debug: () => undefined,
+  };
   const relay = new FoundryRelayClient({
     baseUrl: cfg.relayUrl,
     apiKey: cfg.relayApiKey,
@@ -27,7 +30,10 @@ async function main(): Promise<void> {
   });
   const encounters = new EncounterManager({
     relay,
-    log: { warn: (obj, msg) => logRef.warn(obj, msg) },
+    log: {
+      warn: (obj, msg) => logRef.warn(obj, msg),
+      debug: (obj, msg) => logRef.debug(obj, msg),
+    },
   });
 
   const app = buildApp({
@@ -63,7 +69,10 @@ async function main(): Promise<void> {
     },
   });
 
-  logRef = { warn: (obj, msg) => app.log.warn(obj, msg) };
+  logRef = {
+    warn: (obj, msg) => app.log.warn(obj, msg),
+    debug: (obj, msg) => app.log.debug(obj, msg),
+  };
   store.startWatching({ warn: (obj, msg) => app.log.warn(obj, msg) });
 
   const close = async (): Promise<void> => {

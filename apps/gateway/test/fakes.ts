@@ -92,10 +92,30 @@ export class FakeRelay implements RelayPort {
   /** Combats returned by getEncounters(); tests seed this for start()/reseed. */
   encounters: RelayEncounter[] = [];
   readonly getEncountersCalls: number[] = [];
+  /** When true, getEncounters never settles (M22: a relay-side stalled
+   *  /encounters — live-verified 408 after 10s — must not clobber state). */
+  hangEncounters = false;
 
   async getEncounters(): Promise<RelayEncounter[]> {
     this.getEncountersCalls.push(this.getEncountersCalls.length);
+    if (this.hangEncounters) return new Promise(() => undefined); // never settles
     return structuredClone(this.encounters);
+  }
+
+  /** Enders for the currently open hooks streams (abort or failHookStreams). */
+  private readonly hookStreamEnders: Array<(err?: Error) => void> = [];
+
+  /** Simulate the relay dropping every open hooks stream (M22, live-verified:
+   *  the relay closes /hooks/subscribe mid-burst; undici surfaces it to the
+   *  subscriber as `TypeError: terminated`). Subscribers see a rejection,
+   *  exactly like the real wire. */
+  failHookStreams(err: Error = Object.assign(new TypeError('terminated'), { name: 'TypeError' })): void {
+    for (const end of this.hookStreamEnders.splice(0)) end(err);
+  }
+
+  /** Simulate the relay ending every open hooks stream cleanly (EOF). */
+  closeHookStreams(): void {
+    for (const end of this.hookStreamEnders.splice(0)) end();
   }
 
   /** Simulate the relay pushing an `updateCombat`/`createCombat` hook-event
@@ -313,15 +333,17 @@ export class FakeRelay implements RelayPort {
   ): Promise<void> {
     this.hookSubscriptions.push([...hooks]);
     this.hookSubscribers.add(onEvent);
-    return new Promise<void>((resolve) => {
-      signal.addEventListener(
-        'abort',
-        () => {
-          this.hookSubscribers.delete(onEvent);
-          resolve();
-        },
-        { once: true },
-      );
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const end = (err?: Error): void => {
+        if (settled) return;
+        settled = true;
+        this.hookSubscribers.delete(onEvent);
+        if (err) reject(err);
+        else resolve();
+      };
+      this.hookStreamEnders.push(end);
+      signal.addEventListener('abort', () => end(), { once: true });
     });
   }
 

@@ -775,6 +775,127 @@ describe('hp write', () => {
   );
 });
 
+describe('stream resilience (fix round 2 — live-verified failure modes)', () => {
+  /** Minimal REST encounter for reseed-driven tests (Task 0 §2a shape). */
+  function activeRestEncounter(combatants: Array<{ id: string; actorUuid: string; initiative: number }>) {
+    return [
+      {
+        id: 'liveCombat',
+        name: 'Combat Encounter',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: combatants.map((c) => ({
+          ...c,
+          name: c.id,
+          img: null,
+          hidden: false,
+          defeated: false,
+        })),
+      },
+    ];
+  }
+
+  it('survives the real wire: connected greeting, combatant-doc frame, garbage frames — then still handles a good frame', async () => {
+    const { relay, manager } = setup();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 20, 20));
+    // The createCombatant frame below legitimately triggers a REST reseed —
+    // give it the same active combat so state survives the re-read.
+    relay.encounters = activeRestEncounter([{ id: 'c1', actorUuid: 'Actor.a1', initiative: 12 }]);
+    await manager.start();
+    relay.emitUpdateCombat(
+      combatDoc({ id: 'liveCombat', round: 1, turn: 0, combatants: [{ id: 'c1', actorId: 'a1', initiative: 12 }] }),
+    );
+    expect(manager.view().active).toBe(true);
+
+    const emit = (event: string, data: unknown): void => {
+      for (const onEvent of [...relay.hookSubscribers]) onEvent({ event, data });
+    };
+    // (a) the relay's greeting — sent on every (re)connect, NOT hook-shaped
+    // (live capture: `event: connected`, data `{"clientId":"fvtt_…"}`).
+    emit('connected', { clientId: 'fvtt_779f197009ce8c97' });
+    // (b) a real createCombatant frame: args[0] is a COMBATANT doc, not a Combat.
+    emit('createCombatant', {
+      data: {
+        args: [
+          { _id: 'c9', actorId: 'a1', defeated: false, flags: {}, group: null, hidden: false,
+            img: null, initiative: 3, sceneId: null, system: {}, tokenId: null, type: 'base' },
+          {},
+          {},
+          'gm',
+        ],
+        hook: 'createCombatant',
+      },
+      type: 'hook-event',
+    });
+    // (c) garbage in every position the wire could produce it.
+    emit('updateCombat', 'unparsed raw string data');
+    emit('updateCombat', { data: { args: null } });
+    emit('updateCombat', { data: { args: [42] } });
+    emit('deleteCombat', {});
+    emit('deleteCombat', null);
+    emit('updateActor', { data: { args: [null] } });
+    emit('whatEvenIsThis', { some: 'thing' });
+
+    await sleep(100); // let the reseed from (b) settle
+    expect(relay.hookSubscribers.size).toBe(1); // stream never died
+    expect(manager.view().active).toBe(true); // state never corrupted
+
+    // A subsequent good frame still lands — the stream is genuinely alive.
+    relay.emitUpdateCombat(
+      combatDoc({ id: 'liveCombat', round: 3, turn: 0, combatants: [{ id: 'c1', actorId: 'a1', initiative: 12 }] }),
+    );
+    expect(manager.view().round).toBe(3);
+  });
+
+  it('re-seeds from REST after the stream drops (TypeError: terminated) — missed frames recovered', async () => {
+    const { relay, manager } = setup();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 20, 20));
+    await manager.start(); // relay.encounters is [] -> seeds inactive
+    expect(manager.view()).toEqual({ active: false });
+    expect(relay.getEncountersCalls).toHaveLength(1);
+
+    // A combat starts exactly while the relay drops the stream (the
+    // live-observed failure): its frames are lost forever.
+    relay.encounters = activeRestEncounter([{ id: 'c1', actorUuid: 'Actor.a1', initiative: 12 }]);
+    relay.failHookStreams(); // undici-style TypeError: terminated
+
+    // The loop must back off (reconnectMinMs=20), RE-SEED, then resubscribe.
+    let view = manager.view();
+    for (let i = 0; i < 200 && !view.active; i++) {
+      await sleep(10);
+      view = manager.view();
+    }
+    expect(view.active).toBe(true);
+    expect(view.combatants?.map((c) => c.id)).toEqual(['c1']);
+    expect(relay.getEncountersCalls.length).toBeGreaterThanOrEqual(2); // seed + reconnect reseed
+    expect(relay.hookSubscribers.size).toBe(1); // resubscribed
+  });
+
+  it('a stalled getEncounters during a reseed keeps the last good state (never clobbers to inactive)', async () => {
+    const { relay, manager } = setup({ fetchTimeoutMs: 30 });
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 20, 20));
+    await manager.start();
+    relay.emitUpdateCombat(
+      combatDoc({ round: 1, turn: 0, combatants: [{ id: 'c1', actorId: 'a1', initiative: 12 }] }),
+    );
+    expect(manager.view().active).toBe(true);
+
+    // The live-observed corruption: a combatant hook triggers a reseed, the
+    // relay stalls (/encounters 408 after 10s in the relay's own log), our
+    // bound fires first — the old code turned that into [] and cleared a
+    // perfectly good combat back to {active:false}.
+    relay.hangEncounters = true;
+    for (const onEvent of [...relay.hookSubscribers]) {
+      onEvent({ event: 'createCombatant', data: { data: { args: [{ _id: 'cX' }, {}, {}, 'gm'] } } });
+    }
+    await sleep(150); // well past the 30ms bound
+
+    expect(manager.view().active).toBe(true); // state kept, not clobbered
+    expect(manager.view().combatants).toHaveLength(1);
+  });
+});
+
 describe('SSE /api/encounter/events', () => {
   async function readUntil(stream: EventStream, predicate: (buf: string) => boolean, timeoutMs = 3000): Promise<string> {
     let buf = '';
