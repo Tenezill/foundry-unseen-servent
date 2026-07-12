@@ -17,20 +17,24 @@
  *     type id is `gear`. No `equipped` flag exists on any item type — no
  *     equip toggle in v1.
  *
- * This task (Task 2) implements `toViewModel` + `resources` only.
- * `buildUpdate` is a throwing stub — Task 3 implements the write allow-list
- * (health/willpower/hunger/humanity.stains, tri-state clamp invariant).
- * `actions`/`buildAction` (pool rolls, rouse checks, power use) are Task 4;
- * per coordinator resolution, stats/list rows in this task carry NO
- * `actionId` even though the brief mentions one — Task 4 wires it in without
- * needing to touch this file's stat/row shape.
+ * Task 2 implemented `toViewModel` + `resources`; Task 3 implemented
+ * `buildUpdate` (write allow-list: health/willpower/hunger/humanity.stains,
+ * tri-state clamp invariant). Task 4 (this pass) implements `actions` +
+ * `buildAction`: one `kind:'pool'` descriptor per attribute/skill/power
+ * (Strategy 2 formula rolls — see the Task 0 findings doc, roll strategy is
+ * FINAL, per-die results are the gateway/PWA's concern) plus one
+ * `kind:'rouse'` descriptor, and wires `actionId` onto the attribute/skill
+ * stats and power list rows that Task 2 deliberately left bare.
  */
 import type {
+  ActionDescriptor,
+  ActionIntent,
   BoxTrackSpec,
   FoundryActorDoc,
   FoundryItemDoc,
   FoundryUpdate,
   ListItem,
+  RelayAction,
   ResourceDescriptor,
   ResourceIntent,
   SheetSection,
@@ -156,16 +160,30 @@ const DOTS_MAX = 5;
 // ---------------------------------------------------------------------------
 // Attributes + skills + humanity (overview tab)
 
+// Vocab entries in order, followed by any extra keys present in the source
+// record but not in the vocab (homebrew) — real data is never dropped.
+// Shared between the dots-stat renderer below and the Task-4 pool-action
+// enumerator, so actions() always matches the exact set of stats rendered.
+function vocabKeys(source: Rec, vocab: readonly string[]): string[] {
+  const vocabSet = new Set<string>(vocab);
+  const extras = Object.keys(source).filter((key) => !vocabSet.has(key));
+  return [...vocab, ...extras];
+}
+
 // Renders a dots-stat list FROM a canonical vocabulary, merging any source
 // values over it (missing key -> defaultValue). Extra keys present in the
 // source record but not in the vocab (homebrew) still render, appended
-// after the vocab entries — real data is never dropped.
+// after the vocab entries — real data is never dropped. `actionPrefix`
+// (Task 4), when given, wires `actionId: '<actionPrefix>.<idPrefix>.<key>'`
+// onto every stat (pool rolls for attributes/skills; discipline ratings
+// pass no prefix and get no actionId per the Task 4 brief).
 function vocabDotsStats(
   source: Rec,
   vocab: readonly string[],
   idPrefix: string,
   labelFor: (key: string) => string,
   defaultValue: number,
+  actionPrefix?: string,
 ): Stat[] {
   const stat = (key: string): Stat => ({
     id: `${idPrefix}.${key}`,
@@ -173,16 +191,15 @@ function vocabDotsStats(
     value: numAt(source, `${key}.value`) ?? defaultValue,
     display: 'dots' as const,
     max: DOTS_MAX,
+    ...(actionPrefix !== undefined ? { actionId: `${actionPrefix}.${idPrefix}.${key}` } : {}),
   });
-  const vocabSet = new Set<string>(vocab);
-  const extras = Object.keys(source).filter((key) => !vocabSet.has(key));
-  return [...vocab.map(stat), ...extras.map(stat)];
+  return vocabKeys(source, vocab).map(stat);
 }
 
 function attributeStats(actor: FoundryActorDoc): Stat[] {
   const sys = rec(actor.system);
   const attributes = rec(sys.attributes);
-  return vocabDotsStats(attributes, ATTRIBUTES, 'attr', capitalize, 1); // default/min 1 (Task 0)
+  return vocabDotsStats(attributes, ATTRIBUTES, 'attr', capitalize, 1, 'pool'); // default/min 1 (Task 0)
 }
 
 function humanityStat(actor: FoundryActorDoc): Stat {
@@ -199,7 +216,7 @@ function humanityStat(actor: FoundryActorDoc): Stat {
 function skillStats(actor: FoundryActorDoc): Stat[] {
   const sys = rec(actor.system);
   const skills = rec(sys.skills);
-  return vocabDotsStats(skills, SKILLS, 'skill', skillLabel, 0);
+  return vocabDotsStats(skills, SKILLS, 'skill', skillLabel, 0, 'pool');
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +275,7 @@ function disciplinePowerItems(actor: FoundryActorDoc): ListItem[] {
         id: item._id,
         label: item.name,
         sub: `Level ${level} · ${disciplineLabel(disc)}`,
+        actionId: `pool.power.${item._id}`,
       };
       const detail = powerDetail(item);
       if (detail !== undefined) entry.detail = detail;
@@ -441,6 +459,177 @@ function buildResources(actor: FoundryActorDoc): ResourceDescriptor[] {
 }
 
 // ---------------------------------------------------------------------------
+// Actions (Task 4): one kind:'pool' descriptor per attribute/skill/power
+// (Strategy 2 formula rolls — findings doc, roll strategy is FINAL) plus one
+// kind:'rouse' descriptor. Enumerated from the SAME vocabularies the stats
+// render from (vocabKeys), so every actionId Task 2/4 wires onto a stat or
+// list row always resolves to an emitted descriptor, including homebrew
+// extras.
+
+function poolAttributeActions(actor: FoundryActorDoc): ActionDescriptor[] {
+  const sys = rec(actor.system);
+  const attributes = rec(sys.attributes);
+  return vocabKeys(attributes, ATTRIBUTES).map((key) => ({
+    id: `pool.attr.${key}`,
+    label: capitalize(key),
+    kind: 'pool',
+    pool: { attribute: `attr.${key}` },
+  }));
+}
+
+function poolSkillActions(actor: FoundryActorDoc): ActionDescriptor[] {
+  const sys = rec(actor.system);
+  const skills = rec(sys.skills);
+  // Default pairing is attr.dexterity + this skill; the pool sheet always
+  // lets the player re-pick either component (buildAction honors an
+  // intent-supplied override over this default).
+  return vocabKeys(skills, SKILLS).map((key) => ({
+    id: `pool.skill.${key}`,
+    label: skillLabel(key),
+    kind: 'pool',
+    pool: { attribute: 'attr.dexterity', skill: `skill.${key}` },
+  }));
+}
+
+function poolPowerActions(actor: FoundryActorDoc): ActionDescriptor[] {
+  // V5 power pools vary; the discipline rating is the stable second
+  // component — the sheet lets the player adjust via intent override.
+  return powerItems(actor).map((item) => {
+    const disc = strAt(item.system, 'discipline') ?? '';
+    return {
+      id: `pool.power.${item._id}`,
+      label: item.name,
+      kind: 'pool',
+      pool: { attribute: 'attr.resolve', skill: `disc.${disc}` },
+    };
+  });
+}
+
+function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
+  return [
+    ...poolAttributeActions(actor),
+    ...poolSkillActions(actor),
+    ...poolPowerActions(actor),
+    { id: 'rouse', label: 'Rouse Check', kind: 'rouse' },
+  ];
+}
+
+// A vampire's hunger gates a pool roll's hunger-die split; mortals/ghouls
+// share the schema but never roll hunger dice (Task 0 findings §canonical
+// path table). `system.gamesystem` is the documented flavor flag; the
+// captured fixture doesn't carry it (only `type` does), so fall back to the
+// actor's own `type` when `gamesystem` is absent.
+function isVampireFlavored(actor: FoundryActorDoc): boolean {
+  const sys = rec(actor.system);
+  const gamesystem = strAt(sys, 'gamesystem');
+  if (gamesystem !== undefined) return gamesystem === 'vampire';
+  return actor.type === 'vampire';
+}
+
+// Validates an `attr.<key>` id: key must be in the canonical vocab OR
+// already present on the actor (homebrew). Returns the bare key.
+function validateAttributeId(actor: FoundryActorDoc, id: string): string {
+  const m = /^attr\.(.+)$/.exec(id);
+  if (!m) throw new IntentError(`invalid attribute id "${id}"`, 'INVALID');
+  const key = m[1] as string;
+  const attributes = rec(rec(actor.system).attributes);
+  const known =
+    (ATTRIBUTES as readonly string[]).includes(key) || Object.prototype.hasOwnProperty.call(attributes, key);
+  if (!known) throw new IntentError(`unknown attribute "${id}"`, 'INVALID');
+  return key;
+}
+
+// Validates a `skill.<key>` or `disc.<key>` id (the pool's second
+// component). skill keys must be in the canonical vocab OR present on the
+// actor; discipline keys must be present on the actor (system.disciplines
+// or as a power item's discipline) — there is no fixed discipline vocab
+// exported by this adapter (Task 0: "14 keys", not enumerated here).
+function validateSecondId(actor: FoundryActorDoc, id: string): { kind: 'skill' | 'disc'; key: string } {
+  const skillMatch = /^skill\.(.+)$/.exec(id);
+  if (skillMatch) {
+    const key = skillMatch[1] as string;
+    const skills = rec(rec(actor.system).skills);
+    const known = (SKILLS as readonly string[]).includes(key) || Object.prototype.hasOwnProperty.call(skills, key);
+    if (!known) throw new IntentError(`unknown skill "${id}"`, 'INVALID');
+    return { kind: 'skill', key };
+  }
+  const discMatch = /^disc\.(.+)$/.exec(id);
+  if (discMatch) {
+    const key = discMatch[1] as string;
+    const disciplines = rec(rec(actor.system).disciplines);
+    const known = Object.prototype.hasOwnProperty.call(disciplines, key) || disciplineKeys(actor).includes(key);
+    if (!known) throw new IntentError(`unknown discipline "${id}"`, 'INVALID');
+    return { kind: 'disc', key };
+  }
+  throw new IntentError(`invalid skill/discipline id "${id}"`, 'INVALID');
+}
+
+function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction {
+  if (intent.kind === 'rouse') {
+    const descriptor = buildActions(actor).find((a) => a.id === intent.actionId);
+    if (!descriptor || descriptor.kind !== 'rouse') {
+      throw new IntentError(`unknown action "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
+    }
+    // Hunger increment is MANUAL (Task 0 findings §Open items) — no
+    // follow-up write; the player adjusts the hunger track themselves.
+    return { endpoint: 'roll', formula: '1d10cs>=6', flavor: 'Rouse Check' };
+  }
+
+  if (intent.kind !== 'pool') {
+    throw new IntentError(`action kind "${intent.kind}" is not supported by wod5e`, 'UNKNOWN_RESOURCE');
+  }
+
+  const descriptor = buildActions(actor).find((a) => a.id === intent.actionId);
+  if (!descriptor || descriptor.kind !== 'pool') {
+    throw new IntentError(`unknown action "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
+  }
+
+  const modifier = intent.modifier ?? 0;
+  if (!Number.isInteger(modifier) || Math.abs(modifier) > 20) {
+    throw new IntentError('modifier must be an integer with |modifier| <= 20', 'INVALID');
+  }
+
+  // The intent's attribute/skill (when present) OVERRIDE the descriptor's
+  // default pairing — that's the point of the pool sheet.
+  const attributeId = intent.attribute ?? descriptor.pool?.attribute;
+  if (attributeId === undefined) {
+    throw new IntentError(`action "${intent.actionId}" has no attribute to roll`, 'INVALID');
+  }
+  const attrKey = validateAttributeId(actor, attributeId);
+
+  const secondId = intent.skill ?? descriptor.pool?.skill;
+  const second = secondId !== undefined ? validateSecondId(actor, secondId) : undefined;
+
+  const sys = rec(actor.system);
+  const attrValue = numAt(rec(sys.attributes), `${attrKey}.value`) ?? 1;
+  const secondValue =
+    second === undefined
+      ? 0
+      : second.kind === 'skill'
+        ? (numAt(rec(sys.skills), `${second.key}.value`) ?? 0)
+        : (numAt(rec(sys.disciplines), `${second.key}.value`) ?? 0);
+
+  const dice = Math.max(1, attrValue + secondValue + modifier);
+  const hunger = isVampireFlavored(actor) ? Math.min(numAt(sys, 'hunger.value') ?? 0, dice) : 0;
+  const normal = dice - hunger;
+
+  const formula =
+    normal > 0 && hunger > 0
+      ? `${normal}d10cs>=6 + ${hunger}d10cs>=6`
+      : hunger > 0
+        ? `${hunger}d10cs>=6`
+        : `${normal}d10cs>=6`;
+
+  const attrLabel = capitalize(attrKey);
+  const secondLabel =
+    second === undefined ? undefined : second.kind === 'skill' ? skillLabel(second.key) : disciplineLabel(second.key);
+  const hungerPart = hunger > 0 ? `, ${hunger} hunger` : '';
+  const flavor = `${attrLabel}${secondLabel !== undefined ? ` + ${secondLabel}` : ''} (${dice} dice${hungerPart})`;
+
+  return { endpoint: 'roll', formula, flavor };
+}
+
+// ---------------------------------------------------------------------------
 // buildUpdate — intent -> concrete Foundry update (Task 3). Write allow-list:
 // health/willpower superficial+aggravated (tri-state clamp: the descriptor's
 // dynamic max already encodes `superficial + aggravated <= track max`, so
@@ -554,6 +743,14 @@ export const wod5eAdapter: SystemAdapter = {
 
   buildUpdate(actor: FoundryActorDoc, intent: ResourceIntent): FoundryUpdate {
     return buildUpdate(actor, intent);
+  },
+
+  actions(actor: FoundryActorDoc): ActionDescriptor[] {
+    return buildActions(actor);
+  },
+
+  buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction {
+    return buildAction(actor, intent);
   },
 };
 

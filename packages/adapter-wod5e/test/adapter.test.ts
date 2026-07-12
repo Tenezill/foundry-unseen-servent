@@ -97,7 +97,7 @@ const ALL_ATTRIBUTES = [
 ];
 
 describe('attributes section', () => {
-  it('all 9 attributes as dots stats in vocab order, with fixture values and max 5, no actionId', () => {
+  it('all 9 attributes as dots stats in vocab order, with fixture values, max 5, and a pool actionId', () => {
     const s = section(marius, 'attributes');
     if (s.kind !== 'stats') throw new Error('attributes must be a stats section');
     // humanity is appended after the 9 attributes (see buildSections)
@@ -120,7 +120,7 @@ describe('attributes section', () => {
       expect(stat?.value).toBe(value);
       expect(stat?.display).toBe('dots');
       expect(stat?.max).toBe(5);
-      expect(stat?.actionId).toBeUndefined();
+      expect(stat?.actionId).toBe(`pool.attr.${key}`);
     }
   });
 
@@ -182,7 +182,7 @@ describe('skills section', () => {
     expect(occult?.value).toBe(3);
     expect(occult?.display).toBe('dots');
     expect(occult?.max).toBe(5);
-    expect(occult?.actionId).toBeUndefined();
+    expect(occult?.actionId).toBe('pool.skill.occult');
 
     const expected: Record<string, number> = {
       athletics: 1,
