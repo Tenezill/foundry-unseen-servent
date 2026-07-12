@@ -46,7 +46,7 @@ The dev world `companion-test` was restored and relay-verified afterwards.
 |---|---|---|
 | actor type | `type: 'vampire'` | `system.gamesystem: 'vampire'` flags the ruleset flavor; mortal/ghoul share the schema (untested — v1 targets vampires; others render best-effort) |
 | attributes (9) | `system.attributes.<key>.value` | keys: strength dexterity stamina charisma manipulation composure intelligence wits resolve; **default/min 1**; each node carries `label`/`displayName`/`type` (physical/social/mental) |
-| skills (27) | `system.skills.<key>.value` | 0–5, default 0; `hasSpecialties`/`specialtiesList` exist (ignore v1) |
+| skills (27) | `system.skills.<key>.value` | 0–5, default 0; `hasSpecialties`/`specialtiesList` exist (ignore v1). **Source data persists only touched skills** (fixture has 6 keys) — prepared data carries all 27. Canonical keys (captured live from the prepared actor): academics animalken athletics awareness brawl craft drive etiquette finance firearms insight intimidation investigation larceny leadership medicine melee occult performance persuasion politics science stealth streetwise subterfuge survival technology. Adapters must render from this vocabulary with source values merged over it (same caveat applies to the 9 attributes: default 1, may be absent from source). |
 | health | `system.health.{max, superficial, aggravated}` | **max is manual** (not derived from stamina — GM sets it; Marius 6) |
 | willpower | `system.willpower.{max, superficial, aggravated}` | max manual (Marius 4) |
 | hunger | `system.hunger.value` | 0–5, `max: 5` present |

@@ -77,12 +77,13 @@ function items(actor: FoundryActorDoc): FoundryItemDoc[] {
 }
 
 // ---------------------------------------------------------------------------
-// Vocabulary (labels only — no game-rules content). Attribute keys are pinned
-// by the Task 0 path table; skills render data-driven (see skillStats below)
-// since the fixture only ever exposed the 6 skills Marius has above 0 and
-// the exact key spelling of the other 21 V5 skills is unverified against
-// this system version — inventing them risks a silently wrong id that Task 4
-// would then bake into action pool references.
+// Vocabulary (labels only — no game-rules content). Attribute and skill keys
+// are pinned by the Task 0 path table and captured live from a prepared
+// wod5e 5.3.15 actor (M23 Task 2 review finding): SOURCE data only persists
+// keys the sheet has touched (the captured fixture has just 6 skill keys),
+// so the untouched rest must render from these vocabularies at their
+// defaults rather than being dropped. Later tasks (pool-roll builder) need
+// the complete list to reference.
 
 const ATTRIBUTES = [
   'strength',
@@ -95,6 +96,47 @@ const ATTRIBUTES = [
   'wits',
   'resolve',
 ] as const;
+
+const SKILLS = [
+  'academics',
+  'animalken',
+  'athletics',
+  'awareness',
+  'brawl',
+  'craft',
+  'drive',
+  'etiquette',
+  'finance',
+  'firearms',
+  'insight',
+  'intimidation',
+  'investigation',
+  'larceny',
+  'leadership',
+  'medicine',
+  'melee',
+  'occult',
+  'performance',
+  'persuasion',
+  'politics',
+  'science',
+  'stealth',
+  'streetwise',
+  'subterfuge',
+  'survival',
+  'technology',
+] as const;
+
+// Known label override for the one skill key whose id doesn't capitalize
+// naturally; any other key (including homebrew extras not in SKILLS) falls
+// back to a plain capitalize().
+const SKILL_LABELS: Record<string, string> = {
+  animalken: 'Animal Ken',
+};
+
+function skillLabel(key: string): string {
+  return SKILL_LABELS[key] ?? capitalize(key);
+}
 
 // Known label overrides for discipline keys whose id doesn't read naturally
 // capitalized (Task 0: "14 keys incl. sorcery, alchemy"); any other key falls
@@ -113,15 +155,33 @@ const DOTS_MAX = 5;
 // ---------------------------------------------------------------------------
 // Attributes + skills + humanity (overview tab)
 
-function attributeStats(actor: FoundryActorDoc): Stat[] {
-  const sys = rec(actor.system);
-  return ATTRIBUTES.map((key) => ({
-    id: `attr.${key}`,
-    label: capitalize(key),
-    value: numAt(sys, `attributes.${key}.value`) ?? 1, // default/min 1 (Task 0)
+// Renders a dots-stat list FROM a canonical vocabulary, merging any source
+// values over it (missing key -> defaultValue). Extra keys present in the
+// source record but not in the vocab (homebrew) still render, appended
+// after the vocab entries — real data is never dropped.
+function vocabDotsStats(
+  source: Rec,
+  vocab: readonly string[],
+  idPrefix: string,
+  labelFor: (key: string) => string,
+  defaultValue: number,
+): Stat[] {
+  const stat = (key: string): Stat => ({
+    id: `${idPrefix}.${key}`,
+    label: labelFor(key),
+    value: numAt(source, `${key}.value`) ?? defaultValue,
     display: 'dots' as const,
     max: DOTS_MAX,
-  }));
+  });
+  const vocabSet = new Set<string>(vocab);
+  const extras = Object.keys(source).filter((key) => !vocabSet.has(key));
+  return [...vocab.map(stat), ...extras.map(stat)];
+}
+
+function attributeStats(actor: FoundryActorDoc): Stat[] {
+  const sys = rec(actor.system);
+  const attributes = rec(sys.attributes);
+  return vocabDotsStats(attributes, ATTRIBUTES, 'attr', capitalize, 1); // default/min 1 (Task 0)
 }
 
 function humanityStat(actor: FoundryActorDoc): Stat {
@@ -138,15 +198,7 @@ function humanityStat(actor: FoundryActorDoc): Stat {
 function skillStats(actor: FoundryActorDoc): Stat[] {
   const sys = rec(actor.system);
   const skills = rec(sys.skills);
-  return Object.keys(skills)
-    .sort()
-    .map((key) => ({
-      id: `skill.${key}`,
-      label: capitalize(key),
-      value: numAt(skills, `${key}.value`) ?? 0,
-      display: 'dots' as const,
-      max: DOTS_MAX,
-    }));
+  return vocabDotsStats(skills, SKILLS, 'skill', skillLabel, 0);
 }
 
 // ---------------------------------------------------------------------------

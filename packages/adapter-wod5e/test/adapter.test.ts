@@ -84,10 +84,25 @@ describe('tabs', () => {
   });
 });
 
+const ALL_ATTRIBUTES = [
+  'strength',
+  'dexterity',
+  'stamina',
+  'charisma',
+  'manipulation',
+  'composure',
+  'intelligence',
+  'wits',
+  'resolve',
+];
+
 describe('attributes section', () => {
-  it('all 9 attributes as dots stats with fixture values and max 5, no actionId', () => {
+  it('all 9 attributes as dots stats in vocab order, with fixture values and max 5, no actionId', () => {
     const s = section(marius, 'attributes');
     if (s.kind !== 'stats') throw new Error('attributes must be a stats section');
+    // humanity is appended after the 9 attributes (see buildSections)
+    expect(s.stats.map((x) => x.id).slice(0, 9)).toEqual(ALL_ATTRIBUTES.map((k) => `attr.${k}`));
+
     const expected: Record<string, number> = {
       strength: 3,
       dexterity: 2,
@@ -127,10 +142,42 @@ describe('attributes section', () => {
   });
 });
 
+const ALL_SKILLS = [
+  'academics',
+  'animalken',
+  'athletics',
+  'awareness',
+  'brawl',
+  'craft',
+  'drive',
+  'etiquette',
+  'finance',
+  'firearms',
+  'insight',
+  'intimidation',
+  'investigation',
+  'larceny',
+  'leadership',
+  'medicine',
+  'melee',
+  'occult',
+  'performance',
+  'persuasion',
+  'politics',
+  'science',
+  'stealth',
+  'streetwise',
+  'subterfuge',
+  'survival',
+  'technology',
+];
+
 describe('skills section', () => {
-  it('renders every skill present on the actor as a dots stat, one raised value asserted', () => {
+  it('renders all 27 canonical skills in vocab order, with fixture-raised values merged in place', () => {
     const s = section(marius, 'skills');
     if (s.kind !== 'stats') throw new Error('skills must be a stats section');
+    expect(s.stats.map((x) => x.id)).toEqual(ALL_SKILLS.map((k) => `skill.${k}`));
+
     const occult = s.stats.find((x) => x.id === 'skill.occult');
     expect(occult?.value).toBe(3);
     expect(occult?.display).toBe('dots');
@@ -148,6 +195,36 @@ describe('skills section', () => {
     for (const [key, value] of Object.entries(expected)) {
       expect(s.stats.find((x) => x.id === `skill.${key}`)?.value).toBe(value);
     }
+    // untouched skills default to 0
+    expect(s.stats.find((x) => x.id === 'skill.academics')?.value).toBe(0);
+    expect(s.stats.find((x) => x.id === 'skill.technology')?.value).toBe(0);
+  });
+
+  it('animalken label overrides to "Animal Ken"; a plain key falls back to capitalize()', () => {
+    const s = section(marius, 'skills');
+    if (s.kind !== 'stats') throw new Error('skills must be a stats section');
+    expect(s.stats.find((x) => x.id === 'skill.animalken')?.label).toBe('Animal Ken');
+    expect(s.stats.find((x) => x.id === 'skill.academics')?.label).toBe('Academics');
+  });
+
+  it('a homebrew skill key not in the vocab still renders, appended after the vocab entries', () => {
+    const withHomebrew: FoundryActorDoc = {
+      ...marius,
+      system: {
+        ...marius.system,
+        skills: {
+          ...(marius.system.skills as Record<string, unknown>),
+          juggling: { value: 2 },
+        },
+      },
+    };
+    const s = wod5eAdapter.toViewModel(withHomebrew).sections.find((x) => x.id === 'skills');
+    if (s?.kind !== 'stats') throw new Error('skills must be a stats section');
+    const ids = s.stats.map((x) => x.id);
+    expect(ids.indexOf('skill.juggling')).toBe(ALL_SKILLS.length);
+    const juggling = s.stats.find((x) => x.id === 'skill.juggling');
+    expect(juggling?.value).toBe(2);
+    expect(juggling?.label).toBe('Juggling');
   });
 });
 
@@ -305,15 +382,19 @@ describe('sparse-actor safety', () => {
     expect(() => wod5eAdapter.resources(sparse)).not.toThrow();
   });
 
-  it('defensive defaults: attributes at 1, skills/disciplines/gear empty, boxes at 0', () => {
+  it('defensive defaults: all 9 attributes at 1, all 27 skills at 0, disciplines/gear empty, boxes at 0', () => {
     const vm = wod5eAdapter.toViewModel(sparse);
     const attrs = vm.sections.find((s) => s.id === 'attributes');
     if (attrs?.kind !== 'stats') throw new Error('attributes must be a stats section');
     expect(attrs.stats.find((s) => s.id === 'attr.strength')?.value).toBe(1);
+    // 9 attributes + humanity, all at default
+    expect(attrs.stats.slice(0, 9).map((s) => s.id)).toEqual(ALL_ATTRIBUTES.map((k) => `attr.${k}`));
+    expect(attrs.stats.slice(0, 9).every((s) => s.value === 1)).toBe(true);
 
     const skills = vm.sections.find((s) => s.id === 'skills');
     if (skills?.kind !== 'stats') throw new Error('skills must be a stats section');
-    expect(skills.stats).toEqual([]);
+    expect(skills.stats.map((s) => s.id)).toEqual(ALL_SKILLS.map((k) => `skill.${k}`));
+    expect(skills.stats.every((s) => s.value === 0)).toBe(true);
 
     const ratings = vm.sections.find((s) => s.id === 'discipline-ratings');
     if (ratings?.kind !== 'stats') throw new Error('discipline-ratings must be a stats section');
