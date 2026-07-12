@@ -77,6 +77,19 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  packages/adapter-wod5e:
+    dependencies:
+      '@companion/adapter-sdk':
+        specifier: workspace:*
+        version: link:../adapter-sdk
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(jiti@2.7.0)(terser@5.48.0)(tsx@4.23.0)(yaml@2.9.0)
+
   packages/foundry-client:
     devDependencies:
       typescript:
