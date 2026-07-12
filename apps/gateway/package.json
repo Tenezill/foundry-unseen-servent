@@ -13,6 +13,7 @@
   "dependencies": {
     "@companion/adapter-dnd5e": "workspace:*",
     "@companion/adapter-sdk": "workspace:*",
+    "@companion/adapter-wod5e": "workspace:*",
     "@companion/foundry-client": "workspace:*",
     "fastify": "^5.0.0",
     "tsx": "^4.19.0",

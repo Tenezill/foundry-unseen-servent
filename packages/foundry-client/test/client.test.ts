@@ -196,3 +196,215 @@ describe('FoundryRelayClient.getEntity() — cross-wired response rejection', ()
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * M23 custom-item chain (Task 0 findings §Headline plan amendments 5, live-
+ * verified): no embedded-create endpoint exists, so custom item creation is
+ * POST /create (world item) -> POST /give (copies onto the actor) ->
+ * DELETE /delete (best-effort cleanup of the scratch world item).
+ */
+describe('FoundryRelayClient.createWorldItem()', () => {
+  let client: FoundryRelayClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new FoundryRelayClient({
+      baseUrl: 'http://relay:3010',
+      apiKey: 'test-api-key',
+      clientId: 'fvtt_test123',
+    });
+  });
+
+  it('POSTs /create with {entityType, data} and returns body.uuid', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({ uuid: 'Item.abc123', entity: { _id: 'abc123' } }),
+      text: vi.fn(),
+    });
+
+    const data = { name: 'Stake', type: 'weapon', system: { weaponvalue: 2 } };
+    const result = await client.createWorldItem(data);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/create');
+    expect(url).toContain('clientId=fvtt_test123');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['x-api-key']).toBe('test-api-key');
+    expect(JSON.parse(init.body as string)).toEqual({ entityType: 'Item', data });
+    expect(result).toBe('Item.abc123');
+  });
+
+  it('falls back to "Item." + entity._id when body.uuid is absent', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({ entity: { _id: 'abc123' } }),
+      text: vi.fn(),
+    });
+    const result = await client.createWorldItem({ name: 'Stake', type: 'weapon', system: {} });
+    expect(result).toBe('Item.abc123');
+  });
+
+  it('returns null when the relay responds with neither uuid nor entity._id', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({}),
+      text: vi.fn(),
+    });
+    const result = await client.createWorldItem({ name: 'Stake', type: 'weapon', system: {} });
+    expect(result).toBeNull();
+  });
+
+  it('returns null on an HTTP failure (never throws)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: vi.fn(),
+      text: vi.fn().mockResolvedValueOnce('boom'),
+    });
+    const result = await client.createWorldItem({ name: 'Stake', type: 'weapon', system: {} });
+    expect(result).toBeNull();
+  });
+
+  it('returns null when the relay is unreachable (never throws)', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('fetch failed'));
+    const result = await client.createWorldItem({ name: 'Stake', type: 'weapon', system: {} });
+    expect(result).toBeNull();
+  });
+});
+
+describe('FoundryRelayClient.giveItem()', () => {
+  let client: FoundryRelayClient;
+  let warn: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    warn = vi.fn();
+    client = new FoundryRelayClient({
+      baseUrl: 'http://relay:3010',
+      apiKey: 'test-api-key',
+      clientId: 'fvtt_test123',
+      log: { warn },
+    });
+  });
+
+  it('POSTs /give with {toUuid, itemUuid} and returns true on success', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({ success: true }),
+      text: vi.fn(),
+    });
+
+    const result = await client.giveItem('Actor.a1', 'Item.abc123');
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/give');
+    expect(url).toContain('clientId=fvtt_test123');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['x-api-key']).toBe('test-api-key');
+    expect(JSON.parse(init.body as string)).toEqual({ toUuid: 'Actor.a1', itemUuid: 'Item.abc123' });
+    expect(result).toBe(true);
+  });
+
+  it('returns false (no throw) when the relay body lacks success:true', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({ error: 'nope' }),
+      text: vi.fn(),
+    });
+    const result = await client.giveItem('Actor.a1', 'Item.abc123');
+    expect(result).toBe(false);
+  });
+
+  it('returns false (no throw) on an HTTP failure, and logs a warning', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: vi.fn(),
+      text: vi.fn().mockResolvedValueOnce('boom'),
+    });
+    const result = await client.giveItem('Actor.a1', 'Item.abc123');
+    expect(result).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns false (no throw) when the relay is unreachable', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('fetch failed'));
+    const result = await client.giveItem('Actor.a1', 'Item.abc123');
+    expect(result).toBe(false);
+  });
+});
+
+describe('FoundryRelayClient.deleteEntity()', () => {
+  let client: FoundryRelayClient;
+  let warn: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    warn = vi.fn();
+    client = new FoundryRelayClient({
+      baseUrl: 'http://relay:3010',
+      apiKey: 'test-api-key',
+      clientId: 'fvtt_test123',
+      log: { warn },
+    });
+  });
+
+  it('DELETEs /delete?uuid=… with clientId + api-key', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({}),
+      text: vi.fn(),
+    });
+
+    const result = await client.deleteEntity('Item.abc123');
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/delete');
+    expect(url).toContain('uuid=Item.abc123');
+    expect(url).toContain('clientId=fvtt_test123');
+    expect(init.method).toBe('DELETE');
+    expect((init.headers as Record<string, string>)['x-api-key']).toBe('test-api-key');
+    expect(warn).not.toHaveBeenCalled();
+    expect(result).toBe(true);
+  });
+
+  it('returns false (no throw) on an HTTP failure, and logs a warning', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: vi.fn(),
+      text: vi.fn().mockResolvedValueOnce('boom'),
+    });
+    const result = await client.deleteEntity('Item.abc123');
+    expect(result).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns false (no throw) when the relay is unreachable, and logs a warning', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('fetch failed'));
+    const result = await client.deleteEntity('Item.abc123');
+    expect(result).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns false (no throw) on an applicative {error} response, and logs a warning', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({ error: 'no such entity' }),
+      text: vi.fn(),
+    });
+    const result = await client.deleteEntity('Item.abc123');
+    expect(result).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+});

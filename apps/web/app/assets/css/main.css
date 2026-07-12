@@ -130,6 +130,114 @@
   --accent-ink: #241a08;
 }
 
+/* ---------------------------------------------------------------------------
+   wod5e "Vampire" theme override (M23).
+
+   Same mechanism as the Gilded Tome above: only raw palette tokens are
+   redeclared here (--bg, --panel, --gold, --garnet …) — the semantic
+   aliases (--surface, --accent, --text, --danger …) are declared exactly
+   once, at the base :root above, as e.g. `--accent: var(--gold)`, so they
+   resolve through automatically once --gold etc. is overridden for this
+   element. No component rule and no bare `:root`/semantic-alias edit lives
+   here, and every selector requires the `[data-system='wod5e']` attribute,
+   so a dnd5e sheet (no such attribute stamped) never matches any rule below
+   — pixel-unchanged.
+
+   Same three-state selection as the base theme, one specificity step over
+   it throughout (extra attribute selector), so wod5e always wins over the
+   base values on a wod5e-stamped element, and the explicit-toggle combos —
+   one step further still — always win over the wod5e system-default ones:
+     • :root[data-system='wod5e']                        → dark default
+     • @media (prefers-color-scheme: light) + the same    → light default
+     • :root[data-theme='dark'|'light'][data-system=...]  → explicit override
+--------------------------------------------------------------------------- */
+
+:root[data-system='wod5e'] {
+  color-scheme: dark;
+  --bg: #0a0a0c;
+  --bg-grad-1: #121014;
+  --bg-grad-2: #060506;
+  --panel: #16151a;
+  --panel-2: #1e1c22;
+  --line: #322e35;
+  --ink: #d8d6dc;
+  --ink-dim: #8f8c96;
+  --ink-faint: #5c5960;
+  --gold: #8a1220;
+  --gold-bright: #b81f2c;
+  --gold-deep: #5c0d14;
+  --garnet: #c9502a;
+  --garnet-deep: #7a2f12;
+  --jade: #4f8f6b;
+  --shadow: rgba(0, 0, 0, 0.65);
+  --accent-ink: #f2e4e2;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-system='wod5e'] {
+    color-scheme: light;
+    --bg: #e8e3da;
+    --bg-grad-1: #efece4;
+    --bg-grad-2: #dad3c5;
+    --panel: #f2efe7;
+    --panel-2: #e3ddd0;
+    --line: #cac2b2;
+    --ink: #211c1a;
+    --ink-dim: #5f574c;
+    --ink-faint: #8c8375;
+    --gold: #7a1f1a;
+    --gold-bright: #9c2a22;
+    --gold-deep: #4d1310;
+    --garnet: #a8481f;
+    --garnet-deep: #d9b8a2;
+    --jade: #3a7350;
+    --shadow: rgba(40, 20, 15, 0.25);
+    --accent-ink: #f5ece7;
+  }
+}
+
+:root[data-theme='dark'][data-system='wod5e'] {
+  color-scheme: dark;
+  --bg: #0a0a0c;
+  --bg-grad-1: #121014;
+  --bg-grad-2: #060506;
+  --panel: #16151a;
+  --panel-2: #1e1c22;
+  --line: #322e35;
+  --ink: #d8d6dc;
+  --ink-dim: #8f8c96;
+  --ink-faint: #5c5960;
+  --gold: #8a1220;
+  --gold-bright: #b81f2c;
+  --gold-deep: #5c0d14;
+  --garnet: #c9502a;
+  --garnet-deep: #7a2f12;
+  --jade: #4f8f6b;
+  --shadow: rgba(0, 0, 0, 0.65);
+  --accent-ink: #f2e4e2;
+}
+
+:root[data-theme='light'][data-system='wod5e'] {
+  color-scheme: light;
+  --bg: #e8e3da;
+  --bg-grad-1: #efece4;
+  --bg-grad-2: #dad3c5;
+  --panel: #f2efe7;
+  --panel-2: #e3ddd0;
+  --line: #cac2b2;
+  --ink: #211c1a;
+  --ink-dim: #5f574c;
+  --ink-faint: #8c8375;
+  --gold: #7a1f1a;
+  --gold-bright: #9c2a22;
+  --gold-deep: #4d1310;
+  --garnet: #a8481f;
+  --garnet-deep: #d9b8a2;
+  --jade: #3a7350;
+  --shadow: rgba(40, 20, 15, 0.25);
+  --accent-ink: #f5ece7;
+}
+
 * {
   box-sizing: border-box;
 }

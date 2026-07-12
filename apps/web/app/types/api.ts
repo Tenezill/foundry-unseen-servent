@@ -26,6 +26,10 @@ export interface ActionRollResult {
   formula: string
   isCritical?: boolean
   isFumble?: boolean
+  /** M23: not currently emitted by the gateway (no pool/rouse flavor field
+   *  today) — forward-compatible field the pool sheet prefers over its own
+   *  client-computed preview line, per the binding contract, if it ever is. */
+  flavor?: string
 }
 
 export interface ActionResponse {

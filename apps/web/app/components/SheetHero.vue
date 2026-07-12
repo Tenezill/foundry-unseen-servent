@@ -102,7 +102,9 @@ watch(
 const portrait = computed(() => foundryImgUrl(props.sheet.img, foundryBase))
 
 const isCaster = computed(() => props.sheet.sections.some((s) => s.id === 'spells'))
-const glyph = computed(() => (isCaster.value ? '✦' : '⚔'))
+// M23: an adapter-declared glyph (wod5e's ☥) always wins; the caster/martial
+// heuristic is only the dnd5e fallback for actors with no glyph of their own.
+const glyph = computed(() => props.sheet.glyph ?? (isCaster.value ? '✦' : '⚔'))
 
 /** Class/level line for the subtitle (falls back to the system id). */
 const subtitle = computed(() => {

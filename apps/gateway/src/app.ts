@@ -17,6 +17,7 @@ import Fastify, {
 } from 'fastify';
 import type {
   ActionIntent,
+  CustomItemInput,
   FoundryActorDoc,
   FoundryUpdate,
   RelayAction,
@@ -75,10 +76,20 @@ export interface RelayPort {
   search(opts: { query?: string; filter?: string; limit?: number }): Promise<
     Array<{ uuid: string; id: string; name: string; img?: string; documentType: string; [key: string]: unknown }>
   >;
-  /** POST /give — copy an item (compendium uuid ok) onto a target actor. */
-  giveItem(toUuid: string, itemUuid: string): Promise<void>;
-  /** DELETE /delete — delete an entity (embedded item uuid ok). */
-  deleteEntity(uuid: string): Promise<void>;
+  /** POST /give — copy an item (compendium uuid ok) onto a target actor;
+   *  true on success (M23: never throws — see foundry-client). */
+  giveItem(toUuid: string, itemUuid: string): Promise<boolean>;
+  /** DELETE /delete — delete an entity (embedded item uuid ok); true on
+   *  success (M23: never throws — see foundry-client). Callers decide
+   *  whether a `false` matters: the library "remove" route surfaces it as
+   *  a 502, the custom-item chain's cleanup leg treats it as best-effort. */
+  deleteEntity(uuid: string): Promise<boolean>;
+  /**
+   * POST /create — create a world-level Item (M23: the first leg of the
+   * custom-item chain — no embedded-create endpoint exists). Returns the
+   * created uuid, or null on failure/timeout.
+   */
+  createWorldItem(data: Record<string, unknown>): Promise<string | null>;
   /**
    * POST /dnd5e/{short-rest|long-rest|death-save|break-concentration} — an
    * actor-scoped command with no item target (M8). Foundry applies the result
@@ -146,6 +157,9 @@ export interface GatewayDeps {
   /** M22: budget for the hp-write route's actor fetch (every relay await on
    *  the encounter path is bounded — Global Constraints). Default 3000. */
   encounterFetchTimeoutMs?: number;
+  /** M23: budget per relay call in the custom-item create->give->delete
+   *  chain (every relay await is bounded — Global Constraints). Default 3000. */
+  customItemTimeoutMs?: number;
 }
 
 type ErrorCode =
@@ -257,6 +271,30 @@ function parseActionIntent(
     case 'endconcentration':
       // Actor-scoped commands carry only {kind, actionId} — no extra fields.
       return { kind, actionId };
+    case 'pool': {
+      // M23 wod5e pool roll: attribute/skill/modifier are all optional
+      // overrides of the descriptor's default pairing — only type-check
+      // them here (shape sanity); the adapter does the deep validation
+      // (prefix shapes, known vocab, modifier range).
+      if (body.attribute !== undefined && typeof body.attribute !== 'string') return null;
+      if (body.skill !== undefined && typeof body.skill !== 'string') return null;
+      if (body.modifier !== undefined && (typeof body.modifier !== 'number' || !Number.isFinite(body.modifier))) {
+        return null;
+      }
+      return {
+        kind,
+        actionId,
+        ...(body.attribute !== undefined ? { attribute: body.attribute } : {}),
+        ...(body.skill !== undefined ? { skill: body.skill } : {}),
+        ...(body.modifier !== undefined ? { modifier: body.modifier } : {}),
+      };
+    }
+    case 'rouse':
+      // M23 wod5e rouse check: no extra fields, mirrors the actor-scoped
+      // commands above.
+      return { kind, actionId };
+    default:
+      return null;
   }
 }
 
@@ -293,6 +331,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   const livePollMs = deps.livePollMs ?? 3_000;
   const adminNameTimeoutMs = deps.adminNameTimeoutMs ?? 3_000;
   const encounterFetchTimeoutMs = deps.encounterFetchTimeoutMs ?? 3_000;
+  const customItemTimeoutMs = deps.customItemTimeoutMs ?? 3_000;
   const limiter = new SlidingWindowLimiter(deps.rateLimitMax ?? 30, deps.rateLimitWindowMs ?? 60_000);
   const { relay, players, registry } = deps;
 
@@ -883,6 +922,82 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
     },
   );
 
+  // ---- custom items (M23): create -> give -> best-effort delete chain ------
+  // No embedded-create endpoint exists on the relay (Task 0 findings §5), so
+  // a player-authored weapon/gear is created as a scratch WORLD item, given
+  // to the actor (which copies it in with system data intact), then the
+  // scratch world item is best-effort deleted. 404 when the actor's adapter
+  // doesn't declare buildCustomItem (mirrors the library-collection 404).
+
+  app.post<{ Params: { id: string } }>(
+    '/api/actors/:id/items',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const player = req.player as Player;
+
+      // Shares the write rate limit with intents/actions.
+      if (!limiter.allow(player.tokenHash)) {
+        return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
+      }
+
+      // 1. Ownership (404, never 403 — do not leak actor existence).
+      const { id } = req.params;
+      if (!player.actorIds.includes(id)) return sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      const actor = await fetchActor(id);
+      if (!actor) return sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      const adapter = adapterFor(actor);
+      if (!adapter?.buildCustomItem) return sendError(reply, 404, 'NOT_FOUND', 'not found');
+
+      const body = req.body;
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        return sendError(reply, 422, 'INVALID_INTENT', 'item body must be an object');
+      }
+
+      // 2. The adapter builds AND validates the world-item payload — the
+      // raw client body is passed straight through un-sanitized; the
+      // adapter's whitelist is the only thing that reaches the relay.
+      let payload: Record<string, unknown>;
+      try {
+        payload = adapter.buildCustomItem(actor, body as unknown as CustomItemInput);
+      } catch (err) {
+        if (err instanceof IntentError && err.code === 'INVALID') {
+          return sendError(reply, 422, 'INVALID_INTENT', err.message);
+        }
+        throw err;
+      }
+
+      // 3. Bounded create -> give -> best-effort delete chain (M18 pattern:
+      // every relay await races a timeout so a stalled relay can't hang the
+      // request; a miss degrades exactly like an explicit failure).
+      const worldItemUuid = await Promise.race([
+        relay.createWorldItem(payload),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), customItemTimeoutMs)),
+      ]);
+      if (!worldItemUuid) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+
+      const gave = await Promise.race([
+        relay.giveItem(`Actor.${id}`, worldItemUuid),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), customItemTimeoutMs)),
+      ]);
+
+      // Best-effort cleanup regardless of give's outcome (Task 0 findings
+      // §5: a failed delete just leaves a harmless world item behind) —
+      // deleteEntity itself never throws (foundry-client swallows + logs);
+      // its boolean result is intentionally ignored here.
+      await Promise.race([
+        relay.deleteEntity(worldItemUuid),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), customItemTimeoutMs)),
+      ]);
+
+      if (!gave) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+
+      const fresh = await fetchActor(id);
+      if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+      const freshAdapter = adapterFor(fresh) ?? adapter;
+      return reply.code(200).send({ sheet: buildSheet(freshAdapter, fresh) });
+    },
+  );
+
   // ---- library (search / preview / add / remove) ----------------------------
   // A collection-parameterized capability (M13): spells, feats, gear share one
   // search -> preview -> add / remove flow. Available only when the actor's
@@ -993,7 +1108,8 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       if (!ctx.collection.canAdd(doc)) {
         return sendError(reply, 422, 'INVALID_INTENT', 'entry cannot be added to this collection');
       }
-      await relay.giveItem(`Actor.${req.params.id}`, raw.uuid);
+      const gave = await relay.giveItem(`Actor.${req.params.id}`, raw.uuid);
+      if (!gave) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const fresh = await fetchActor(req.params.id);
       if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const freshAdapter = adapterFor(fresh) ?? ctx.adapter;
@@ -1015,7 +1131,8 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       if (!item || !ctx.collection.canRemove(item)) {
         return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'item does not exist or cannot be removed');
       }
-      await relay.deleteEntity(`Actor.${req.params.id}.Item.${req.params.itemId}`);
+      const deleted = await relay.deleteEntity(`Actor.${req.params.id}.Item.${req.params.itemId}`);
+      if (!deleted) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const fresh = await fetchActor(req.params.id);
       if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const freshAdapter = adapterFor(fresh) ?? ctx.adapter;

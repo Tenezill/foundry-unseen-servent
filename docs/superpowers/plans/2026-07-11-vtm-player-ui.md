@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Vampire: the Masquerade (wod5e system, id `vtm5e`) players get a full interactive phone sheet — dot-rated attributes/skills, tri-state health/willpower box tracks, hunger/humanity, disciplines — with dice-pool rolls, rouse checks, track edits, and mechanically functional custom items, on a second dedicated stack.
+**Goal:** Vampire: the Masquerade (wod5e system, id `wod5e`) players get a full interactive phone sheet — dot-rated attributes/skills, tri-state health/willpower box tracks, hunger/humanity, disciplines — with dice-pool rolls, rouse checks, track edits, and mechanically functional custom items, on a second dedicated stack.
 
-**Architecture:** New `packages/adapter-wod5e` implements the existing `SystemAdapter` contract; the `adapter-sdk` gains four additive optional primitives (adapter-declared tabs, box tracks, dot stats, pool actions) plus a custom-item hook. The gateway registers the adapter (one line) and adds one adapter-gated create-item route. The web shell renders tabs from the view model (regex fallback for dnd5e), adds `TrackBoxes` + dot rendering + a pool-roll bottom sheet + a custom item form, and a `vtm5e` theme token set. Everything system-specific lives in the adapter.
+**Architecture:** New `packages/adapter-wod5e` implements the existing `SystemAdapter` contract; the `adapter-sdk` gains four additive optional primitives (adapter-declared tabs, box tracks, dot stats, pool actions) plus a custom-item hook. The gateway registers the adapter (one line) and adds one adapter-gated create-item route. The web shell renders tabs from the view model (regex fallback for dnd5e), adds `TrackBoxes` + dot rendering + a pool-roll bottom sheet + a custom item form, and a `wod5e` theme token set. Everything system-specific lives in the adapter.
 
 **Tech Stack:** Existing stack (pnpm monorepo, TS strict/ESM, Fastify gateway, Nuxt 4 web, vitest). No new deps. Second docker compose deployment via the M21 files.
 
@@ -16,7 +16,9 @@
 - **Fixture is truth.** Every wod5e data path in this plan is *provisional* (marked ⚠). Task 0 captures a real actor to `packages/adapter-wod5e/test/fixtures/vampire-captured.json`; where plan and fixture disagree, the fixture wins — the implementer updates constants/tests, never invents paths. The coordinator amends this plan's shapes from the findings doc before dispatching Tasks 2+.
 - **SDK changes are additive and optional.** dnd5e adapter source is untouched; the full existing suite (445 tests: 293 adapter + 140 gateway + 12 client) plus `pnpm -r typecheck` stays green after every task.
 - **Track invariant:** per box track, `superficial + aggravated ≤ max`; writes clamp within the descriptor bounds the adapter computes per current state (dnd5e hp-clamp precedent).
-- **Roll strategy default = Strategy 2** (generic `/roll`, d10 success-counting formula, hunger dice as a separate term). If Task 0 proves a system-native path, the coordinator amends Task 4 before dispatch; nothing else changes.
+- **Roll strategy = Strategy 2, FINAL (user decision, Task 0):** generic `/roll`, d10 success-counting formula, hunger dice as a separate term. The native `WOD5E.api.Roll` path requires the `allowExecuteJs` RCE surface — rejected. The relay roll response carries per-die results for V5 interpretation. The production relay key needs the `roll:execute` scope.
+- **System id is `wod5e`** (Task 0; the vtm5e assumption was wrong). wod5e is PINNED at 5.3.15 — the last Foundry-v13-compatible release.
+- **Never read or write `system.health.value` / `system.willpower.value`** — relay `/get` returns source data; those fields are derived/stale. Boxes render from `{max, superficial, aggravated}` only. Same reason: discipline powers are aggregated by scanning embedded `power` items, not `system.disciplines.<key>.powers` (empty in source).
 - Every relay await is bounded (M18 `adminNameTimeoutMs` pattern). Never print relay keys or account credentials.
 - Custom item payloads: the adapter whitelists writable fields; the gateway never forwards raw client JSON to the relay.
 - Strict TS both packages, ESM `.js` import suffixes, typecheck is a hard gate. Commit per task with trailer:
@@ -31,7 +33,7 @@ No product code. Deliverables: a running second stack, the captured fixture, and
 
 - [ ] 1. **License check (user-blocking if unmet):** a second *concurrently running* Foundry server needs its own license key. Look for a second key in `stack/.env` conventions; if none is available, ask the user for one. Fallback (spike only): create the VtM world on the existing dev stack and defer the second deployment to Task 9 — record which path was taken.
 - [ ] 2. **Stand up `stack-vtm/`:** copy the M21 compose project (`stack/` → `stack-vtm/`), new compose project name `foundry-vtm`, non-conflicting host ports (Foundry `30001`, relay `3011`, gateway `8788`, web `3001`, Caddy off for the spike), fresh named volumes, own `.env*` files. `docker compose up -d`; verify Foundry answers on `:30001`.
-- [ ] 3. **Install wod5e + world:** via Foundry setup UI install system "World of Darkness 5e" (verify the installed system's `id` — expected `vtm5e` ⚠). Create world `vtm`. Install the ThreeHats relay module (same version as `stack/foundry-data` — copy the module folder into the new foundry-data volume), configure relay URL/key per `docs/LLM-SETUP-RUNBOOK.md`, enable in the world.
+- [ ] 3. **Install wod5e + world:** via Foundry setup UI install system "World of Darkness 5e" (system id `wod5e` — verified). Create world `vtm`. Install the ThreeHats relay module (same version as `stack/foundry-data` — copy the module folder into the new foundry-data volume), configure relay URL/key per `docs/LLM-SETUP-RUNBOOK.md`, enable in the world.
 - [ ] 4. **Test vampire:** create actor "Marius" (type vampire) with a *populated* sheet: several attributes/skills at 1–5 dots, 2+ disciplines with powers, hunger 2, humanity 7 with 1 stain, health max 7 with 1 superficial + 1 aggravated marked, willpower damage, one weapon, one gear item. Populate via the wod5e sheet UI (GM console `Actor.create` acceptable for scaffolding, but dots/tracks must be set through the sheet so the data is system-canonical).
 - [ ] 5. **Mint relay key** (scopes: `entity:read, entity:write, search, events:subscribe, clients:read`) in the new relay's admin UI; store in `stack-vtm/.env.gateway`; never print it.
 - [ ] 6. **Capture fixture:** `GET /get?uuid=Actor.<id>` → save verbatim to `packages/adapter-wod5e/test/fixtures/vampire-captured.json`. Verify serialization completeness (spec gate §1): health/willpower superficial+aggravated, hunger, humanity+stains, all attributes/skills, blood potency, powers & items with their system fields. Record every real path in the findings doc as the canonical path table.
@@ -112,30 +114,31 @@ export interface CustomItemInput {
 
 **Interfaces:**
 - Consumes: Task 1 types; the fixture.
-- Produces: `export const wod5eAdapter: SystemAdapter` with `systemId: 'vtm5e'` ⚠ (Task 0 §3 verifies the id).
+- Produces: `export const wod5eAdapter: SystemAdapter` with `systemId: 'wod5e'` (Task 0-verified).
 
-**Provisional path table (⚠ every row — replace from findings):**
+**Canonical path table (fixture-verified, Task 0 findings — the findings doc §"Canonical path table" is normative):**
 
 | Concept | Path |
 |---|---|
-| attributes (9) | `system.attributes.<strength\|dexterity\|stamina\|charisma\|manipulation\|composure\|intelligence\|wits\|resolve>.value` |
-| skills (27) | `system.skills.<key>.value` (keys from fixture) |
-| health | `system.health.{max,superficial,aggravated}` |
-| willpower | `system.willpower.{max,superficial,aggravated}` |
+| attributes (9) | `system.attributes.<strength\|dexterity\|stamina\|charisma\|manipulation\|composure\|intelligence\|wits\|resolve>.value` — default/min 1 |
+| skills (27) | `system.skills.<key>.value` (0–5, default 0; keys in fixture) |
+| health | `system.health.{max,superficial,aggravated}` — max is manual; `value` is derived, never touch |
+| willpower | `system.willpower.{max,superficial,aggravated}` — same |
 | hunger | `system.hunger.value` (0–5) |
-| humanity | `system.humanity.{value,stains}` |
-| blood potency | `system.blood.potency` |
-| powers | items `type:'power'`, `system.{discipline,level}` |
-| weapons | items `type:'weapon'`, `system.damage` |
-| gear | items `type:'equipment'` |
+| humanity | `system.humanity.{value,stains}` (value 0–10, stains 0–10) |
+| blood potency | `system.blood.potency` (`system.blood.generation` string exists) |
+| disciplines | `system.disciplines.<key>.{value,visible}` (14 keys incl. `sorcery`, `alchemy`) — dot rating on the actor |
+| powers | items `type:'power'`, `system.{discipline,level,cost,description}` — group by `system.discipline`, NOT via `disciplines.<key>.powers` |
+| weapons | items `type:'weapon'`, `system.{weaponvalue,weaponType,quantity}` (`weaponvalue` = damage; no equipped flag → no equip toggle in v1) |
+| gear | items `type:'gear'` (`system.{description,quantity}`) |
 
 **View model contract:**
-- `headline`: clan (⚠ `system.clan` if present), blood potency, generation if present.
+- `headline`: clan name if a `clan`-type item exists, Blood Potency, Hunger.
 - `glyph: '☥'`.
-- `tabs`: `overview` (sections `attributes`, `skills`; `hostsActions: false`), `rolls` (`hostsActions: true`), `disciplines` (section `disciplines`), `vitals` (section `tracks`), `gear` (section `gear`).
-- Sections: `attributes` + `skills` as `stats` with `display:'dots'`, ids `attr.<key>` / `skill.<key>`, each with `actionId` referencing its pool entry (Task 4); `disciplines` as `list` grouped by discipline (power rows: `sub` = "Level N · <discipline>", `detail` = description HTML, `actionId` = power pool roll); `tracks` as `kind:'tracks'` with `boxTracks`: health (primary `health.superficial`, aggravated `health.aggravated`, max from fixture), willpower (same shape), hunger (primary only, max 5), stains (primary `humanity.stains`, max 10; humanity itself renders as a read-only dots stat in `attributes` — value 0–10); `gear` as `list` (weapons: `sub` = "Damage N", equip toggle if the system has an equipped flag ⚠).
+- `tabs`: `overview` (sections `attributes`, `skills`; `hostsActions: false`), `rolls` (`hostsActions: true`), `disciplines` (sections `discipline-ratings`, `disciplines`), `vitals` (section `tracks`), `gear` (section `gear`).
+- Sections: `attributes` + `skills` as `stats` with `display:'dots'`, ids `attr.<key>` / `skill.<key>`, each with `actionId` referencing its pool entry (Task 4); humanity renders as a read-only dots stat (max 10) in `attributes`; `discipline-ratings` as `stats` with `display:'dots'`, ids `disc.<key>`, only disciplines with `visible: true` OR value > 0 OR owning a power item; `disciplines` as `list` of power items grouped by discipline (rows: `sub` = "Level N · <Discipline>", `detail` = sanitized description HTML, `actionId` = power pool roll); `tracks` as `kind:'tracks'` with `boxTracks`: health (primary `health.superficial`, aggravated `health.aggravated`, max `health.max`), willpower (same shape), hunger (primary only, max 5), stains (primary `humanity.stains`, max 10); `gear` as `list` (weapons: `sub` = "Damage N · melee/ranged"; gear: quantity via resourceId when > 1).
 - `resources` (writable ✓): `health.superficial` ✓ (min 0, max = `health.max - aggravated`), `health.aggravated` ✓ (max = `health.max - superficial`), `willpower.*` same, `hunger` ✓ (0–5), `humanity.stains` ✓ (0–10); read-only: `humanity`, `bloodpotency`.
-- `customItems`: `[{type:'weapon', label:'Weapon', hasDamage:true}, {type:'equipment', label:'Gear', hasDamage:false}]` ⚠ type ids from findings.
+- `customItems`: `[{type:'weapon', label:'Weapon', hasDamage:true}, {type:'gear', label:'Gear', hasDamage:false}]`.
 
 - [ ] **Step 1: failing tests** — fixture → `toViewModel`: tabs shape exact; every attribute/skill renders a dot stat with the fixture's value and `max` (5 default; assert one raised value); disciplines grouped; tracks section carries the box specs with fixture max values; resources list exact ids/bounds incl. the dynamic superficial/aggravated bounds against the fixture's marked damage. Run: `pnpm --filter @companion/adapter-wod5e test` → RED (module missing).
 - [ ] **Step 2: implement** `toViewModel` + `resources` reading only the path table. Missing/undefined paths → defensive defaults (0 / empty), never throw on a sparse actor.
@@ -165,7 +168,7 @@ export interface CustomItemInput {
 **Files:** Modify `packages/adapter-wod5e/src/index.ts`; Test `test/actions.test.ts` (new)
 
 **Interfaces:**
-- Produces `actions(actor)`: one `kind:'pool'` descriptor per attribute (`id:'pool.attr.<key>'`, `pool:{attribute:'attr.<key>'}`), per skill (`id:'pool.skill.<key>'`, default pairing `pool:{attribute:<wod5e sheet default ⚠ else 'attr.dexterity'>, skill:'skill.<key>'}`), per power (`id:'pool.power.<itemId>'`, pairing from the power's dicepool fields ⚠); one `kind:'rouse'` (`id:'rouse'`); equip toggles if the system supports them ⚠.
+- Produces `actions(actor)`: one `kind:'pool'` descriptor per attribute (`id:'pool.attr.<key>'`, `pool:{attribute:'attr.<key>'}`), per skill (`id:'pool.skill.<key>'`, default pairing `pool:{attribute:'attr.dexterity', skill:'skill.<key>'}` — the pool sheet always lets the player re-pick), per power (`id:'pool.power.<itemId>'`, `pool:{attribute:'attr.resolve', skill:'disc.<its discipline key>'}` — V5 power pools vary; the discipline rating is the stable second component and the sheet lets the player adjust); one `kind:'rouse'` (`id:'rouse'`). No equip toggles (Task 0: wod5e weapons have no equipped flag). The `skill` pool component accepts BOTH `skill.<key>` and `disc.<key>` ids — `buildAction` resolves either against the actor.
 - Produces `buildAction(actor, intent)` (Strategy 2 default):
 
 ```ts
@@ -194,10 +197,13 @@ export interface CustomItemInput {
 - Test: `apps/gateway/test/app.test.ts` (extend), `packages/foundry-client/test/client.test.ts` (extend), `apps/gateway/test/fakes.ts` (FakeRelay `createEmbeddedItem`)
 
 **Interfaces:**
-- foundry-client produces: `async createEmbeddedItem(actorUuid: string, item: Record<string, unknown>): Promise<{ id: string } | null>` — relay `create` envelope ⚠ per Task 0 §9 (URL path, param names, response field for the new id).
-- Gateway route: `POST /api/actors/:id/items` body `CustomItemInput` → 200 `{ sheet }` (fresh view model); 404 when the actor's adapter lacks `buildCustomItem`; 422 `INVALID_INTENT` on `IntentError('INVALID')`; write counts against the existing `limiter`; relay call bounded.
+- foundry-client produces THREE methods (Task 0: no embedded-create endpoint exists; custom items are a chain):
+  - `async createWorldItem(data: Record<string, unknown>): Promise<string | null>` — `POST /create` body `{entityType:'Item', data}`, returns the created uuid (`body.uuid`, fallback `'Item.'+body.entity._id`), null on failure.
+  - `async giveItem(toUuid: string, itemUuid: string): Promise<boolean>` — `POST /give` body `{toUuid, itemUuid}`, true on `success`.
+  - `async deleteEntity(uuid: string): Promise<void>` — `DELETE /delete?uuid=…`, swallow-and-log failures.
+- Gateway route: `POST /api/actors/:id/items` body `CustomItemInput` → adapter `buildCustomItem` → `createWorldItem` → `giveItem` → best-effort `deleteEntity` (a failed cleanup leaves a harmless world item; warn-log) → 200 `{ sheet }` (fresh view model). 404 when the actor's adapter lacks `buildCustomItem`; 422 `INVALID_INTENT` on `IntentError('INVALID')`; 502 when create/give fails; every relay call bounded (M18 pattern); write counts against the existing `limiter`.
 
-- [ ] **Step 1: failing tests** — registry resolves a `vtm5e` doc to the wod5e adapter (mirror `registry.test.ts` idiom); route: happy path passes the adapter-built payload (assert FakeRelay received `buildCustomItem`'s output verbatim, NOT the client body); bad type → 422; dnd5e actor (no `buildCustomItem`) → 404; limiter 429; client: envelope + null on failure (fetch-mock idiom).
+- [ ] **Step 1: failing tests** — registry resolves a `wod5e` doc to the wod5e adapter (mirror `registry.test.ts` idiom); route: happy path passes the adapter-built payload (assert FakeRelay received `buildCustomItem`'s output verbatim, NOT the client body); bad type → 422; dnd5e actor (no `buildCustomItem`) → 404; limiter 429; client: envelope + null on failure (fetch-mock idiom).
 - [ ] **Step 2: RED → implement → GREEN**, full suite + typecheck.
 - [ ] **Step 3:** Commit `feat(gateway): wod5e adapter registration + custom item creation (M23)`
 
@@ -242,10 +248,10 @@ export interface CustomItemInput {
 
 **Contracts:**
 - `[id].vue` stamps `data-system="<sheet.systemId>"` on the page root when a sheet loads.
-- `main.css` gains a `[data-system='vtm5e']` token override set for BOTH color schemes, mapped onto the existing `--accent`/`--surface`/`--text` tokens (the Gilded Tome M7 pattern — components untouched): dark = near-black surfaces + oxblood/crimson accent; light = pale marble + dried-blood red. Existing light/dark toggle continues to work; dnd5e sheets are pixel-unchanged (no `:root`-level edits).
+- `main.css` gains a `[data-system='wod5e']` token override set for BOTH color schemes, mapped onto the existing `--accent`/`--surface`/`--text` tokens (the Gilded Tome M7 pattern — components untouched): dark = near-black surfaces + oxblood/crimson accent; light = pale marble + dried-blood red. Existing light/dark toggle continues to work; dnd5e sheets are pixel-unchanged (no `:root`-level edits).
 - Gate: typecheck + visual smoke both themes × both schemes.
 
-- [ ] Implement; commit `feat(web): vtm5e theme (M23)`
+- [ ] Implement; commit `feat(web): wod5e vampire theme (M23)`
 
 ---
 

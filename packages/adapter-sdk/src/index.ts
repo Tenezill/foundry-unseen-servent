@@ -79,6 +79,11 @@ export interface Stat {
   sub?: string;
   /** When set, tapping this stat triggers the referenced sheet action. */
   actionId?: string;
+  /** Renders `value` as a dot row (0..max) instead of text (M23, wod5e
+   *  attributes/skills). Absent = plain text/number rendering. */
+  display?: 'dots';
+  /** dots only: total dots to draw; max ≤ 10. */
+  max?: number;
 }
 
 /** One row in a list section (inventory, features, spells). */
@@ -140,11 +145,43 @@ export interface RollEntry {
   timestamp: number;
 }
 
+/** A box-rendered track (M23): tri-state (empty/superficial/aggravated)
+ *  when `aggravatedId` is set, two-state otherwise (hunger, stains). */
+export interface BoxTrackSpec {
+  id: string;
+  label: string;
+  /** total boxes; NOT derived from a resource max (superficial's dynamic
+   *  bound is max - aggravated). */
+  max: number;
+  /** resource counted as superficial ('/') or plain fill. */
+  primaryId: string;
+  /** resource counted as aggravated ('X'); shares `max` with primary. */
+  aggravatedId?: string;
+}
+
 export type SheetSection =
   | { kind: 'stats'; id: string; label: string; stats: Stat[] }
   | { kind: 'list'; id: string; label: string; items: ListItem[]; header?: ListItem }
   /** Renders the referenced resources as interactive trackers. */
-  | { kind: 'tracks'; id: string; label: string; resourceIds: string[] };
+  | {
+      kind: 'tracks';
+      id: string;
+      label: string;
+      resourceIds: string[];
+      /** Box-track specs rendered alongside the plain resource trackers
+       *  (M23, wod5e health/willpower/hunger). */
+      boxTracks?: BoxTrackSpec[];
+    };
+
+/** Adapter-declared tab layout (M23). Absent -> the PWA's legacy heuristic. */
+export interface SheetTab {
+  id: string;
+  label: string;
+  /** SheetSection ids rendered in this tab, in order. */
+  sectionIds: string[];
+  /** Exactly one tab may host the actions UI (rolls/attacks). */
+  hostsActions?: boolean;
+}
 
 /** System-agnostic sheet: the PWA renders this without dnd5e knowledge. */
 export interface SheetViewModel {
@@ -167,6 +204,15 @@ export interface SheetViewModel {
    *  preview -> add / remove. Each entry is a button hint for the PWA: the
    *  `id` routes to /library/:id/*, the `label` names the add button. */
   library?: Array<{ id: string; label: string }>;
+  /** Adapter-declared tab layout (M23). Absent -> the PWA's legacy heuristic. */
+  tabs?: SheetTab[];
+  /** Single-character/emoji glyph for the actor when `img` is unset or
+   *  generic (M23, wod5e clan sigils). */
+  glyph?: string;
+  /** Custom item types the player may create from a form (M23); each entry
+   *  names the type id, the create-button label, and whether the form
+   *  should show a damage field. */
+  customItems?: Array<{ type: string; label: string; hasDamage: boolean }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +240,13 @@ export type SheetActionKind =
   // M8 actor-scoped commands (no item target):
   | 'rest'
   | 'deathsave'
-  | 'endconcentration';
+  | 'endconcentration'
+  /** roll an attribute+skill dice pool (M23, wod5e: the vampire replacement
+   *  for 'check'/'save' — no target number, successes counted client-side). */
+  | 'pool'
+  /** wod5e Rouse check: spend a hunger-gated resource, no player-chosen
+   *  pairing (M23). */
+  | 'rouse';
 
 export interface ActionDescriptor {
   /** stable id, e.g. "skill.ath", "ability.str.save", "item.<id>.attack",
@@ -219,6 +271,9 @@ export interface ActionDescriptor {
    *  'damage' (deals damage, whether via an attack roll or a save), 'heal'
    *  (restores HP), 'utility' (neither — buffs, debuffs, information). */
   effectType?: 'damage' | 'heal' | 'utility';
+  /** pool only: default attribute/skill pairing the PWA preselects (M23);
+   *  the player may repick either before rolling. Ids match Stat.id. */
+  pool?: { attribute?: string; skill?: string };
 }
 
 export type ActionIntent =
@@ -229,7 +284,12 @@ export type ActionIntent =
   | { kind: 'prepare'; actionId: string; prepared: boolean }
   | { kind: 'attune'; actionId: string; attuned: boolean }
   | { kind: 'move'; actionId: string; containerId: string | null }
-  | { kind: 'rest' | 'deathsave' | 'endconcentration'; actionId: string };
+  | { kind: 'rest' | 'deathsave' | 'endconcentration'; actionId: string }
+  /** M23: the player's chosen attribute/skill pairing overrides the
+   *  descriptor's default `pool`; `modifier` folds in ad-hoc situational
+   *  dice (specialties, bonuses). */
+  | { kind: 'pool'; actionId: string; attribute?: string; skill?: string; modifier?: number }
+  | { kind: 'rouse'; actionId: string };
 
 /**
  * What the gateway should ask the relay to do. `roll` posts a chat card
@@ -305,6 +365,16 @@ export interface LibraryCollection {
   describe(doc: Record<string, unknown>): ListItem;
 }
 
+/** Custom item creation (M23): input the PWA form sends. */
+export interface CustomItemInput {
+  name: string;
+  /** adapter-declared type id, e.g. 'weapon' | 'gear'. */
+  type: string;
+  /** weapons only. */
+  damage?: number;
+  description?: string;
+}
+
 export interface SystemAdapter {
   /** Foundry system id this adapter handles, e.g. "dnd5e". */
   systemId: string;
@@ -336,6 +406,13 @@ export interface SystemAdapter {
    * such as an illegal slot level).
    */
   buildAction?(actor: FoundryActorDoc, intent: ActionIntent): RelayAction;
+  /**
+   * Optional (M23): player-authored custom item (SheetViewModel.customItems)
+   * -> the full embedded-item payload for the relay `create` call. Must
+   * throw `IntentError('INVALID')` for a bad type id or missing/invalid
+   * fields (e.g. `damage` on a non-weapon type).
+   */
+  buildCustomItem?(actor: FoundryActorDoc, input: CustomItemInput): Record<string, unknown>;
 }
 
 /** Error contract so the gateway can map failures to HTTP codes. */

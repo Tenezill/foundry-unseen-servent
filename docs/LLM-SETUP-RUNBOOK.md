@@ -218,6 +218,35 @@ curl -s http://localhost:3010/clients -H "x-api-key: <RELAY_API_KEY>"
 `isOnline: true` is the proof the whole Foundry side is wired. Record the
 `clientId` → this is **RELAY_CLIENT_ID**.
 
+### wod5e / second-system notes (M23)
+
+If the world being paired runs **wod5e** (Vampire: the Masquerade 5e) rather
+than dnd5e: (a) install is the same shape as any system — extract the
+release zip into `Data/systems/wod5e`, no UI needed; pin **5.3.15** for
+Foundry v13 (5.3.16+ requires Foundry v14, so do not take a newer release on
+a v13 stack).
+
+(b) **CRITICAL — pairing a second world:** the relay module's connection
+token is `scope:'client'` — stored in the GM **browser's** localStorage, not
+per-world. Pairing a second world from the **same browser profile** re-binds
+that shared token and silently orphans the first world's relay client. The
+symptom is unambiguous once you know it: the gateway's relay calls start
+failing `401 "Invalid API key for this client ID"`, and Foundry itself
+raises a notification `"code 4002: Unpaired by owner"` on the world that
+lost its pairing. Avoid it by pairing each world from an **isolated browser
+context** (a fresh profile/incognito window per world), or — if only one
+browser profile is available — keep every world of that profile paired to
+**one** relay account so there is nothing to orphan. Re-pairing the affected
+world is recoverable and preserves its `clientId` (`RELAY_CLIENT_ID` does
+not change), but it does mean minting/relinking a key against the account
+that now holds the pairing.
+
+(c) Scoped relay keys do not require the admin panel: any authenticated
+user can mint one directly — `POST /auth/login {email,password}` returns a
+session Bearer, then `POST /auth/api-keys {name, scopes}` with that Bearer
+mints a scoped key (same shape as the `curl` pair in Phase 4 above, just
+callable per-account without an admin UI).
+
 ---
 
 ## Phase 4 — Relay account + scoped API key
