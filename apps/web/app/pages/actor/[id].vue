@@ -42,7 +42,7 @@
 
         <main class="sheet-main">
           <SectionActions
-            v-if="activeTab === 'actions'"
+            v-if="activeTab === actionsTabId"
             :actions="combatActions"
             :action-busy="actionBusy"
             :readonly="offline"
@@ -105,9 +105,11 @@
               :section="section"
               :resources="resMap"
               :busy="busy"
+              :box-busy="boxBusy"
               :readonly="offline"
               @step="stepResource"
               @numpad="openNumpad"
+              @boxchange="submitBoxChange"
             />
             <SectionList
               v-else
@@ -261,10 +263,22 @@ import type {
   SheetResponse,
 } from '~/types/api'
 
+/** One multi-resource write for a tri-state box track tap (M23): each entry
+ *  is a plain `delta` intent, submitted sequentially — see submitBoxChange. */
+type BoxChange = { resourceId: string; amount: number; expected: number }
+
 const LARGE_DELTA = 10
 const ROLL_HISTORY_MAX = 20
 
-type TabId = 'overview' | 'actions' | 'resources' | 'inventory' | 'spells' | 'combat'
+// TabId was a fixed dnd5e union; M23 adapter tabs (SheetViewModel.tabs) carry
+// arbitrary system-declared ids (e.g. wod5e's 'rolls'/'disciplines'/'vitals'),
+// so the *active tab* type widens to plain `string` — every literal
+// comparison below still works. FallbackTabId keeps the old fixed union for
+// the dnd5e-only heuristic (tabOf/sectionsByTab), whose Record<FallbackTabId,
+// …> stays exactly indexable without the widened type reintroducing
+// possibly-undefined lookups (noUncheckedIndexedAccess).
+type TabId = string
+type FallbackTabId = 'overview' | 'actions' | 'resources' | 'inventory' | 'spells' | 'combat'
 
 interface TabDef {
   id: TabId
@@ -272,14 +286,38 @@ interface TabDef {
   icon: string
 }
 
+/** Tab glyphs, shared between the fallback TABS array and iconFor() (M23),
+ *  which picks a reasonable icon for adapter-declared tabs by id/label. */
+const ICONS = {
+  overview: 'M3 11l9-8 9 8M5 10v10h14V10',
+  actions: 'M13 2 4 14h6l-1 8 9-12h-6z',
+  combat: 'M12 2 3 6v6c0 5 4 8 9 10 5-2 9-5 9-10V6l-9-4Z',
+  resources: 'M12 21s-7-4.5-7-10a4 4 0 0 1 8-1 4 4 0 0 1 8 1c0 5.5-7 10-7 10z',
+  inventory: 'M4 7h16v13H4zM9 7V4h6v3',
+  spells: 'M12 3l2 5 5 .5-4 3.5 1.5 5-4.5-3-4.5 3 1.5-5-4-3.5 5-.5z',
+} as const
+
 const TABS: TabDef[] = [
-  { id: 'overview', label: 'Overview', icon: 'M3 11l9-8 9 8M5 10v10h14V10' },
-  { id: 'actions', label: 'Actions', icon: 'M13 2 4 14h6l-1 8 9-12h-6z' },
-  { id: 'combat', label: 'Combat', icon: 'M12 2 3 6v6c0 5 4 8 9 10 5-2 9-5 9-10V6l-9-4Z' },
-  { id: 'resources', label: 'Vitals', icon: 'M12 21s-7-4.5-7-10a4 4 0 0 1 8-1 4 4 0 0 1 8 1c0 5.5-7 10-7 10z' },
-  { id: 'inventory', label: 'Gear', icon: 'M4 7h16v13H4zM9 7V4h6v3' },
-  { id: 'spells', label: 'Spells', icon: 'M12 3l2 5 5 .5-4 3.5 1.5 5-4.5-3-4.5 3 1.5-5-4-3.5 5-.5z' },
+  { id: 'overview', label: 'Overview', icon: ICONS.overview },
+  { id: 'actions', label: 'Actions', icon: ICONS.actions },
+  { id: 'combat', label: 'Combat', icon: ICONS.combat },
+  { id: 'resources', label: 'Vitals', icon: ICONS.resources },
+  { id: 'inventory', label: 'Gear', icon: ICONS.inventory },
+  { id: 'spells', label: 'Spells', icon: ICONS.spells },
 ]
+
+/** Best-effort icon for an adapter-declared tab (M23): the hostsActions tab
+ *  always gets the Actions glyph; everything else matches by id/label
+ *  keyword, falling back to the Overview glyph. Purely cosmetic — the
+ *  binding contract only requires tab order/routing, not icon choice. */
+function iconFor(tab: { id: string; label: string; hostsActions?: boolean }): string {
+  if (tab.hostsActions) return ICONS.actions
+  const key = `${tab.id} ${tab.label}`.toLowerCase()
+  if (/vital|health|track/.test(key)) return ICONS.resources
+  if (/gear|invent|item|equip/.test(key)) return ICONS.inventory
+  if (/spell|cantrip/.test(key)) return ICONS.spells
+  return ICONS.overview
+}
 
 /** Which tab surfaces the "add" button for each library collection. */
 const COLLECTION_TAB: Record<string, TabId> = {
@@ -398,7 +436,7 @@ const detailLocations = computed(() => {
 
 /* ---- tab routing -------------------------------------------------------- */
 
-function tabOf(section: SheetSection): TabId {
+function tabOf(section: SheetSection): FallbackTabId {
   if (section.kind === 'tracks') return 'resources'
   const key = `${section.id} ${section.label}`.toLowerCase()
   // Gear-scoped stats (M12 'gearstats') live on the Gear tab with the list.
@@ -411,8 +449,8 @@ function tabOf(section: SheetSection): TabId {
   return 'overview'
 }
 
-const sectionsByTab = computed<Record<TabId, SheetSection[]>>(() => {
-  const groups: Record<TabId, SheetSection[]> = {
+const sectionsByTab = computed<Record<FallbackTabId, SheetSection[]>>(() => {
+  const groups: Record<FallbackTabId, SheetSection[]> = {
     overview: [],
     actions: [],
     combat: [],
@@ -423,6 +461,27 @@ const sectionsByTab = computed<Record<TabId, SheetSection[]>>(() => {
   for (const section of sheet.value?.sections ?? []) groups[tabOf(section)].push(section)
   return groups
 })
+
+/* ---- M23 adapter-declared tabs ------------------------------------------
+ * When sheet.tabs is non-empty, tab bar + section routing come EXCLUSIVELY
+ * from it (binding contract 1): tab order as given, sectionIds per tab,
+ * and whichever tab has hostsActions:true hosts the Actions UI. Absent ->
+ * the tabOf()/sectionsByTab heuristic above stays untouched (dnd5e
+ * pixel-identical). The transient COMBAT tab is appended in both modes. */
+
+const usingAdapterTabs = computed(() => (sheet.value?.tabs?.length ?? 0) > 0)
+
+const sectionsById = computed<Record<string, SheetSection>>(() => {
+  const m: Record<string, SheetSection> = {}
+  for (const s of sheet.value?.sections ?? []) m[s.id] = s
+  return m
+})
+
+/** Id of the tab that renders the Actions UI: the adapter's hostsActions
+ *  tab in adapter-tabs mode, else the fallback's literal 'actions' tab. */
+const actionsTabId = computed<TabId>(
+  () => (usingAdapterTabs.value ? sheet.value?.tabs?.find((t) => t.hostsActions)?.id : undefined) ?? 'actions',
+)
 
 const combatActions = computed(() =>
   (sheet.value?.actions ?? []).filter(
@@ -465,16 +524,37 @@ function onCombatDetail(actionId: string): void {
   detailFor.value = { title: entry.title, detail: entry.detail }
 }
 
-const visibleTabs = computed(() =>
-  TABS.filter((t) => {
+const visibleTabs = computed<TabDef[]>(() => {
+  if (usingAdapterTabs.value) {
+    const base: TabDef[] = (sheet.value?.tabs ?? []).map((t) => ({
+      id: t.id,
+      label: t.label,
+      icon: iconFor(t),
+    }))
+    if (encounterActive.value) base.push({ id: 'combat', label: 'Combat', icon: ICONS.combat })
+    return base
+  }
+  return TABS.filter((t) => {
     if (t.id === 'overview') return true
     if (t.id === 'actions') return combatActions.value.length > 0
     if (t.id === 'combat') return encounterActive.value
-    return sectionsByTab.value[t.id].length > 0
-  }),
-)
+    // TABS is the fixed fallback array — every id is a FallbackTabId.
+    return sectionsByTab.value[t.id as FallbackTabId].length > 0
+  })
+})
 
-const activeSections = computed(() => sectionsByTab.value[activeTab.value])
+const activeSections = computed<SheetSection[]>(() => {
+  if (usingAdapterTabs.value) {
+    const tab = sheet.value?.tabs?.find((t) => t.id === activeTab.value)
+    if (!tab) return []
+    return tab.sectionIds
+      .map((id) => sectionsById.value[id])
+      .filter((s): s is SheetSection => s !== undefined)
+  }
+  // Non-adapter branch: activeTab is constrained to a FallbackTabId here,
+  // since visibleTabs' watch (below) only ever sets it to a TABS entry.
+  return sectionsByTab.value[activeTab.value as FallbackTabId] ?? []
+})
 
 /** The library collection whose add-button belongs on the active tab, if any. */
 const tabAddEntry = computed(() =>
@@ -487,15 +567,19 @@ const renderableSections = computed(() =>
 )
 
 const tabEmpty = computed(() => {
-  if (activeTab.value === 'actions' || activeTab.value === 'combat') return false
+  if (activeTab.value === actionsTabId.value || activeTab.value === 'combat') return false
   if (renderableSections.value.length > 0) return false
   if (activeTab.value === 'resources' && (hasRest.value || dying.value)) return false
   if (activeTab.value === 'inventory' && walletResources.value.length > 0) return false
   return true
 })
 
+// Reset to the landing tab (the first entry — adapter tabs or the fallback
+// TABS array, both start with an overview-ish tab) whenever the current
+// active tab drops out of the visible list: a fresh actor load, an adapter
+// swap (dnd5e <-> wod5e), or a content change that hides today's tab.
 watch(visibleTabs, (tabs) => {
-  if (!tabs.some((t) => t.id === activeTab.value)) activeTab.value = 'overview'
+  if (!tabs.some((t) => t.id === activeTab.value)) activeTab.value = tabs[0]?.id ?? 'overview'
 })
 
 /* ---- sheet state -------------------------------------------------------- */
@@ -590,6 +674,51 @@ function stepResource(resourceId: string, direction: 1 | -1): void {
     amount,
     res.label,
   )
+}
+
+/** M23: a tri-state box-track tap (TrackBoxes.vue) needs up to two resource
+ *  writes (e.g. superficial -1 + aggravated +1) — the gateway's intents
+ *  endpoint only ever takes one ResourceIntent per call (docs/API.md), so
+ *  these submit sequentially. Each change targets a DIFFERENT resourceId
+ *  (computed from the pre-tap sheet), so the second call's `expected` can't
+ *  be invalidated by the first — a genuine 409 here only happens from a
+ *  concurrent edit by someone else, same as any other write, and aborts the
+ *  remaining changes and refreshes from the fresh sheet like submitIntent. */
+const boxBusy = ref<string | null>(null)
+
+async function submitBoxChange(trackId: string, changes: BoxChange[]): Promise<void> {
+  if (offline.value || boxBusy.value || changes.length === 0) return
+  boxBusy.value = trackId
+  try {
+    for (const change of changes) {
+      const res = await api<SheetResponse>(`/api/actors/${actorId.value}/intents`, {
+        method: 'POST',
+        body: {
+          kind: 'delta',
+          resourceId: change.resourceId,
+          amount: change.amount,
+          expected: change.expected,
+        } satisfies ResourceIntent,
+      })
+      applySheet(res.sheet)
+    }
+  } catch (err) {
+    const status = errorStatus(err)
+    const data = errorData<ApiErrorBody>(err)
+    if (status === 409 && data?.sheet) {
+      applySheet(data.sheet)
+      toast.show('Value changed elsewhere — sheet refreshed')
+    } else if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else if (status === 429) {
+      toast.show('Slow down — too many changes at once')
+    } else {
+      toast.show('Change didn’t go through. Try again.')
+    }
+  } finally {
+    boxBusy.value = null
+  }
 }
 
 function openNumpad(resourceId: string): void {
@@ -702,6 +831,12 @@ function onAction(actionId: string): void {
         { kind: 'attune', actionId, attuned: !(action.attuned ?? false) },
         action.label,
       )
+      break
+    case 'pool':
+      // M23 interim (Task 6): no pool-sheet UI yet (Task 7) — tapping a
+      // dots stat rolls the descriptor's default attribute/skill pairing
+      // with no player override, which the wod5e adapter accepts.
+      void submitAction({ kind: 'pool', actionId }, action.label)
       break
   }
 }

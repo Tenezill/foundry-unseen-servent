@@ -2,6 +2,16 @@
   <section>
     <h2 class="section-title">{{ section.label }}</h2>
     <div class="tracks">
+      <TrackBoxes
+        v-for="row in boxRows"
+        :key="row.track.id"
+        :track="row.track"
+        :primary="row.primary"
+        :aggravated="row.aggravated"
+        :busy="boxBusy === row.track.id"
+        :readonly="readonly"
+        @change="(trackId, changes) => emit('boxchange', trackId, changes)"
+      />
       <div v-for="res in tracked" :key="res.id" class="track card">
         <div class="track-head">
           <span class="track-label">{{ res.label }}</span>
@@ -36,24 +46,57 @@
 </template>
 
 <script setup lang="ts">
-import type { ResourceDescriptor, SheetSection } from '@companion/adapter-sdk'
+import type { BoxTrackSpec, ResourceDescriptor, SheetSection } from '@companion/adapter-sdk'
 
 const props = defineProps<{
   section: Extract<SheetSection, { kind: 'tracks' }>
   resources: Record<string, ResourceDescriptor>
   busy: string | null
+  /** Id of the box track currently mid-write (M23; see TrackBoxes.vue —
+   *  distinct from `busy`, which tracks single-resource stepper writes). */
+  boxBusy: string | null
   readonly: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'step', resourceId: string, direction: 1 | -1): void
   (e: 'numpad', resourceId: string): void
+  /** M23: a box-track tap resolved to one or two resource deltas — see
+   *  [id].vue's submitBoxChange. */
+  (e: 'boxchange', trackId: string, changes: Array<{ resourceId: string; amount: number; expected: number }>): void
 }>()
+
+// Box tracks (M23) render via TrackBoxes instead of the plain per-resource
+// card below — resourceIds claimed by a boxTrack (primary + aggravated) are
+// excluded from `tracked` so nothing double-renders. dnd5e sections never
+// set `boxTracks`, so `claimedIds` is empty and `tracked` is unaffected.
+const boxRows = computed(() =>
+  (props.section.boxTracks ?? [])
+    .map((track) => {
+      const primary = props.resources[track.primaryId]
+      if (!primary) return undefined
+      const aggravated = track.aggravatedId ? props.resources[track.aggravatedId] : undefined
+      return { track, primary, aggravated }
+    })
+    .filter(
+      (r): r is { track: BoxTrackSpec; primary: ResourceDescriptor; aggravated: ResourceDescriptor | undefined } =>
+        r !== undefined,
+    ),
+)
+
+const claimedIds = computed(() => {
+  const s = new Set<string>()
+  for (const t of props.section.boxTracks ?? []) {
+    s.add(t.primaryId)
+    if (t.aggravatedId) s.add(t.aggravatedId)
+  }
+  return s
+})
 
 const tracked = computed(() =>
   props.section.resourceIds
     .map((id) => props.resources[id])
-    .filter((r): r is ResourceDescriptor => r !== undefined),
+    .filter((r): r is ResourceDescriptor => r !== undefined && !claimedIds.value.has(r.id)),
 )
 
 function pct(res: ResourceDescriptor): number {
