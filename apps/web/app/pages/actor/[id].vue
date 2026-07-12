@@ -424,6 +424,30 @@ const isDark = computed(() => {
   return theme.effective() === 'dark'
 })
 
+/* ---- M23 wod5e theme stamp -----------------------------------------------
+ * main.css keys its `[data-system='wod5e']` override block off an attribute
+ * on <html>, not a class scoped to this page's root element: ToastHost (see
+ * app.vue) renders as a *sibling* of <NuxtPage>, not a descendant of
+ * `.sheet-root`, so stamping the page root would leave toasts un-themed
+ * while a wod5e sheet is open. documentElement mirrors exactly how
+ * useTheme.ts already stamps `data-theme` there.
+ *
+ * Driven off the sheet's systemId (not a mount/unmount lifecycle) so it
+ * self-corrects if the same mounted instance ever serves a different actor
+ * (dnd5e <-> wod5e swap) without a full remount — and cleared in
+ * onBeforeUnmount below for the case where it does unmount (leaving /,
+ * navigating to another route). */
+const systemId = computed(() => sheet.value?.systemId ?? null)
+
+watch(
+  systemId,
+  (id) => {
+    if (id) document.documentElement.dataset.system = id
+    else delete document.documentElement.dataset.system
+  },
+  { immediate: true },
+)
+
 const resMap = computed<Record<string, ResourceDescriptor>>(() => {
   const m: Record<string, ResourceDescriptor> = {}
   for (const r of sheet.value?.resources ?? []) m[r.id] = r
@@ -1486,6 +1510,7 @@ onBeforeUnmount(() => {
   closeCombatEvents()
   window.removeEventListener('online', onOnline)
   window.removeEventListener('offline', onOffline)
+  delete document.documentElement.dataset.system
 })
 </script>
 
