@@ -50,6 +50,20 @@ an optional `header` item (e.g. inventory sections: `inventory` for "Carried",
 `inventory.<containerId>` per container — each may have a header showing the
 container's name and weight).
 
+Multi-system additions (M23, second adapter `adapter-wod5e`): an optional
+`tabs` array (`{id, label, sectionIds, hostsActions?}`) — the adapter's own
+tab layout; absent means the PWA falls back to its legacy heuristic. An
+optional `glyph` (single character/emoji, e.g. wod5e's clan sigil) for actors
+whose `img` is unset or generic. An optional `customItems` array
+(`{type, label, hasDamage}`) naming the item types the player may create from
+a form — see `POST /api/actors/:id/items` below. A `Stat` may carry
+`display: 'dots'` with a `max` to render `value` as a dot row (0..max)
+instead of text (wod5e attributes/skills). A `tracks` section may carry
+`boxTracks` (`{id, label, max, primaryId, aggravatedId?}`) alongside its
+plain `resourceIds` trackers — a box-rendered track, tri-state
+(empty/superficial/aggravated) when `aggravatedId` is set, two-state
+otherwise (wod5e health/willpower vs. hunger/stains).
+
 ### `POST /api/actors/:id/intents`
 Body: a single `ResourceIntent`:
 
@@ -87,6 +101,8 @@ lists everything legal; `actionId` must reference one of them.
 { "kind": "rest",   "actionId": "rest.long" }
 { "kind": "deathsave",       "actionId": "deathsave.roll" }
 { "kind": "endconcentration","actionId": "concentration.end" }
+{ "kind": "pool",   "actionId": "pool.skill.athletics", "attribute": "attr.strength", "skill": "skill.athletics", "modifier": 1 }
+{ "kind": "rouse",  "actionId": "rouse" }
 ```
 
 The M8 actor-command kinds (`rest`/`deathsave`/`endconcentration`) take no
@@ -96,7 +112,14 @@ fresh sheet (`result` null — these post their own chat card). `cast` no longer
 takes `slotLevel`: the bridge casts at base level only (see M6 known limits).
 `move` (M19) relocates an item to a container or to carried; `containerId` is
 the container item's `_id` (a bare item id, not an action id) or `null`
-(carried). No roll or chat card.
+(carried). No roll or chat card. `pool` (M23, wod5e) rolls an
+attribute/skill dice pool: `attribute`/`skill` (both optional) override the
+descriptor's default pairing (ids match `Stat.id`, e.g. `attr.strength`,
+`skill.athletics`, `disc.<key>`), and `modifier` (optional, integer,
+`|modifier| <= 20`) folds in ad-hoc situational dice; the gateway computes
+the formula from the actor's current dot ratings and hunger. `rouse` (M23,
+wod5e) rolls a Rouse check (`1d10cs>=6`) — no player-chosen params; hunger
+increment stays manual (the app does not write it).
 
 Semantics (server-enforced, in this order):
 1. Actor owned by token → else `404`.
@@ -113,6 +136,38 @@ Semantics (server-enforced, in this order):
    (`result` is null for actions without a roll, e.g. equip or move.)
 
 Shares the write rate limit with intents (30/min per token).
+
+### `POST /api/actors/:id/items` (M23)
+Create a player-authored custom item (e.g. a wod5e improvised weapon) on the
+actor. Available only when the actor's adapter declares `buildCustomItem`
+(mirrors the library-collection 404 pattern below).
+
+Body:
+
+```json
+{ "name": "Sharpened Stake", "type": "weapon", "damage": 2, "description": "Found in the workshop." }
+```
+
+`damage` and `description` are optional; `damage` is only meaningful for
+types the adapter's `customItems` entry flags `hasDamage: true`.
+
+Semantics (server-enforced, in this order):
+1. Shared write limiter (30/min per token) → else `429 RATE_LIMITED`.
+2. Actor owned by token → else `404`. Actor's adapter has no
+   `buildCustomItem` → also `404` (indistinguishable from "not yours" — do
+   not leak which systems support custom items).
+3. The adapter builds **and validates** the world-item payload from the raw
+   client body — the adapter's field whitelist is the only thing that ever
+   reaches Foundry; unknown/extra fields are silently dropped, never copied
+   through. Invalid input (bad name/type/damage/description) → `422
+   INVALID_INTENT`.
+4. No embedded-create endpoint exists on the relay, so creation is a
+   3-call chain: `create` a scratch **world** item from the adapter's
+   payload → `give` it to the actor (copies it in with system data intact)
+   → best-effort `delete` the scratch world item (a failed delete just
+   leaves a harmless world item behind; it does not fail the request).
+   Any of create/give timing out or failing → `502 UPSTREAM`.
+5. Fresh sheet is returned: `200 { "sheet": SheetViewModel }`.
 
 ### `GET /api/actors/:id/events` (SSE)
 `Content-Type: text/event-stream`. Events:

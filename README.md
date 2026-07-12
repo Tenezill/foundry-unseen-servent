@@ -16,7 +16,8 @@ See `PLAN.md` for scope and decisions, `VERSIONS.md` for the pinned upstreams.
 | `apps/web` | Nuxt PWA (join link → actor picker → live sheet) |
 | `apps/gateway` | BFF: invite-token auth, actor scoping, write allow-list, SSE fan-out (`docs/API.md`) |
 | `packages/adapter-sdk` | the system-adapter contract |
-| `packages/adapter-dnd5e` | the only adapter in v1 (paths pinned to dnd5e 5.3.3) |
+| `packages/adapter-dnd5e` | the v1 adapter (paths pinned to dnd5e 5.3.3) |
+| `packages/adapter-wod5e` | second supported system, Vampire: the Masquerade 5e (M23; paths pinned to wod5e 5.3.15 on Foundry v13) |
 | `packages/foundry-client` | typed wrapper over the relay REST/SSE |
 | `stack/` | Docker: Foundry + relay (+ Caddy/gateway/PWA in prod) |
 | `docs/` | `API.md`, `M0-findings.md`, `OPERATIONS.md`, captured fixtures |

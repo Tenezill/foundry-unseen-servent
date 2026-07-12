@@ -33,7 +33,7 @@ A mobile-friendly PWA that lets players of Sebastian's gaming group view and man
 4. ⏩ **Always-online, live passthrough.** PWA → gateway → relay → Foundry.
 5. 🔄 **Single Docker stack, greenfield.** Foundry is not deployed yet, so v1 ships one compose stack: Foundry + relay + gateway + PWA behind one reverse proxy (Caddy) with Let's Encrypt on a VPS. LAN/home-server deployment is not a target.
 6. **Foundry v13 (latest stable).** Pin the Foundry image, the dnd5e system version, and the ThreeHats module version in config; record all three in `VERSIONS.md`. Note: Foundry v14 API docs already exist upstream — do not chase v14.
-7. ⏩ **Adapter contract survives.** Even with 5e-only v1, all system-specific knowledge lives behind `packages/adapter-sdk`. Mörk Borg is the v2 proof that the contract holds.
+7. ⏩ **Adapter contract survives.** Even with 5e-only v1, all system-specific knowledge lives behind `packages/adapter-sdk`. Mörk Borg is the v2 proof that the contract holds. 🔄 M23 proved it first: `packages/adapter-wod5e` (Vampire: the Masquerade 5e) shipped as the second supported system, pinned to wod5e 5.3.15 on Foundry v13 (5.3.16+ requires Foundry v14).
 8. ⏩ **No game-rules content in the repo.** No stat blocks, spell text, or compendium data. The app renders only what the user's world legally contains.
 
 ---
@@ -203,6 +203,14 @@ Known limits (documented, M6-live-verified):
   support.
 
 ### v2 backlog (do not build in v1): Mörk Borg adapter, OIDC, push notifications ("you took damage"), GM dashboard, per-player roll authorship.
+
+### M23 — wod5e (Vampire: the Masquerade 5e) adapter, second supported system
+Delivered ahead of the Mörk Borg backlog item above: `packages/adapter-wod5e`
+registers alongside `adapter-dnd5e` via the existing `SystemAdapter` registry
+(§6 unchanged), pinned to wod5e 5.3.15 on Foundry v13 (5.3.16+ requires
+Foundry v14, so the pin does not move until Foundry itself is upgraded). See
+`docs/API.md` for the new surface (custom item creation, adapter-declared
+tabs/glyph, dot-stat and box-track rendering, `pool`/`rouse` action kinds).
 
 ---
 
