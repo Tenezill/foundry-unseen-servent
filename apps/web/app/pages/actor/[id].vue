@@ -51,6 +51,17 @@
             @detail="onCombatDetail"
           />
 
+          <button
+            v-if="activeTab === actionsTabId && rouseAction"
+            class="rouse-btn btn btn-accent"
+            type="button"
+            :class="{ pending: actionBusy === rouseAction.id }"
+            :disabled="offline || actionBusy !== null"
+            @click="onRouse"
+          >
+            {{ rouseAction.label }}
+          </button>
+
           <CombatantList
             v-if="activeTab === 'combat'"
             :combatants="encounter.combatants ?? []"
@@ -90,6 +101,21 @@
             </svg>
             {{ tabAddEntry.label }}
           </button>
+
+          <button
+            v-if="showCustomItemButton"
+            class="lib-add"
+            type="button"
+            @click="openCustomItem"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" stroke-linecap="round" />
+            </svg>
+            Add item
+          </button>
+          <p v-if="showCustomItemButton" class="gear-note">
+            Removing items is GM-side for now — ask your GM to delete a mis-created one.
+          </p>
 
           <template v-for="section in renderableSections" :key="section.id">
             <SectionStats
@@ -185,6 +211,25 @@
         @submit="onActionSubmit"
         @close="actionSheetFor = null"
       />
+      <PoolRollSheet
+        v-if="poolAction"
+        :action="poolAction"
+        :attributes="poolAttributes"
+        :skills="poolSkills"
+        :disciplines="poolDisciplines"
+        :hunger="hungerValue"
+        :busy="actionBusy !== null"
+        @submit="onPoolSubmit"
+        @close="poolActionId = null"
+      />
+      <CustomItemSheet
+        v-if="customItemOpen"
+        :types="sheet.customItems ?? []"
+        :busy="customItemBusy"
+        :error="customItemError"
+        @submit="onCustomItemSubmit"
+        @close="closeCustomItem"
+      />
       <DetailDialog
         v-if="detailFor"
         :title="detailFor.title"
@@ -249,6 +294,7 @@ import type {
   ResourceIntent,
   SheetSection,
   SheetViewModel,
+  Stat,
 } from '@companion/adapter-sdk'
 import type {
   ActionResponse,
@@ -476,6 +522,54 @@ const sectionsById = computed<Record<string, SheetSection>>(() => {
   for (const s of sheet.value?.sections ?? []) m[s.id] = s
   return m
 })
+
+/* ---- M23 pool roll sheet -------------------------------------------------- */
+
+const poolActionId = ref<string | null>(null)
+
+const poolAction = computed(() => {
+  const a = poolActionId.value ? actionMap.value[poolActionId.value] : undefined
+  return a && a.kind === 'pool' ? a : null
+})
+
+/** Dots stats for the pool sheet's pickers, sourced from the sections the
+ *  wod5e adapter declares (M23 binding contract) — id-prefix filtered so
+ *  non-dots entries (humanity rides along in `attributes`) never leak in. */
+function dotsStatsOf(sectionId: string, prefix: string): Stat[] {
+  const section = sectionsById.value[sectionId]
+  if (!section || section.kind !== 'stats') return []
+  return section.stats.filter((s) => s.id.startsWith(prefix))
+}
+
+const poolAttributes = computed(() => dotsStatsOf('attributes', 'attr.'))
+const poolSkills = computed(() => dotsStatsOf('skills', 'skill.'))
+const poolDisciplines = computed(() => dotsStatsOf('discipline-ratings', 'disc.'))
+const hungerValue = computed(() => resMap.value.hunger?.value ?? 0)
+
+/* ---- M23 rouse check + custom items --------------------------------------- */
+
+const rouseAction = computed(() => {
+  const a = actionMap.value['rouse']
+  return a && a.kind === 'rouse' ? a : null
+})
+
+const customItemOpen = ref(false)
+const customItemBusy = ref(false)
+const customItemError = ref<string | null>(null)
+
+const showCustomItemButton = computed(
+  () => activeTab.value === 'gear' && !offline.value && (sheet.value?.customItems?.length ?? 0) > 0,
+)
+
+function openCustomItem(): void {
+  customItemError.value = null
+  customItemOpen.value = true
+}
+
+function closeCustomItem(): void {
+  customItemOpen.value = false
+  customItemError.value = null
+}
 
 /** Id of the tab that renders the Actions UI: the adapter's hostsActions
  *  tab in adapter-tabs mode, else the fallback's literal 'actions' tab. */
@@ -833,10 +927,12 @@ function onAction(actionId: string): void {
       )
       break
     case 'pool':
-      // M23 interim (Task 6): no pool-sheet UI yet (Task 7) — tapping a
-      // dots stat rolls the descriptor's default attribute/skill pairing
-      // with no player override, which the wod5e adapter accepts.
-      void submitAction({ kind: 'pool', actionId }, action.label)
+      // M23: open the pool roll sheet, pre-filled with this descriptor's
+      // default pairing (and the tapped stat, since the descriptor's
+      // default IS the tapped stat — see poolAttributeActions/
+      // poolSkillActions/poolPowerActions in the wod5e adapter). The
+      // player confirms (or repicks) in onPoolSubmit below.
+      poolActionId.value = actionId
       break
   }
 }
@@ -882,6 +978,105 @@ function onEndConcentration(): void {
   if (offline.value || actionBusy.value) return
   const label = sheet.value?.concentration?.label ?? 'Concentration'
   void submitAction({ kind: 'endconcentration', actionId: 'concentration.end' }, `End ${label}`)
+}
+
+/** M23: pool rolls and the Rouse check are wod5e's "successes counted, no
+ *  total" mechanic — a RollResultPill (built for d20 totals/crits) doesn't
+ *  fit, so both surface their outcome as a toast instead of submitAction's
+ *  showRoll path (binding contract). */
+
+async function onPoolSubmit(intent: ActionIntent, preview: string): Promise<void> {
+  if (offline.value || actionBusy.value || intent.kind !== 'pool') return
+  actionBusy.value = intent.actionId
+  try {
+    const res = await api<ActionResponse>(`/api/actors/${actorId.value}/actions`, {
+      method: 'POST',
+      body: intent,
+    })
+    applySheet(res.sheet)
+    toast.show(res.result?.flavor ?? preview)
+    poolActionId.value = null
+  } catch (err) {
+    const status = errorStatus(err)
+    if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else if (status === 403 || status === 422) {
+      toast.show('That action isn’t available right now.')
+      void fetchSheet()
+    } else if (status === 429) {
+      toast.show('Slow down — too many actions at once')
+    } else {
+      toast.show('The table didn’t respond. Try again.')
+    }
+    // Error keeps the sheet open (binding contract) — poolActionId untouched.
+  } finally {
+    actionBusy.value = null
+  }
+}
+
+async function onRouse(): Promise<void> {
+  const action = rouseAction.value
+  if (offline.value || actionBusy.value || !action) return
+  actionBusy.value = action.id
+  try {
+    const res = await api<ActionResponse>(`/api/actors/${actorId.value}/actions`, {
+      method: 'POST',
+      body: { kind: 'rouse', actionId: action.id },
+    })
+    applySheet(res.sheet)
+    toast.show(`${action.label} rolled — see Foundry chat. On failure: +1 Hunger (mark it on Vitals)`)
+  } catch (err) {
+    const status = errorStatus(err)
+    if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else if (status === 403 || status === 422) {
+      toast.show('That action isn’t available right now.')
+      void fetchSheet()
+    } else if (status === 429) {
+      toast.show('Slow down — too many actions at once')
+    } else {
+      toast.show('The table didn’t respond. Try again.')
+    }
+  } finally {
+    actionBusy.value = null
+  }
+}
+
+async function onCustomItemSubmit(input: {
+  name: string
+  type: string
+  damage?: number
+  description?: string
+}): Promise<void> {
+  if (customItemBusy.value) return
+  customItemBusy.value = true
+  customItemError.value = null
+  try {
+    const res = await api<SheetResponse>(`/api/actors/${actorId.value}/items`, {
+      method: 'POST',
+      body: input,
+    })
+    applySheet(res.sheet)
+    toast.show(`${input.name} added`)
+    closeCustomItem()
+  } catch (err) {
+    const status = errorStatus(err)
+    if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else if (status === 422) {
+      const data = errorData<ApiErrorBody>(err)
+      customItemError.value = data?.error?.message ?? 'Check the form and try again.'
+    } else if (status === 429) {
+      toast.show('Slow down — too many changes at once')
+    } else {
+      toast.show('That didn’t go through. Try again.')
+    }
+  } finally {
+    customItemBusy.value = false
+  }
 }
 
 function onDetail(item: ListItem): void {
@@ -1395,6 +1590,23 @@ onBeforeUnmount(() => {
 
 .lib-add:active {
   transform: scale(0.98);
+}
+
+.gear-note {
+  margin-top: 8px;
+  font-size: 0.74rem;
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+.rouse-btn {
+  width: 100%;
+  min-height: 52px;
+  margin-top: 4px;
+}
+
+.rouse-btn.pending {
+  opacity: 0.55;
 }
 
 /* ---- combat carousel dock (M22) ---- */
