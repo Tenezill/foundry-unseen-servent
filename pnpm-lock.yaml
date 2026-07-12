@@ -16,6 +16,9 @@ importers:
       '@companion/adapter-sdk':
         specifier: workspace:*
         version: link:../../packages/adapter-sdk
+      '@companion/adapter-wod5e':
+        specifier: workspace:*
+        version: link:../../packages/adapter-wod5e
       '@companion/foundry-client':
         specifier: workspace:*
         version: link:../../packages/foundry-client

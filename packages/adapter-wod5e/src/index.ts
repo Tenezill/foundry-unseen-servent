@@ -30,6 +30,7 @@ import type {
   ActionDescriptor,
   ActionIntent,
   BoxTrackSpec,
+  CustomItemInput,
   FoundryActorDoc,
   FoundryItemDoc,
   FoundryUpdate,
@@ -678,6 +679,64 @@ function buildUpdate(actor: FoundryActorDoc, intent: ResourceIntent): FoundryUpd
 }
 
 // ---------------------------------------------------------------------------
+// buildCustomItem (Task 5, M23): player-authored weapon/gear -> the full
+// world-item payload for the relay `create` call (see the Task 0 findings
+// doc §Headline plan amendments 5 — create -> give -> delete chain). A
+// strict whitelist: name (non-empty, trimmed, <=80 chars), type ('weapon' |
+// 'gear' only), damage (weapons only, integer 0-10 -> system.weaponvalue,
+// plus a default system.weaponType:'melee'), description (<=2000 chars ->
+// system.description). Anything else on the input is silently dropped, not
+// copied through — the gateway route passes the raw client body straight
+// through without pre-sanitizing it, so this function is the ONLY line of
+// defense against extra/hostile fields landing in a relay-created world item.
+
+const CUSTOM_ITEM_TYPES = ['weapon', 'gear'] as const;
+const CUSTOM_ITEM_NAME_MAX = 80;
+const CUSTOM_ITEM_DESCRIPTION_MAX = 2000;
+
+function buildCustomItem(_actor: FoundryActorDoc, input: CustomItemInput): Record<string, unknown> {
+  const rawName = input?.name;
+  if (typeof rawName !== 'string') {
+    throw new IntentError('name is required', 'INVALID');
+  }
+  const name = rawName.trim();
+  if (name === '' || name.length > CUSTOM_ITEM_NAME_MAX) {
+    throw new IntentError(`name must be 1-${CUSTOM_ITEM_NAME_MAX} characters`, 'INVALID');
+  }
+
+  const type = input.type;
+  if (!(CUSTOM_ITEM_TYPES as readonly string[]).includes(type)) {
+    throw new IntentError(`unsupported custom item type "${String(type)}"`, 'INVALID');
+  }
+
+  const system: Record<string, unknown> = {};
+
+  if (input.damage !== undefined) {
+    if (type !== 'weapon') {
+      throw new IntentError('damage is only valid for weapons', 'INVALID');
+    }
+    const damage = input.damage;
+    if (typeof damage !== 'number' || !Number.isInteger(damage) || damage < 0 || damage > 10) {
+      throw new IntentError('damage must be an integer 0-10', 'INVALID');
+    }
+    system.weaponvalue = damage;
+  }
+  if (type === 'weapon') {
+    system.weaponType = 'melee'; // default; no equip/kind picker in v1 (Task 0 findings)
+  }
+
+  if (input.description !== undefined) {
+    const description = input.description;
+    if (typeof description !== 'string' || description.length > CUSTOM_ITEM_DESCRIPTION_MAX) {
+      throw new IntentError(`description must be a string up to ${CUSTOM_ITEM_DESCRIPTION_MAX} characters`, 'INVALID');
+    }
+    system.description = description;
+  }
+
+  return { name, type, system };
+}
+
+// ---------------------------------------------------------------------------
 // Sections + tabs
 
 function buildSections(actor: FoundryActorDoc): SheetSection[] {
@@ -751,6 +810,10 @@ export const wod5eAdapter: SystemAdapter = {
 
   buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction {
     return buildAction(actor, intent);
+  },
+
+  buildCustomItem(actor: FoundryActorDoc, input: CustomItemInput): Record<string, unknown> {
+    return buildCustomItem(actor, input);
   },
 };
 

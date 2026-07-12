@@ -13,7 +13,16 @@ import { IntentError, type SystemAdapter } from '@companion/adapter-sdk';
 import { buildApp } from '../src/app.js';
 import { sha256Hex, type Player } from '../src/players.js';
 import { createRegistry } from '../src/registry.js';
-import { actionlessAdapter, actorDoc, fakeAdapter, FakeRelay, FAKE_API_KEY, FAKE_RELAY_URL, memoryPlayers } from './fakes.js';
+import {
+  actionlessAdapter,
+  actorDoc,
+  customItemlessAdapter,
+  fakeAdapter,
+  FakeRelay,
+  FAKE_API_KEY,
+  FAKE_RELAY_URL,
+  memoryPlayers,
+} from './fakes.js';
 
 const ANNA_TOKEN = 'anna-invite-token-123';
 const BOB_TOKEN = 'bob-invite-token-456';
@@ -27,7 +36,9 @@ function makePlayers(): Player[] {
 
 let app: FastifyInstance | null = null;
 
-function setup(overrides: { rateLimitMax?: number } = {}): { app: FastifyInstance; relay: FakeRelay } {
+function setup(
+  overrides: { rateLimitMax?: number; customItemTimeoutMs?: number } = {},
+): { app: FastifyInstance; relay: FakeRelay } {
   const relay = new FakeRelay();
   relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
   relay.entities.set('Actor.a2', actorDoc('a2', 'Borin', 12, 40));
@@ -40,6 +51,7 @@ function setup(overrides: { rateLimitMax?: number } = {}): { app: FastifyInstanc
     livePollMs: 10_000,
     pingMs: 60_000,
     ...(overrides.rateLimitMax !== undefined ? { rateLimitMax: overrides.rateLimitMax } : {}),
+    ...(overrides.customItemTimeoutMs !== undefined ? { customItemTimeoutMs: overrides.customItemTimeoutMs } : {}),
   });
   return { app, relay };
 }
@@ -1009,5 +1021,173 @@ describe('library endpoints', () => {
     expect(res.statusCode).toBe(502);
     expect(res.body).not.toContain(FAKE_API_KEY);
     expect(res.body).not.toContain(FAKE_RELAY_URL);
+  });
+});
+
+describe('custom items (M23) — POST /api/actors/:id/items', () => {
+  it('creates via the create -> give -> delete chain, forwarding the ADAPTER-BUILT payload verbatim', async () => {
+    const { app, relay } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/items',
+      headers: asAnna,
+      // Extra client field ("hax") must never reach the relay — only the
+      // adapter's whitelisted output may.
+      payload: { name: 'Stake', type: 'weapon', damage: 2, description: 'Sharp.', hax: 'ignored' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sheet).toBeDefined();
+
+    expect(relay.createWorldItemCalls).toEqual([
+      { name: 'Stake', type: 'weapon', system: { damage: 2, description: 'Sharp.' } },
+    ]);
+    expect(relay.giveCalls).toEqual([{ toUuid: 'Actor.a1', itemUuid: 'Item.world1' }]);
+    expect(relay.deleteCalls).toEqual(['Item.world1']);
+  });
+
+  it('rejects a bad type with 422 and never calls the relay', async () => {
+    const { app, relay } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/items',
+      headers: asAnna,
+      payload: { name: 'Thing', type: 'spell' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('INVALID_INTENT');
+    expect(relay.createWorldItemCalls).toEqual([]);
+  });
+
+  it('rejects an out-of-range damage value with 422', async () => {
+    const { app, relay } = setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/items',
+      headers: asAnna,
+      payload: { name: 'Cannon', type: 'weapon', damage: 99 },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(relay.createWorldItemCalls).toEqual([]);
+  });
+
+  it('404s for an actor whose adapter has no buildCustomItem (mirrors dnd5e today)', async () => {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
+    const bare = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([customItemlessAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+    });
+    try {
+      const res = await bare.inject({
+        method: 'POST',
+        url: '/api/actors/a1/items',
+        headers: asAnna,
+        payload: { name: 'Stake', type: 'weapon', damage: 2 },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(relay.createWorldItemCalls).toEqual([]);
+    } finally {
+      await bare.close();
+    }
+  });
+
+  it('hides the route for unowned actors (404) and unauthenticated callers (401)', async () => {
+    const { app } = setup();
+    const unowned = await app.inject({
+      method: 'POST',
+      url: '/api/actors/b1/items',
+      headers: asAnna,
+      payload: { name: 'Stake', type: 'weapon', damage: 2 },
+    });
+    expect(unowned.statusCode).toBe(404);
+    const anon = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/items',
+      payload: { name: 'Stake', type: 'weapon', damage: 2 },
+    });
+    expect(anon.statusCode).toBe(401);
+  });
+
+  it('502s (bounded) when createWorldItem never settles, without leaking secrets', async () => {
+    const { app, relay } = setup({ customItemTimeoutMs: 20 });
+    relay.hangCreateWorldItem = true;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/items',
+      headers: asAnna,
+      payload: { name: 'Stake', type: 'weapon', damage: 2 },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error.code).toBe('UPSTREAM');
+    expect(res.body).not.toContain(FAKE_API_KEY);
+    expect(res.body).not.toContain(FAKE_RELAY_URL);
+    expect(relay.giveCalls).toEqual([]);
+  });
+
+  it('502s (bounded) when giveItem never settles, and still attempts the cleanup delete', async () => {
+    const { app, relay } = setup({ customItemTimeoutMs: 20 });
+    relay.hangGiveItem = true;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/items',
+      headers: asAnna,
+      payload: { name: 'Stake', type: 'weapon', damage: 2 },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error.code).toBe('UPSTREAM');
+    expect(res.body).not.toContain(FAKE_API_KEY);
+    expect(res.body).not.toContain(FAKE_RELAY_URL);
+    expect(relay.deleteCalls).toEqual(['Item.world1']);
+  });
+
+  it('502s when give fails, and still attempts the cleanup delete', async () => {
+    const { app, relay } = setup();
+    relay.giveItemResult = false;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/items',
+      headers: asAnna,
+      payload: { name: 'Stake', type: 'weapon', damage: 2 },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error.code).toBe('UPSTREAM');
+    expect(relay.giveCalls).toEqual([{ toUuid: 'Actor.a1', itemUuid: 'Item.world1' }]);
+    expect(relay.deleteCalls).toEqual(['Item.world1']);
+  });
+
+  it('still returns 200 when the best-effort cleanup delete fails', async () => {
+    const { app, relay } = setup();
+    relay.deleteEntityResult = false;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/items',
+      headers: asAnna,
+      payload: { name: 'Stake', type: 'weapon', damage: 2 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(relay.deleteCalls).toEqual(['Item.world1']);
+  });
+
+  it('counts against the shared write rate limiter', async () => {
+    const { app } = setup({ rateLimitMax: 1 });
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/items',
+      headers: asAnna,
+      payload: { name: 'Stake', type: 'weapon', damage: 2 },
+    });
+    expect(first.statusCode).toBe(200);
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/actors/a1/items',
+      headers: asAnna,
+      payload: { name: 'Lockpicks', type: 'gear' },
+    });
+    expect(second.statusCode).toBe(429);
+    expect(second.json().error.code).toBe('RATE_LIMITED');
   });
 });

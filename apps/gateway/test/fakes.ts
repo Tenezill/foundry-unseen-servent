@@ -2,6 +2,7 @@
 import type {
   ActionDescriptor,
   ActionIntent,
+  CustomItemInput,
   FoundryActorDoc,
   FoundryUpdate,
   RelayAction,
@@ -268,29 +269,64 @@ export class FakeRelay implements RelayPort {
   }
 
   readonly giveCalls: Array<{ toUuid: string; itemUuid: string }> = [];
+  /** M23: giveItem never throws (foundry-client contract) — this flag
+   *  simulates a relay-side failure (`{success:false}`/unreachable) as a
+   *  plain `false` return instead. Default true (success). */
+  giveItemResult = true;
+  /** never resolves — exercises the gateway's bounded-timeout degrade path
+   *  for the M23 custom-item chain's give leg. */
+  hangGiveItem = false;
 
   /** Copies the referenced entity's doc into the target actor's items. */
-  async giveItem(toUuid: string, itemUuid: string): Promise<void> {
+  async giveItem(toUuid: string, itemUuid: string): Promise<boolean> {
     this.giveCalls.push({ toUuid, itemUuid });
-    if (this.actionError) this.throwActionError('give');
+    if (this.hangGiveItem) return new Promise(() => undefined);
+    if (this.actionError || !this.giveItemResult) return false;
     const src = this.entities.get(itemUuid);
     const target = this.entities.get(toUuid);
-    if (!src || !target) throw new Error(`give: missing ${!src ? itemUuid : toUuid}`);
+    if (!src || !target) return false;
     const items = (target.items ?? []) as Array<Record<string, unknown>>;
     items.push({ ...structuredClone(src), _id: `given-${this.giveCalls.length}` });
     target.items = items;
+    return true;
   }
 
   readonly deleteCalls: string[] = [];
+  /** M23: deleteEntity never throws (foundry-client swallow-and-log
+   *  contract) — this flag makes the simulated deletion silently no-op
+   *  instead of actually removing the entity, so tests can assert the
+   *  caller still succeeds despite a failed best-effort cleanup. */
+  deleteEntityResult = true;
 
   async deleteEntity(uuid: string): Promise<void> {
     this.deleteCalls.push(uuid);
-    if (this.actionError) this.throwActionError('delete');
+    if (this.actionError || !this.deleteEntityResult) return; // swallow — never throws
     const m = /^Actor\.([^.]+)\.Item\.([^.]+)$/.exec(uuid);
-    if (!m) throw new Error(`delete: unsupported uuid ${uuid}`);
-    const actor = this.entities.get(`Actor.${m[1]}`);
-    if (!actor) throw new Error(`delete: no entity ${uuid}`);
-    actor.items = ((actor.items ?? []) as Array<Record<string, unknown>>).filter((i) => i._id !== m[2]);
+    if (m) {
+      const actor = this.entities.get(`Actor.${m[1]}`);
+      if (actor) actor.items = ((actor.items ?? []) as Array<Record<string, unknown>>).filter((i) => i._id !== m[2]);
+      return;
+    }
+    // A bare world-item uuid (M23 custom-item chain cleanup) — just drop it
+    // from the store; nothing else references it.
+    this.entities.delete(uuid);
+  }
+
+  // ---- custom items (M23): create -> give -> delete chain ------------------
+
+  readonly createWorldItemCalls: Array<Record<string, unknown>> = [];
+  /** uuid createWorldItem resolves to; null simulates a create failure. */
+  createWorldItemResult: string | null = 'Item.world1';
+  /** never resolves — exercises the gateway's bounded-timeout degrade path. */
+  hangCreateWorldItem = false;
+
+  async createWorldItem(data: Record<string, unknown>): Promise<string | null> {
+    this.createWorldItemCalls.push(structuredClone(data));
+    if (this.hangCreateWorldItem) return new Promise(() => undefined);
+    if (this.createWorldItemResult === null) return null;
+    const uuid = this.createWorldItemResult;
+    this.entities.set(uuid, { _id: uuid.split('.').pop(), ...structuredClone(data) });
+    return uuid;
   }
 
   // ---- GM roll feed (M9) ---------------------------------------------------
@@ -508,11 +544,44 @@ export const fakeAdapter: SystemAdapter = {
         throw new IntentError(`unsupported action kind "${String((intent as { kind: unknown }).kind)}"`, 'UNKNOWN_RESOURCE');
     }
   },
+  // M23: custom item creation — a small whitelist mirroring the real
+  // adapters' contract (name/type/damage/description), enough to exercise
+  // the gateway's create -> give -> delete route without duplicating a real
+  // system's rules here.
+  buildCustomItem(_actor: FoundryActorDoc, input: CustomItemInput): Record<string, unknown> {
+    const name = typeof input.name === 'string' ? input.name.trim() : '';
+    if (name === '' || name.length > 80) {
+      throw new IntentError('name must be 1-80 characters', 'INVALID');
+    }
+    if (input.type !== 'weapon' && input.type !== 'gear') {
+      throw new IntentError(`unsupported custom item type "${String(input.type)}"`, 'INVALID');
+    }
+    const system: Record<string, unknown> = {};
+    if (input.damage !== undefined) {
+      if (input.type !== 'weapon') throw new IntentError('damage is only valid for weapons', 'INVALID');
+      if (typeof input.damage !== 'number' || !Number.isInteger(input.damage) || input.damage < 0 || input.damage > 10) {
+        throw new IntentError('damage must be an integer 0-10', 'INVALID');
+      }
+      system.damage = input.damage;
+    }
+    if (input.description !== undefined) {
+      if (typeof input.description !== 'string') throw new IntentError('description must be a string', 'INVALID');
+      system.description = input.description;
+    }
+    return { name, type: input.type, system };
+  },
 };
 
 /** The same adapter with no action support at all (M6 rule: every action -> 403). */
 export const actionlessAdapter: SystemAdapter = (() => {
   const { actions: _actions, buildAction: _buildAction, ...rest } = fakeAdapter;
+  return rest;
+})();
+
+/** The same adapter with no custom-item support (M23 rule: the route 404s —
+ *  mirrors dnd5e, which doesn't implement buildCustomItem in production). */
+export const customItemlessAdapter: SystemAdapter = (() => {
+  const { buildCustomItem: _buildCustomItem, ...rest } = fakeAdapter;
   return rest;
 })();
 

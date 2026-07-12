@@ -333,29 +333,71 @@ export class FoundryRelayClient {
   }
 
   /**
+   * POST /create — create a WORLD-level entity (not embedded on any actor).
+   * Used only as the first leg of the custom-item chain (M23 Task 0
+   * findings §Headline plan amendments 5: no embedded-create endpoint
+   * exists, so a custom weapon/gear item is created as a scratch world item,
+   * then `give`n onto the actor, then `delete`d). Returns the created uuid
+   * (`body.uuid`, falling back to `'Item.' + body.entity._id` — both shapes
+   * observed live), or null on any failure (never throws — the gateway
+   * route treats null exactly like a bounded-timeout miss).
+   */
+  async createWorldItem(data: Record<string, unknown>): Promise<string | null> {
+    try {
+      const body = await this.request<{ uuid?: string; entity?: { _id?: string } }>(
+        'POST',
+        '/create',
+        {},
+        { entityType: 'Item', data },
+      );
+      if (typeof body.uuid === 'string' && body.uuid !== '') return body.uuid;
+      const id = body.entity?._id;
+      return typeof id === 'string' && id !== '' ? `Item.${id}` : null;
+    } catch (err) {
+      this.cfg.log?.warn({ err }, 'relay POST /create failed; treating as a failed fetch');
+      return null;
+    }
+  }
+
+  /**
    * POST /give — copy an item onto a target actor. `itemUuid` may be ANY
    * uuid Foundry's fromUuid resolves, including compendium uuids
-   * (`Compendium.<pack>.Item.<id>`) — that is how "learn spell" works.
-   * Module 3.4.1 source-verified; route + player-key scope pending live
-   * verification (record findings in docs/ before production use).
+   * (`Compendium.<pack>.Item.<id>`) — that is how "learn spell" works, and
+   * (M23) a freshly `create`d world item, for the custom-item chain. Live-
+   * verified response shape (M23 Task 0 findings): `{success:true}` on
+   * success. Returns a boolean rather than throwing so every caller (the
+   * M13 library "add" route and the M23 custom-item chain) can treat a
+   * failure uniformly without a try/catch of its own.
    */
-  async giveItem(toUuid: string, itemUuid: string): Promise<void> {
-    const body = await this.request<{ error?: string }>('POST', '/give', {}, { toUuid, itemUuid, quantity: 1 });
-    if (typeof body.error === 'string' && body.error !== '') {
-      throw new RelayError(`relay /give: ${body.error}`, 200, '/give');
+  async giveItem(toUuid: string, itemUuid: string): Promise<boolean> {
+    try {
+      const body = await this.request<{ success?: boolean; error?: string }>('POST', '/give', {}, { toUuid, itemUuid });
+      if (body.success === true) return true;
+      this.cfg.log?.warn({ toUuid, itemUuid, body }, 'relay POST /give did not report success');
+      return false;
+    } catch (err) {
+      this.cfg.log?.warn({ err, toUuid, itemUuid }, 'relay POST /give failed');
+      return false;
     }
   }
 
   /**
    * DELETE /delete — delete an entity by uuid; embedded item uuids
    * (`Actor.<id>.Item.<id>`) resolve via fromUuid, so this deletes a single
-   * item off an actor. Module 3.4.1 source-verified; route pending live
-   * verification.
+   * item off an actor; a bare `Item.<id>` uuid deletes a world item (M23:
+   * the custom-item chain's cleanup step). Swallow-and-log: a failed delete
+   * here is always a best-effort cleanup (a leftover world item, or a
+   * library-collection item that stays on the actor) — never worth failing
+   * the caller's whole request over, so this never throws.
    */
   async deleteEntity(uuid: string): Promise<void> {
-    const body = await this.request<{ error?: string }>('DELETE', '/delete', { uuid });
-    if (typeof body.error === 'string' && body.error !== '') {
-      throw new RelayError(`relay /delete: ${body.error}`, 200, '/delete');
+    try {
+      const body = await this.request<{ error?: string }>('DELETE', '/delete', { uuid });
+      if (typeof body.error === 'string' && body.error !== '') {
+        this.cfg.log?.warn({ uuid, error: body.error }, 'relay DELETE /delete reported an error; ignoring (best-effort)');
+      }
+    } catch (err) {
+      this.cfg.log?.warn({ err, uuid }, 'relay DELETE /delete failed; ignoring (best-effort)');
     }
   }
 
