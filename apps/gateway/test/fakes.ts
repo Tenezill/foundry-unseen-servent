@@ -294,22 +294,25 @@ export class FakeRelay implements RelayPort {
   readonly deleteCalls: string[] = [];
   /** M23: deleteEntity never throws (foundry-client swallow-and-log
    *  contract) — this flag makes the simulated deletion silently no-op
-   *  instead of actually removing the entity, so tests can assert the
-   *  caller still succeeds despite a failed best-effort cleanup. */
+   *  and return false instead of actually removing the entity, so tests
+   *  can assert either the caller surfaces the failure (library "remove")
+   *  or still succeeds despite a failed best-effort cleanup (custom-item
+   *  chain). */
   deleteEntityResult = true;
 
-  async deleteEntity(uuid: string): Promise<void> {
+  async deleteEntity(uuid: string): Promise<boolean> {
     this.deleteCalls.push(uuid);
-    if (this.actionError || !this.deleteEntityResult) return; // swallow — never throws
+    if (this.actionError || !this.deleteEntityResult) return false; // swallow — never throws
     const m = /^Actor\.([^.]+)\.Item\.([^.]+)$/.exec(uuid);
     if (m) {
       const actor = this.entities.get(`Actor.${m[1]}`);
       if (actor) actor.items = ((actor.items ?? []) as Array<Record<string, unknown>>).filter((i) => i._id !== m[2]);
-      return;
+      return true;
     }
     // A bare world-item uuid (M23 custom-item chain cleanup) — just drop it
     // from the store; nothing else references it.
     this.entities.delete(uuid);
+    return true;
   }
 
   // ---- custom items (M23): create -> give -> delete chain ------------------

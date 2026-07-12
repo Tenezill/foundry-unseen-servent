@@ -79,9 +79,11 @@ export interface RelayPort {
   /** POST /give — copy an item (compendium uuid ok) onto a target actor;
    *  true on success (M23: never throws — see foundry-client). */
   giveItem(toUuid: string, itemUuid: string): Promise<boolean>;
-  /** DELETE /delete — delete an entity (embedded item uuid ok); best-effort,
-   *  never throws (M23: failures are logged client-side only). */
-  deleteEntity(uuid: string): Promise<void>;
+  /** DELETE /delete — delete an entity (embedded item uuid ok); true on
+   *  success (M23: never throws — see foundry-client). Callers decide
+   *  whether a `false` matters: the library "remove" route surfaces it as
+   *  a 502, the custom-item chain's cleanup leg treats it as best-effort. */
+  deleteEntity(uuid: string): Promise<boolean>;
   /**
    * POST /create — create a world-level Item (M23: the first leg of the
    * custom-item chain — no embedded-create endpoint exists). Returns the
@@ -961,10 +963,11 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
 
       // Best-effort cleanup regardless of give's outcome (Task 0 findings
       // §5: a failed delete just leaves a harmless world item behind) —
-      // deleteEntity itself never throws (foundry-client swallows + logs).
+      // deleteEntity itself never throws (foundry-client swallows + logs);
+      // its boolean result is intentionally ignored here.
       await Promise.race([
         relay.deleteEntity(worldItemUuid),
-        new Promise<void>((resolve) => setTimeout(resolve, customItemTimeoutMs)),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), customItemTimeoutMs)),
       ]);
 
       if (!gave) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
@@ -1109,7 +1112,8 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       if (!item || !ctx.collection.canRemove(item)) {
         return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'item does not exist or cannot be removed');
       }
-      await relay.deleteEntity(`Actor.${req.params.id}.Item.${req.params.itemId}`);
+      const deleted = await relay.deleteEntity(`Actor.${req.params.id}.Item.${req.params.itemId}`);
+      if (!deleted) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const fresh = await fetchActor(req.params.id);
       if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const freshAdapter = adapterFor(fresh) ?? ctx.adapter;

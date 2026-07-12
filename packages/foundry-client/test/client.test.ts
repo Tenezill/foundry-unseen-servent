@@ -364,7 +364,7 @@ describe('FoundryRelayClient.deleteEntity()', () => {
       text: vi.fn(),
     });
 
-    await client.deleteEntity('Item.abc123');
+    const result = await client.deleteEntity('Item.abc123');
 
     expect(mockFetch).toHaveBeenCalledOnce();
     const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
@@ -374,33 +374,37 @@ describe('FoundryRelayClient.deleteEntity()', () => {
     expect(init.method).toBe('DELETE');
     expect((init.headers as Record<string, string>)['x-api-key']).toBe('test-api-key');
     expect(warn).not.toHaveBeenCalled();
+    expect(result).toBe(true);
   });
 
-  it('swallows an HTTP failure and logs a warning instead of throwing', async () => {
+  it('returns false (no throw) on an HTTP failure, and logs a warning', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 500,
       json: vi.fn(),
       text: vi.fn().mockResolvedValueOnce('boom'),
     });
-    await expect(client.deleteEntity('Item.abc123')).resolves.toBeUndefined();
+    const result = await client.deleteEntity('Item.abc123');
+    expect(result).toBe(false);
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('swallows an unreachable relay and logs a warning instead of throwing', async () => {
+  it('returns false (no throw) when the relay is unreachable, and logs a warning', async () => {
     mockFetch.mockRejectedValueOnce(new TypeError('fetch failed'));
-    await expect(client.deleteEntity('Item.abc123')).resolves.toBeUndefined();
+    const result = await client.deleteEntity('Item.abc123');
+    expect(result).toBe(false);
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('swallows an applicative {error} response and logs a warning', async () => {
+  it('returns false (no throw) on an applicative {error} response, and logs a warning', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: vi.fn().mockResolvedValueOnce({ error: 'no such entity' }),
       text: vi.fn(),
     });
-    await expect(client.deleteEntity('Item.abc123')).resolves.toBeUndefined();
+    const result = await client.deleteEntity('Item.abc123');
+    expect(result).toBe(false);
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });

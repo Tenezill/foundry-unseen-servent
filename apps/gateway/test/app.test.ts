@@ -955,6 +955,15 @@ describe('library endpoints', () => {
     expect(relay.deleteCalls).toHaveLength(1);
   });
 
+  it('502s when the relay delete fails (M23 review: no longer lies with a 200)', async () => {
+    const { app, relay } = setup();
+    relay.deleteEntityResult = false;
+    const res = await app.inject({ method: 'DELETE', url: '/api/actors/a1/library/spells/s1', headers: asAnna });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error.code).toBe('UPSTREAM');
+    expect(relay.deleteCalls).toEqual(['Actor.a1.Item.s1']);
+  });
+
   it('removes a feat via the feats collection; a spell is not removable there (403)', async () => {
     const { app, relay } = setup();
     const ok = await app.inject({ method: 'DELETE', url: '/api/actors/a1/library/feats/ft1', headers: asAnna });

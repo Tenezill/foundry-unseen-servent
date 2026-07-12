@@ -385,19 +385,25 @@ export class FoundryRelayClient {
    * DELETE /delete — delete an entity by uuid; embedded item uuids
    * (`Actor.<id>.Item.<id>`) resolve via fromUuid, so this deletes a single
    * item off an actor; a bare `Item.<id>` uuid deletes a world item (M23:
-   * the custom-item chain's cleanup step). Swallow-and-log: a failed delete
-   * here is always a best-effort cleanup (a leftover world item, or a
-   * library-collection item that stays on the actor) — never worth failing
-   * the caller's whole request over, so this never throws.
+   * the custom-item chain's cleanup step). Returns a boolean rather than
+   * throwing — true on success, false on HTTP failure or an applicative
+   * `{error}` body (a warning is logged either way) — so every caller can
+   * treat a failure uniformly without a try/catch of its own. Some callers
+   * (the M23 custom-item chain's cleanup leg) treat this as best-effort and
+   * ignore the result; others (the M13 library "remove" route) must surface
+   * a `false` as a failed request.
    */
-  async deleteEntity(uuid: string): Promise<void> {
+  async deleteEntity(uuid: string): Promise<boolean> {
     try {
       const body = await this.request<{ error?: string }>('DELETE', '/delete', { uuid });
       if (typeof body.error === 'string' && body.error !== '') {
-        this.cfg.log?.warn({ uuid, error: body.error }, 'relay DELETE /delete reported an error; ignoring (best-effort)');
+        this.cfg.log?.warn({ uuid, error: body.error }, 'relay DELETE /delete reported an error');
+        return false;
       }
+      return true;
     } catch (err) {
-      this.cfg.log?.warn({ err, uuid }, 'relay DELETE /delete failed; ignoring (best-effort)');
+      this.cfg.log?.warn({ err, uuid }, 'relay DELETE /delete failed');
+      return false;
     }
   }
 
