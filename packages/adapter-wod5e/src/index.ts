@@ -777,6 +777,7 @@ export const wod5eAdapter: SystemAdapter = {
       headline: headlineStats(actor),
       sections: buildSections(actor),
       resources,
+      actions: buildActions(actor),
       tabs: [
         { id: 'overview', label: 'Overview', sectionIds: ['attributes', 'skills'], hostsActions: false },
         { id: 'rolls', label: 'Rolls', sectionIds: [], hostsActions: true },

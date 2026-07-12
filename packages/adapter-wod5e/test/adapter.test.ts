@@ -63,6 +63,35 @@ describe('view model — identity, glyph, headline', () => {
       { type: 'gear', label: 'Gear', hasDamage: false },
     ]);
   });
+
+  it('carries actions so the pool-roll/rouse sheet can resolve actionIds (M23 live regression)', () => {
+    expect(vm.actions).toBeDefined();
+    expect(vm.actions?.length).toBeGreaterThan(0);
+    const byId = new Map((vm.actions ?? []).map((a) => [a.id, a]));
+    expect(byId.get('pool.skill.brawl')).toBeDefined();
+    expect(byId.get('pool.attr.strength')).toBeDefined();
+    const rouse = byId.get('rouse');
+    expect(rouse?.kind).toBe('rouse');
+  });
+
+  it('every stat actionId in the view model resolves to an emitted action descriptor', () => {
+    const actionIds = new Set((vm.actions ?? []).map((a) => a.id));
+    for (const s of vm.sections) {
+      if (s.kind === 'stats') {
+        for (const stat of s.stats) {
+          if (stat.actionId !== undefined) {
+            expect(actionIds.has(stat.actionId), `stat ${stat.id} actionId ${stat.actionId} missing from vm.actions`).toBe(true);
+          }
+        }
+      } else if (s.kind === 'list') {
+        for (const item of s.items) {
+          if (item.actionId !== undefined) {
+            expect(actionIds.has(item.actionId), `list item ${item.id} actionId ${item.actionId} missing from vm.actions`).toBe(true);
+          }
+        }
+      }
+    }
+  });
 });
 
 describe('tabs', () => {
