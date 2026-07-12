@@ -29,6 +29,7 @@ import type {
   BoxTrackSpec,
   FoundryActorDoc,
   FoundryItemDoc,
+  FoundryUpdate,
   ListItem,
   ResourceDescriptor,
   ResourceIntent,
@@ -37,7 +38,7 @@ import type {
   Stat,
   SystemAdapter,
 } from '@companion/adapter-sdk';
-import { IntentError } from '@companion/adapter-sdk';
+import { IntentError, clamp } from '@companion/adapter-sdk';
 
 // ---------------------------------------------------------------------------
 // Small safe-access helpers (raw documents are untyped `Record<string, unknown>`)
@@ -430,12 +431,61 @@ function buildResources(actor: FoundryActorDoc): ResourceDescriptor[] {
       label: `${item.name} (Qty)`,
       value: qty,
       min: 0,
+      max: 999, // sane upper bound (M23 review finding) — no in-system cap exists
       writable: true,
       group: 'gear',
     });
   }
 
   return resources;
+}
+
+// ---------------------------------------------------------------------------
+// buildUpdate — intent -> concrete Foundry update (Task 3). Write allow-list:
+// health/willpower superficial+aggravated (tri-state clamp: the descriptor's
+// dynamic max already encodes `superficial + aggravated <= track max`, so
+// clamping to [min, max] from the descriptor is sufficient — no cross-field
+// coupling needed here), hunger, humanity.stains, and gear item quantity.
+// Everything else (humanity, bloodpotency) is read-only; anything not in
+// `resources()` is unknown. Mirrors adapter-dnd5e's buildUpdate contract,
+// including an adapter-level optimistic-lock check (the gateway also checks
+// `expected` against its own fresh descriptor read before ever calling
+// buildUpdate — this is defense in depth using the exact same comparison).
+
+function buildUpdate(actor: FoundryActorDoc, intent: ResourceIntent): FoundryUpdate {
+  const descriptor = buildResources(actor).find((r) => r.id === intent.resourceId);
+  if (!descriptor) {
+    throw new IntentError(`unknown resource "${intent.resourceId}"`, 'UNKNOWN_RESOURCE');
+  }
+  if (!descriptor.writable) {
+    throw new IntentError(`resource "${intent.resourceId}" is read-only`, 'READ_ONLY');
+  }
+  const operand = intent.kind === 'set' ? intent.value : intent.amount;
+  if (typeof operand !== 'number' || !Number.isInteger(operand)) {
+    throw new IntentError(`intent ${intent.kind} requires a finite integer`, 'INVALID');
+  }
+  if (intent.expected !== undefined && intent.expected !== descriptor.value) {
+    throw new IntentError(`expected value is stale for "${intent.resourceId}"`, 'CONFLICT');
+  }
+  const raw = intent.kind === 'set' ? intent.value : descriptor.value + intent.amount;
+  const target = clamp(raw, descriptor.min, descriptor.max);
+  const id = intent.resourceId;
+
+  if (id === 'health.superficial') return { data: { 'system.health.superficial': target } };
+  if (id === 'health.aggravated') return { data: { 'system.health.aggravated': target } };
+  if (id === 'willpower.superficial') return { data: { 'system.willpower.superficial': target } };
+  if (id === 'willpower.aggravated') return { data: { 'system.willpower.aggravated': target } };
+  if (id === 'hunger') return { data: { 'system.hunger.value': target } };
+  if (id === 'humanity.stains') return { data: { 'system.humanity.stains': target } };
+
+  const itemMatch = /^item\.(.+)\.qty$/.exec(id);
+  if (itemMatch) {
+    const itemId = itemMatch[1] as string;
+    return { itemId, data: { 'system.quantity': target } };
+  }
+
+  // A descriptor id we created but forgot to map — a programming error.
+  throw new IntentError(`resource "${id}" has no write mapping`, 'INVALID');
 }
 
 // ---------------------------------------------------------------------------
@@ -502,15 +552,8 @@ export const wod5eAdapter: SystemAdapter = {
     return buildResources(actor);
   },
 
-  buildUpdate(_actor: FoundryActorDoc, intent: ResourceIntent): never {
-    // Task 3 implements the write allow-list (health/willpower/hunger/
-    // humanity.stains) with the tri-state clamp invariant
-    // (superficial + aggravated <= track max). No test covers this stub —
-    // every intent is rejected until then.
-    throw new IntentError(
-      `wod5e buildUpdate is not implemented yet (Task 3): ${intent.resourceId}`,
-      'UNKNOWN_RESOURCE',
-    );
+  buildUpdate(actor: FoundryActorDoc, intent: ResourceIntent): FoundryUpdate {
+    return buildUpdate(actor, intent);
   },
 };
 
