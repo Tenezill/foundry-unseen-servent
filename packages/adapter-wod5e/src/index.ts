@@ -275,7 +275,7 @@ function disciplinePowerItems(actor: FoundryActorDoc): ListItem[] {
       const entry: ListItem = {
         id: item._id,
         label: item.name,
-        sub: `Level ${level} · ${disciplineLabel(disc)}`,
+        sub: disc !== '' ? `Level ${level} · ${disciplineLabel(disc)}` : `Level ${level}`,
         actionId: `pool.power.${item._id}`,
       };
       const detail = powerDetail(item);
@@ -501,7 +501,7 @@ function poolPowerActions(actor: FoundryActorDoc): ActionDescriptor[] {
       id: `pool.power.${item._id}`,
       label: item.name,
       kind: 'pool',
-      pool: { attribute: 'attr.resolve', skill: `disc.${disc}` },
+      pool: disc !== '' ? { attribute: 'attr.resolve', skill: `disc.${disc}` } : { attribute: 'attr.resolve' },
     };
   });
 }
@@ -598,7 +598,12 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
   }
   const attrKey = validateAttributeId(actor, attributeId);
 
-  const secondId = intent.skill ?? descriptor.pool?.skill;
+  // The pool sheet ALWAYS sends `attribute` — its presence means the client
+  // is fully specifying the pairing, so an omitted `skill` means "None" (no
+  // second component), not "fall back to the descriptor default". A bare
+  // intent (no attribute at all, e.g. a stat-row tap) still gets the full
+  // descriptor default pairing so "roll-just-works" keeps working.
+  const secondId = intent.attribute !== undefined ? intent.skill : (intent.skill ?? descriptor.pool?.skill);
   const second = secondId !== undefined ? validateSecondId(actor, secondId) : undefined;
 
   const sys = rec(actor.system);

@@ -78,6 +78,31 @@ describe('actions() — descriptor enumeration', () => {
     });
   });
 
+  it('MINOR #3: a power item with missing/empty discipline gets an attribute-only pool default (no dangling "disc.")', () => {
+    const minimal: FoundryActorDoc = {
+      _id: 'sparse02',
+      name: 'No Discipline',
+      type: 'vampire',
+      system: {},
+      items: [
+        {
+          _id: 'nodisc01',
+          name: 'Mystery Power',
+          type: 'power',
+          system: { level: 1, cost: 0, description: '' }, // no `discipline` field at all
+        },
+      ],
+    };
+    expect(findAction(minimal, 'pool.power.nodisc01')).toEqual({
+      id: 'pool.power.nodisc01',
+      label: 'Mystery Power',
+      kind: 'pool',
+      pool: { attribute: 'attr.resolve' }, // no `skill: 'disc.'`
+    });
+    // and it must still validate (bare intent must not throw)
+    expect(() => roll(minimal, { kind: 'pool', actionId: 'pool.power.nodisc01' })).not.toThrow();
+  });
+
   it('emits exactly one rouse descriptor', () => {
     const actions = wod5eAdapter.actions?.(marius) ?? [];
     const rouseActions = actions.filter((a) => a.kind === 'rouse');
@@ -100,26 +125,9 @@ describe('actions() — descriptor enumeration', () => {
     });
   });
 
-  it('every actionId wired onto a stat or list row (toViewModel) resolves to an emitted descriptor', () => {
-    const vm = wod5eAdapter.toViewModel(marius);
-    const actionIds = new Set((wod5eAdapter.actions?.(marius) ?? []).map((a) => a.id));
-    for (const section of vm.sections) {
-      if (section.kind === 'stats') {
-        for (const stat of section.stats) {
-          if (stat.actionId !== undefined) {
-            expect(actionIds.has(stat.actionId), `stat ${stat.id} -> ${stat.actionId}`).toBe(true);
-          }
-        }
-      }
-      if (section.kind === 'list') {
-        for (const item of section.items) {
-          if (item.actionId !== undefined) {
-            expect(actionIds.has(item.actionId), `item ${item.id} -> ${item.actionId}`).toBe(true);
-          }
-        }
-      }
-    }
-  });
+  // NOTE: the "every wired actionId resolves to a descriptor" invariant
+  // lives in adapter.test.ts (co-located with the M23 review's contract
+  // invariant test) — kept in exactly one place per review MINOR #6.
 
   it('discipline-rating stats and humanity carry no actionId (not in the pool vocab)', () => {
     const vm = wod5eAdapter.toViewModel(marius);
@@ -212,6 +220,40 @@ describe('buildAction — pool math (table-driven)', () => {
       intent: { kind: 'pool', actionId: 'pool.skill.brawl', attribute: 'attr.strength', skill: 'disc.potence' },
       formula: '3d10cs>=6 + 2d10cs>=6',
       flavor: 'Strength + Potence (5 dice, 2 hunger)',
+    },
+    {
+      // CRITICAL #1 regression: the pool sheet ALWAYS sends `attribute`; when
+      // the player picks "None" for the second component the intent omits
+      // `skill` entirely. Presence of `attribute` means the client fully
+      // specifies the pairing, so this must roll attribute-only (dexterity
+      // 2, hunger 2), NOT silently fall back to the brawl descriptor's
+      // default skill.
+      name: 'CRITICAL #1: "None" second (attribute present, no skill) on a skill descriptor -> attribute-only, no fallback to descriptor default skill',
+      actor: marius,
+      intent: { kind: 'pool', actionId: 'pool.skill.brawl', attribute: 'attr.dexterity' },
+      formula: '2d10cs>=6',
+      flavor: 'Dexterity (2 dice, 2 hunger)',
+    },
+    {
+      // Pins the "roll-just-works" fallback: a BARE pool intent (no
+      // attribute, no skill at all — e.g. a stat-row tap) still uses BOTH
+      // descriptor defaults (dexterity 2 + brawl 2 = 4 dice), so the
+      // CRITICAL #1 fix doesn't regress the no-override path.
+      name: 'bare pool intent (no attribute, no skill) -> uses BOTH descriptor defaults (roll-just-works)',
+      actor: marius,
+      intent: { kind: 'pool', actionId: 'pool.skill.brawl' },
+      formula: '2d10cs>=6 + 2d10cs>=6',
+      flavor: 'Dexterity + Brawl (4 dice, 2 hunger)',
+    },
+    {
+      // Regression: attribute present + skill explicitly present (matching
+      // the descriptor default values) still uses both — explicit skill is
+      // never dropped just because attribute is also present.
+      name: 'attribute + explicit skill present (matching defaults) -> uses both',
+      actor: marius,
+      intent: { kind: 'pool', actionId: 'pool.skill.brawl', attribute: 'attr.dexterity', skill: 'skill.brawl' },
+      formula: '2d10cs>=6 + 2d10cs>=6',
+      flavor: 'Dexterity + Brawl (4 dice, 2 hunger)',
     },
   ];
 

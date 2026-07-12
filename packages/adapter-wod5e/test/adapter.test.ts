@@ -326,6 +326,22 @@ describe('disciplines (powers) list section', () => {
     expect(lethalBody?.sub).toBe('Level 1 · Potence');
     expect(lethalBody?.detail).toBe('Your bare hands deal aggravated damage to mortals.');
   });
+
+  it('MINOR #3: a power item with missing discipline omits the dangling " · " suffix from sub', () => {
+    const minimal: FoundryActorDoc = {
+      _id: 'sparse02',
+      name: 'No Discipline',
+      type: 'vampire',
+      system: {},
+      items: [
+        { _id: 'nodisc01', name: 'Mystery Power', type: 'power', system: { level: 1, cost: 0, description: '' } },
+      ],
+    };
+    const s = wod5eAdapter.toViewModel(minimal).sections.find((x) => x.id === 'disciplines');
+    if (s?.kind !== 'list') throw new Error('disciplines must be a list section');
+    const item = s.items.find((i) => i.label === 'Mystery Power');
+    expect(item?.sub).toBe('Level 1');
+  });
 });
 
 describe('tracks section (boxTracks)', () => {
@@ -400,6 +416,55 @@ describe('resources — exact ids and dynamic bounds', () => {
 
   it('embeds the resource descriptors on the view model', () => {
     expect(wod5eAdapter.toViewModel(marius).resources).toEqual(wod5eAdapter.resources(marius));
+  });
+});
+
+describe('contract invariants — web<->adapter string contracts stay consistent', () => {
+  it('customItems/tabs/sections/tracks/pool-defaults all resolve against the captured fixture', () => {
+    const vm = wod5eAdapter.toViewModel(marius);
+
+    // non-empty customItems -> a 'gear' tab exists
+    expect((vm.customItems ?? []).length).toBeGreaterThan(0);
+    expect((vm.tabs ?? []).some((t) => t.id === 'gear')).toBe(true);
+
+    // core stats sections exist and are kind 'stats'
+    for (const id of ['attributes', 'skills', 'discipline-ratings']) {
+      const s = vm.sections.find((x) => x.id === id);
+      expect(s, id).toBeDefined();
+      expect(s?.kind).toBe('stats');
+    }
+
+    // every tab's sectionIds resolve to a real section id
+    const sectionIds = new Set(vm.sections.map((s) => s.id));
+    for (const tab of vm.tabs ?? []) {
+      for (const sid of tab.sectionIds) {
+        expect(sectionIds.has(sid), `tab ${tab.id} -> section ${sid}`).toBe(true);
+      }
+    }
+
+    // every boxTrack primary/aggravated id, and every tracks-section
+    // resourceIds entry, resolves to a descriptor id from resources()
+    const resourceIds = new Set(wod5eAdapter.resources(marius).map((r) => r.id));
+    const tracks = vm.sections.find((s) => s.id === 'tracks');
+    if (tracks?.kind !== 'tracks') throw new Error('tracks must be a tracks section');
+    for (const id of tracks.resourceIds) {
+      expect(resourceIds.has(id), `tracks.resourceIds -> ${id}`).toBe(true);
+    }
+    for (const bt of tracks.boxTracks ?? []) {
+      expect(resourceIds.has(bt.primaryId), `boxTrack ${bt.id} primaryId`).toBe(true);
+      if (bt.aggravatedId !== undefined) {
+        expect(resourceIds.has(bt.aggravatedId), `boxTrack ${bt.id} aggravatedId`).toBe(true);
+      }
+    }
+
+    // every pool-kind action descriptor's default attribute/skill validates:
+    // a bare intent must not throw, which transitively proves the descriptor
+    // defaults are valid ids.
+    const poolActions = (vm.actions ?? []).filter((a) => a.kind === 'pool');
+    expect(poolActions.length).toBeGreaterThan(0);
+    for (const action of poolActions) {
+      expect(() => wod5eAdapter.buildAction?.(marius, { kind: 'pool', actionId: action.id })).not.toThrow();
+    }
   });
 });
 

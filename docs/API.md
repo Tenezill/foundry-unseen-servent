@@ -117,9 +117,14 @@ attribute/skill dice pool: `attribute`/`skill` (both optional) override the
 descriptor's default pairing (ids match `Stat.id`, e.g. `attr.strength`,
 `skill.athletics`, `disc.<key>`), and `modifier` (optional, integer,
 `|modifier| <= 20`) folds in ad-hoc situational dice; the gateway computes
-the formula from the actor's current dot ratings and hunger. `rouse` (M23,
-wod5e) rolls a Rouse check (`1d10cs>=6`) — no player-chosen params; hunger
-increment stays manual (the app does not write it).
+the formula from the actor's current dot ratings and hunger. A bare intent
+(neither `attribute` nor `skill` given, e.g. tapping a stat/power row) uses
+the descriptor's full default pairing. Once `attribute` is present, the
+client is treated as fully specifying the pairing: omitting `skill` then
+means "no second component" (attribute-only roll) — it does **not** fall
+back to the descriptor's default skill. `rouse` (M23, wod5e) rolls a Rouse
+check (`1d10cs>=6`) — no player-chosen params; hunger increment stays
+manual (the app does not write it).
 
 Semantics (server-enforced, in this order):
 1. Actor owned by token → else `404`.

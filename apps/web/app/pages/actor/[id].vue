@@ -1009,6 +1009,14 @@ function onEndConcentration(): void {
  *  fit, so both surface their outcome as a toast instead of submitAction's
  *  showRoll path (binding contract). */
 
+/** For these wod5e `cs>=6` formulas the gateway's `result.total` IS the
+ *  success count (Task 0 finding), not a d20-style total — so once the
+ *  action response comes back we can tell the player the real outcome
+ *  instead of just repeating the pre-roll preview. */
+function successSuffix(total: number | undefined): string {
+  return total !== undefined ? ` — ${total} success${total === 1 ? '' : 'es'}` : ''
+}
+
 async function onPoolSubmit(intent: ActionIntent, preview: string): Promise<void> {
   if (offline.value || actionBusy.value || intent.kind !== 'pool') return
   actionBusy.value = intent.actionId
@@ -1018,7 +1026,7 @@ async function onPoolSubmit(intent: ActionIntent, preview: string): Promise<void
       body: intent,
     })
     applySheet(res.sheet)
-    toast.show(res.result?.flavor ?? preview)
+    toast.show(`${res.result?.flavor ?? preview}${successSuffix(res.result?.total)}`)
     poolActionId.value = null
   } catch (err) {
     const status = errorStatus(err)
@@ -1049,7 +1057,9 @@ async function onRouse(): Promise<void> {
       body: { kind: 'rouse', actionId: action.id },
     })
     applySheet(res.sheet)
-    toast.show(`${action.label} rolled — see Foundry chat. On failure: +1 Hunger (mark it on Vitals)`)
+    toast.show(
+      `${action.label} rolled${successSuffix(res.result?.total)} — see Foundry chat. On failure: +1 Hunger (mark it on Vitals)`,
+    )
   } catch (err) {
     const status = errorStatus(err)
     if (status === 401) {
