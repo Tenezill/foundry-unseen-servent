@@ -543,8 +543,10 @@ export const fakeAdapter: SystemAdapter = {
         return { endpoint: 'break-concentration' };
       default:
         // M23 kinds ('pool', 'rouse'): this fake never declares actions of
-        // these kinds, so the branch is unreachable in tests today.
-        throw new IntentError(`unsupported action kind "${String((intent as { kind: unknown }).kind)}"`, 'UNKNOWN_RESOURCE');
+        // these kinds, so the branch is unreachable in tests today. INVALID
+        // matches the dnd5e/wod5e adapter convention for "not this adapter's
+        // kind" (M23 review, deferred from Task 1).
+        throw new IntentError(`unsupported action kind "${String((intent as { kind: unknown }).kind)}"`, 'INVALID');
     }
   },
   // M23: custom item creation — a small whitelist mirroring the real

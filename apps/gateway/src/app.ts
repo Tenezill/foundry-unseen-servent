@@ -271,10 +271,29 @@ function parseActionIntent(
     case 'endconcentration':
       // Actor-scoped commands carry only {kind, actionId} — no extra fields.
       return { kind, actionId };
+    case 'pool': {
+      // M23 wod5e pool roll: attribute/skill/modifier are all optional
+      // overrides of the descriptor's default pairing — only type-check
+      // them here (shape sanity); the adapter does the deep validation
+      // (prefix shapes, known vocab, modifier range).
+      if (body.attribute !== undefined && typeof body.attribute !== 'string') return null;
+      if (body.skill !== undefined && typeof body.skill !== 'string') return null;
+      if (body.modifier !== undefined && (typeof body.modifier !== 'number' || !Number.isFinite(body.modifier))) {
+        return null;
+      }
+      return {
+        kind,
+        actionId,
+        ...(body.attribute !== undefined ? { attribute: body.attribute } : {}),
+        ...(body.skill !== undefined ? { skill: body.skill } : {}),
+        ...(body.modifier !== undefined ? { modifier: body.modifier } : {}),
+      };
+    }
+    case 'rouse':
+      // M23 wod5e rouse check: no extra fields, mirrors the actor-scoped
+      // commands above.
+      return { kind, actionId };
     default:
-      // M23 kinds ('pool', 'rouse'): no adapter declares them yet, so the
-      // gateway has no per-kind body extras to validate. Reject as an
-      // invalid intent rather than widen this switch speculatively.
       return null;
   }
 }

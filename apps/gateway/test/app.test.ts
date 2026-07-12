@@ -10,6 +10,7 @@ interface EventStream {
   destroy(): void;
 }
 import { IntentError, type SystemAdapter } from '@companion/adapter-sdk';
+import { wod5eAdapter } from '@companion/adapter-wod5e';
 import { buildApp } from '../src/app.js';
 import { sha256Hex, type Player } from '../src/players.js';
 import { createRegistry } from '../src/registry.js';
@@ -23,6 +24,7 @@ import {
   FAKE_RELAY_URL,
   memoryPlayers,
 } from './fakes.js';
+import vampireCapturedJson from '../../../packages/adapter-wod5e/test/fixtures/vampire-captured.json' with { type: 'json' };
 
 const ANNA_TOKEN = 'anna-invite-token-123';
 const BOB_TOKEN = 'bob-invite-token-456';
@@ -660,6 +662,107 @@ describe('actions', () => {
     // The roll never fires when the activation genuinely failed.
     expect(relay.rollCalls).toEqual([]);
     expect(res.body).not.toContain(FAKE_API_KEY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M23 review fix: parseActionIntent had no 'pool'/'rouse' cases, so the real
+// wod5e adapter's pool rolls and rouse checks 422'd at the gateway before
+// ever reaching buildAction. Uses the REAL wod5eAdapter (not fakeAdapter)
+// against the Task 0 captured fixture so the asserted formulas are exact,
+// not fake-adapter stand-ins.
+describe('actions (M23 wod5e) — pool/rouse intent parsing (review fix)', () => {
+  const MARIUS_UUID_ID = 'SGeXzzb4NApPhTJf';
+  const marius = (vampireCapturedJson as { data: Record<string, unknown> }).data;
+
+  function setupWod5e(): { app: FastifyInstance; relay: FakeRelay } {
+    const relay = new FakeRelay();
+    relay.entities.set(`Actor.${MARIUS_UUID_ID}`, structuredClone(marius));
+    const players: Player[] = [{ name: 'Anna', tokenHash: sha256Hex(ANNA_TOKEN), actorIds: [MARIUS_UUID_ID] }];
+    const wod5eApp = buildApp({
+      relay,
+      players: memoryPlayers(players),
+      registry: createRegistry([wod5eAdapter]),
+      defaultSystemId: 'wod5e',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+    });
+    return { app: wod5eApp, relay };
+  }
+
+  const post = (appInst: FastifyInstance, payload: unknown) =>
+    appInst.inject({
+      method: 'POST',
+      url: `/api/actors/${MARIUS_UUID_ID}/actions`,
+      headers: asAnna,
+      payload: payload as object,
+    });
+
+  it('pool by attribute -> 200, relay roll formula matches the adapter (strength 3 dice, hunger 2)', async () => {
+    const { app: wod5eApp, relay } = setupWod5e();
+    const res = await post(wod5eApp, { kind: 'pool', actionId: 'pool.attr.strength', attribute: 'attr.strength' });
+    expect(res.statusCode).toBe(200);
+    // Fixture: attributes.strength.value 3, no skill/discipline component ->
+    // dice = max(1, 3+0+0) = 3. hunger.value 2, actor.type 'vampire' ->
+    // hunger dice = min(2, 3) = 2; normal = 3 - 2 = 1 -> "1d10cs>=6 + 2d10cs>=6".
+    expect(relay.rollCalls).toEqual([
+      {
+        actorUuid: `Actor.${MARIUS_UUID_ID}`,
+        formula: '1d10cs>=6 + 2d10cs>=6',
+        flavor: 'Strength (3 dice, 2 hunger)',
+      },
+    ]);
+    await wod5eApp.close();
+  });
+
+  it('pool with skill + modifier -> 200, exact formula', async () => {
+    const { app: wod5eApp, relay } = setupWod5e();
+    // pool.skill.brawl's default pairing is attr.dexterity + skill.brawl
+    // (no override sent): dexterity.value 2 + brawl.value 2 + modifier 3 =
+    // 7 dice. hunger.value 2 -> hunger dice = min(2, 7) = 2; normal = 5 ->
+    // "5d10cs>=6 + 2d10cs>=6".
+    const res = await post(wod5eApp, { kind: 'pool', actionId: 'pool.skill.brawl', modifier: 3 });
+    expect(res.statusCode).toBe(200);
+    expect(relay.rollCalls).toEqual([
+      {
+        actorUuid: `Actor.${MARIUS_UUID_ID}`,
+        formula: '5d10cs>=6 + 2d10cs>=6',
+        flavor: 'Dexterity + Brawl (7 dice, 2 hunger)',
+      },
+    ]);
+    await wod5eApp.close();
+  });
+
+  it('rouse -> 200, relay roll formula "1d10cs>=6"', async () => {
+    const { app: wod5eApp, relay } = setupWod5e();
+    const res = await post(wod5eApp, { kind: 'rouse', actionId: 'rouse' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.rollCalls).toEqual([
+      { actorUuid: `Actor.${MARIUS_UUID_ID}`, formula: '1d10cs>=6', flavor: 'Rouse Check' },
+    ]);
+    await wod5eApp.close();
+  });
+
+  it('422 INVALID_INTENT when modifier is not a number', async () => {
+    const { app: wod5eApp, relay } = setupWod5e();
+    const res = await post(wod5eApp, {
+      kind: 'pool',
+      actionId: 'pool.attr.strength',
+      modifier: 'lots',
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('INVALID_INTENT');
+    expect(relay.rollCalls).toHaveLength(0);
+    await wod5eApp.close();
+  });
+
+  it('403 FORBIDDEN_RESOURCE for an unknown pool actionId (gateway allow-list, before buildAction)', async () => {
+    const { app: wod5eApp, relay } = setupWod5e();
+    const res = await post(wod5eApp, { kind: 'pool', actionId: 'pool.attr.nope' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('FORBIDDEN_RESOURCE');
+    expect(relay.rollCalls).toHaveLength(0);
+    await wod5eApp.close();
   });
 });
 
