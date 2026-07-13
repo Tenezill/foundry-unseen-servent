@@ -20,7 +20,7 @@ See `PLAN.md` for scope and decisions, `VERSIONS.md` for the pinned upstreams.
 | `packages/adapter-wod5e` | second supported system, Vampire: the Masquerade 5e (M23; paths pinned to wod5e 5.3.15 on Foundry v13) |
 | `packages/foundry-client` | typed wrapper over the relay REST/SSE |
 | `stack/` | Docker: Foundry + relay (+ Caddy/gateway/PWA in prod) |
-| `docs/` | `API.md`, `M0-findings.md`, `OPERATIONS.md`, captured fixtures |
+| `docs/` | `API.md`, `RELAY.md` (how the relay works), `M0-findings.md`, `OPERATIONS.md`, captured fixtures |
 
 ## Dev quickstart
 
