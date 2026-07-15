@@ -35,6 +35,8 @@ import { PlayerStoreError } from './player-store.js';
 import { LiveManager } from './live.js';
 import type { EncounterView } from './encounters.js';
 import type { AdapterRegistry } from './registry.js';
+import type { WorldHealth } from './client-id-resolver.js';
+import type { BootstrapStatusView } from './status-file.js';
 
 /** Live view of the player list; backed by FilePlayerStore in production. */
 export interface PlayersPort {
@@ -133,8 +135,13 @@ export interface GatewayDeps {
   relay: RelayPort;
   players: PlayersPort;
   registry: AdapterRegistry;
-  /** Adapter used when the relay doc carries no system id. Default "dnd5e". */
-  defaultSystemId?: string;
+  /** Adapter used when the relay doc carries no system id. Default "dnd5e".
+   *  Turnkey (RELAY_CLIENT_ID=auto): pass a provider so a systemId resolved
+   *  AFTER buildApp (server.ts's ClientIdResolver.resolvedWorld(), populated
+   *  by its bounded probe loop) is picked up per-request without rebuilding
+   *  the app — fixes a wod5e actor being served through the dnd5e adapter
+   *  when the relay doc itself carries no systemId (Task 0 findings §6-2). */
+  defaultSystemId?: string | (() => string);
   /** Poll interval for the live-update fallback. Default 3000. */
   livePollMs?: number;
   /** Hooks-stream reconnect backoff floor. Default 1000. */
@@ -160,6 +167,22 @@ export interface GatewayDeps {
   /** M23: budget per relay call in the custom-item create->give->delete
    *  chain (every relay await is bounded — Global Constraints). Default 3000. */
   customItemTimeoutMs?: number;
+  /** Turnkey: subscribe to relay identity changes (key rotated / clientId
+   *  re-resolved). On fire, buildApp restarts its relay-side streams:
+   *  LiveManager's hooks stream is aborted+reopened, and every gm-rolls SSE
+   *  connection is closed (its relay-side /rolls/subscribe aborts; browser
+   *  EventSources reconnect and re-subscribe under the new identity). The
+   *  EncounterManager's stream is restarted by server.ts, which owns it.
+   *  Returns an unsubscribe function. */
+  relayIdentityChanged?: (cb: () => void) => () => void;
+  /** Turnkey: world-resolution state merged into /healthz (client-safe — no
+   *  clientId). Absent, or returning null, omits the field. */
+  worldStatus?: () => WorldHealth | null;
+  /** Turnkey: whitelisted sidecar status.json view merged into /healthz;
+   *  null (absent/unreadable) omits the field. */
+  bootstrapStatus?: () => BootstrapStatusView | null;
+  /** Bound for /healthz's relay probe (M18 pattern). Default 3000. */
+  healthTimeoutMs?: number;
 }
 
 type ErrorCode =
@@ -326,12 +349,14 @@ function extractRoll(value: unknown): ActionRollResult | null {
 }
 
 export function buildApp(deps: GatewayDeps): FastifyInstance {
-  const defaultSystemId = deps.defaultSystemId ?? 'dnd5e';
+  const resolveDefaultSystemId = (): string =>
+    typeof deps.defaultSystemId === 'function' ? deps.defaultSystemId() : (deps.defaultSystemId ?? 'dnd5e');
   const pingMs = deps.pingMs ?? 25_000;
   const livePollMs = deps.livePollMs ?? 3_000;
   const adminNameTimeoutMs = deps.adminNameTimeoutMs ?? 3_000;
   const encounterFetchTimeoutMs = deps.encounterFetchTimeoutMs ?? 3_000;
   const customItemTimeoutMs = deps.customItemTimeoutMs ?? 3_000;
+  const healthTimeoutMs = deps.healthTimeoutMs ?? 3_000;
   const limiter = new SlidingWindowLimiter(deps.rateLimitMax ?? 30, deps.rateLimitWindowMs ?? 60_000);
   const { relay, players, registry } = deps;
 
@@ -340,7 +365,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   // ---- helpers ------------------------------------------------------------
 
   const systemIdOf = (doc: Record<string, unknown>): string =>
-    typeof doc.systemId === 'string' && doc.systemId !== '' ? doc.systemId : defaultSystemId;
+    typeof doc.systemId === 'string' && doc.systemId !== '' ? doc.systemId : resolveDefaultSystemId();
 
   const adapterFor = (doc: Record<string, unknown>): SystemAdapter | undefined => registry.get(systemIdOf(doc));
 
@@ -384,6 +409,20 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
 
   // Open SSE connections' cleanup functions, run on app close as a safety net.
   const sseCleanups = new Set<() => void>();
+
+  // gm-rolls SSE connections hold a relay-side /rolls/subscribe opened with
+  // the connection-time identity; tracked separately so an identity change
+  // can close exactly these (see relayIdentityChanged).
+  const rollStreamCleanups = new Set<() => void>();
+
+  if (deps.relayIdentityChanged !== undefined) {
+    const unsubscribe = deps.relayIdentityChanged(() => {
+      app.log.warn({}, 'relay identity changed; restarting relay-side streams');
+      live.restartStream();
+      for (const cleanup of [...rollStreamCleanups]) cleanup();
+    });
+    app.addHook('onClose', async () => unsubscribe());
+  }
 
   const extractToken = (req: FastifyRequest, allowQueryToken: boolean): string | null => {
     const header = req.headers.authorization;
@@ -457,14 +496,27 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   // ---- routes --------------------------------------------------------------
 
   app.get('/healthz', async (_req, reply) => {
+    // Bounded probe: the relay is known to stall requests (docs/RELAY.md) —
+    // the health surface must never hang with it.
     let relayState: 'connected' | 'disconnected' = 'connected';
     try {
-      await relay.listClients();
+      const ok = await Promise.race([
+        relay.listClients().then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), healthTimeoutMs)),
+      ]);
+      if (!ok) relayState = 'disconnected';
     } catch (err) {
       app.log.warn({ err }, 'relay health check failed');
       relayState = 'disconnected';
     }
-    return reply.code(200).send({ ok: true, relay: relayState });
+    const world = deps.worldStatus?.() ?? null;
+    const bootstrap = deps.bootstrapStatus?.() ?? null;
+    return reply.code(200).send({
+      ok: true,
+      relay: relayState,
+      ...(world !== null ? { world } : {}),
+      ...(bootstrap !== null ? { bootstrap } : {}),
+    });
   });
 
   app.get('/api/me', { preHandler: auth(false) }, async (req, reply) => {
@@ -633,10 +685,12 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       const cleanup = (): void => {
         if (done) return;
         done = true;
+        rollStreamCleanups.delete(cleanup);
         if (ping) clearInterval(ping);
         ac.abort();
         rawRes.end();
       };
+      rollStreamCleanups.add(cleanup);
       const send = (event: string, data: string): void => {
         if (done) return;
         try {

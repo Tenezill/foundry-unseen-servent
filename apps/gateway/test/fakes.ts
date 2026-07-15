@@ -60,8 +60,12 @@ export class FakeRelay implements RelayPort {
    */
   crossWire: { when: string; returnUuidInstead: string } | null = null;
   listClientsError = false;
+  /** When true, listClients never settles (turnkey: exercises the bounded
+   *  /healthz probe and the resolver's probe timeout). */
+  hangListClients = false;
 
   async listClients(): Promise<unknown> {
+    if (this.hangListClients) return new Promise(() => undefined);
     if (this.listClientsError) {
       throw new Error(`relay ${FAKE_RELAY_URL} unreachable (key ${FAKE_API_KEY})`);
     }

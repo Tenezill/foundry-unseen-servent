@@ -408,3 +408,45 @@ describe('FoundryRelayClient.deleteEntity()', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('FoundryRelayClient — provider-based credentials (turnkey)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('re-reads apiKey and clientId providers on every request', async () => {
+    let apiKey = 'key-A';
+    let clientId = 'fvtt_A';
+    const client = new FoundryRelayClient({
+      baseUrl: 'http://relay:3010',
+      apiKey: () => apiKey,
+      clientId: () => clientId,
+    });
+    const ok = () => ({ ok: true, status: 200, json: vi.fn().mockResolvedValue({ total: 0, clients: [] }), text: vi.fn() });
+    mockFetch.mockResolvedValueOnce(ok()).mockResolvedValueOnce(ok());
+
+    await client.listClients();
+    apiKey = 'key-B';
+    clientId = 'fvtt_B';
+    await client.listClients();
+
+    const [url1, init1] = mockFetch.mock.calls[0] as [string, Record<string, unknown>];
+    const [url2, init2] = mockFetch.mock.calls[1] as [string, Record<string, unknown>];
+    expect((init1.headers as Record<string, string>)['x-api-key']).toBe('key-A');
+    expect((init2.headers as Record<string, string>)['x-api-key']).toBe('key-B');
+    expect(url1).toContain('clientId=fvtt_A');
+    expect(url2).toContain('clientId=fvtt_B');
+  });
+
+  it('an unresolved clientId provider ("") still issues the request with an empty param', async () => {
+    const client = new FoundryRelayClient({
+      baseUrl: 'http://relay:3010',
+      apiKey: 'k',
+      clientId: () => '',
+    });
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: vi.fn().mockResolvedValue({ total: 0, clients: [] }), text: vi.fn() });
+    await client.listClients();
+    const [url] = mockFetch.mock.calls[0] as [string];
+    expect(url).toContain('clientId=');
+  });
+});

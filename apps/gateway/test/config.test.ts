@@ -22,6 +22,30 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...base, PORT: 'zero' })).toThrow(/PORT/);
     expect(() => loadConfig({ ...base, PORT: '-1' })).toThrow(/PORT/);
   });
+
+  it('accepts RELAY_API_KEY_FILE instead of RELAY_API_KEY', () => {
+    const cfg = loadConfig({ ...base, RELAY_API_KEY: undefined, RELAY_API_KEY_FILE: '/run/companion/relay.env' });
+    expect(cfg.relayApiKey).toBeUndefined();
+    expect(cfg.relayApiKeyFile).toBe('/run/companion/relay.env');
+    expect(cfg.keyBootWaitMs).toBe(15000);
+  });
+
+  it('explicit RELAY_API_KEY wins when both are set (back-compat)', () => {
+    const cfg = loadConfig({ ...base, RELAY_API_KEY_FILE: '/run/companion/relay.env' });
+    expect(cfg.relayApiKey).toBe('k');
+    expect(cfg.relayApiKeyFile).toBeUndefined();
+  });
+
+  it('throws when neither key source is configured', () => {
+    expect(() => loadConfig({ ...base, RELAY_API_KEY: undefined })).toThrow(/RELAY_API_KEY/);
+  });
+
+  it('normalizes RELAY_CLIENT_ID: unset/empty/auto -> "auto"; explicit id kept', () => {
+    expect(loadConfig({ ...base, RELAY_CLIENT_ID: undefined }).relayClientId).toBe('auto');
+    expect(loadConfig({ ...base, RELAY_CLIENT_ID: '' }).relayClientId).toBe('auto');
+    expect(loadConfig({ ...base, RELAY_CLIENT_ID: 'auto' }).relayClientId).toBe('auto');
+    expect(loadConfig({ ...base }).relayClientId).toBe('fvtt_x'); // back-compat
+  });
 });
 
 describe('redactUrlToken', () => {

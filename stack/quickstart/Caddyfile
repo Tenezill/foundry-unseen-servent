@@ -1,0 +1,18 @@
+# Quickstart default: plain HTTP — the PWA and its /api, same-origin.
+# NOTE: over plain HTTP on a LAN IP the PWA loses installability/offline
+# (secure-context requirement); remote players use the TLS profile instead.
+
+:80 {
+	handle /api/* {
+		reverse_proxy gateway:8090
+	}
+	handle /healthz {
+		reverse_proxy gateway:8090
+	}
+	handle {
+		root * /srv/app
+		try_files {path} /index.html
+		file_server
+	}
+	encode gzip
+}

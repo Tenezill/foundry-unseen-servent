@@ -8,10 +8,14 @@
 export interface RelayConfig {
   /** e.g. http://relay:3010 — never exposed to clients */
   baseUrl: string;
-  /** scoped API key (entity:read, entity:write, search, events:subscribe, clients:read) */
-  apiKey: string;
-  /** Foundry world client id, e.g. fvtt_3a9f1c2e4b7d8e0f */
-  clientId: string;
+  /** scoped API key (entity:read, entity:write, search, events:subscribe,
+   *  clients:read, …). A function is re-read on every request so a rotated
+   *  key takes effect without a restart (turnkey stack). */
+  apiKey: string | (() => string);
+  /** Foundry world client id, e.g. fvtt_3a9f1c2e4b7d8e0f. A function is
+   *  re-read on every request; it may return '' while unresolved — the
+   *  request then fails fast relay-side and the caller degrades. */
+  clientId: string | (() => string);
   /** Optional structured-log sink for defensive warnings (e.g. cross-wired
    *  GET /get responses — see getEntity). Silent no-op if omitted. */
   log?: { warn(obj: object, msg: string): void };
@@ -117,9 +121,19 @@ export interface RelayEncounter {
 export class FoundryRelayClient {
   constructor(private readonly cfg: RelayConfig) {}
 
+  private apiKeyValue(): string {
+    const k = this.cfg.apiKey;
+    return typeof k === 'function' ? k() : k;
+  }
+
+  private clientIdValue(): string {
+    const c = this.cfg.clientId;
+    return typeof c === 'function' ? c() : c;
+  }
+
   private url(path: string, params: Record<string, string | number | boolean | undefined> = {}): string {
     const u = new URL(path, this.cfg.baseUrl);
-    u.searchParams.set('clientId', this.cfg.clientId);
+    u.searchParams.set('clientId', this.clientIdValue());
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined) u.searchParams.set(k, String(v));
     }
@@ -127,7 +141,7 @@ export class FoundryRelayClient {
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
-    return { 'x-api-key': this.cfg.apiKey, ...extra };
+    return { 'x-api-key': this.apiKeyValue(), ...extra };
   }
 
   private async request<T>(method: string, path: string, params: Record<string, string | number | boolean | undefined> = {}, body?: unknown): Promise<T> {

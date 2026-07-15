@@ -190,6 +190,17 @@ export class LiveManager {
     this.stopStreamIfIdle();
   }
 
+  /** Abort + re-open the shared hooks stream — the relay identity (api key
+   *  or clientId) changed, so the open stream belongs to the old identity.
+   *  No-op when idle: the next attach opens a fresh stream anyway. */
+  restartStream(): void {
+    if (this.streamAc === null) return;
+    this.streamAc.abort();
+    this.streamAc = null;
+    this.streamUp = false;
+    this.ensureStream();
+  }
+
   // ---- shared stream lifecycle ---------------------------------------------
 
   private ensureStream(): void {

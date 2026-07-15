@@ -1,0 +1,130 @@
+name: unseen-servant-quickstart
+
+# Turnkey stack (docs/HOSTING.md Part C). One command after `make setup`:
+#   docker compose up -d --build     (or: podman compose up -d --build)
+# Self-wiring: the bootstrap sidecar mints the relay key at runtime and hands
+# it to the gateway over the shared companion-runtime bind mount; the gateway
+# resolves the world clientId automatically (RELAY_CLIENT_ID=auto). No
+# container-runtime socket anywhere; docker + rootless podman parity.
+# Secrets: stack/quickstart/secrets/* (written by `make setup`, mode 0600) —
+# mounted files or env_file format:raw, never compose-interpolated.
+#
+# State lives in HOST BIND-MOUNT folders next to this file (./foundry_data,
+# ./relay-data, ./gateway-data, ./caddy-data, ./companion-runtime), not named
+# volumes — a first iteration of this stack lost state across restarts when
+# an anonymous/named volume was recreated out from under it. A host bind
+# mount also sidesteps the named-volume first-mount ownership race, but the
+# bootstrap sidecar's chown-then-drop-to-uid-3000 entrypoint (Task 7) is kept
+# regardless, for rootless-podman UID safety on ./companion-runtime.
+#
+# Surviving a reboot: felddy only auto-launches a world when FOUNDRY_WORLD is
+# preset, which a bring-your-own-world stack cannot do ahead of time — see
+# docs/HOSTING.md Part C for the one-time "make it survive restart" step
+# after your first world is created.
+
+services:
+  foundry:
+    image: felddy/foundryvtt:13.351.0
+    # License signature binds to the hostname — never change (HOSTING.md A2).
+    hostname: foundry
+    environment:
+      - FOUNDRY_MINIFY_STATIC_FILES=true
+      # TLS profile knobs (non-secret, from .env; empty = direct HTTP —
+      # Task 0 findings §2 verified empty FOUNDRY_PROXY_PORT is treated as unset):
+      - FOUNDRY_PROXY_SSL=${FOUNDRY_PROXY_SSL:-false}
+      - FOUNDRY_PROXY_PORT=${FOUNDRY_PROXY_PORT:-}
+    volumes:
+      - ./foundry_data:/data
+      # felddy credentials file (Task 0 findings §2): license creds + admin
+      # key live here, NOT in process env.
+      - ./secrets/foundry-config.json:/run/secrets/config.json:ro
+    ports:
+      - "${HOST_PORT_FOUNDRY:-30000}:30000"
+    restart: unless-stopped
+
+  relay:
+    image: threehats/foundryvtt-rest-api-relay:3.4.1
+    environment:
+      - APP_ENV=production
+      - PORT=3010
+      - DB_TYPE=sqlite
+    volumes:
+      - ./relay-data:/app/data
+    ports:
+      # Published so the operator's GM browser (module WS) can reach it —
+      # wsRelayUrl guidance per Task 0 findings §5.
+      - "${HOST_PORT_RELAY:-3010}:3010"
+    restart: unless-stopped
+
+  bootstrap:
+    build:
+      context: ../..
+      dockerfile: apps/bootstrap/Dockerfile
+    env_file:
+      # raw: secret values must survive verbatim (no $-interpolation)
+      - path: ./secrets/bootstrap.env
+        format: raw
+    environment:
+      - RELAY_URL=http://relay:3010
+      - FOUNDRY_URL=http://foundry:30000
+      - RUNTIME_DIR=/run/companion
+      - FOUNDRY_DATA_DIR=/foundry-data
+      - STATUS_PORT=8321
+    volumes:
+      - ./companion-runtime:/run/companion
+      # Same host folder as `foundry`'s /data, mounted here so the sidecar can
+      # pre-place the foundry-rest-api module into Data/modules once felddy
+      # has initialized it.
+      - ./foundry_data:/foundry-data
+    ports:
+      - "${HOST_PORT_STATUS:-8321}:8321"
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: apps/gateway/Dockerfile
+    env_file:
+      - path: ./secrets/gateway.env
+        format: raw
+    environment:
+      - PORT=8090
+      - RELAY_URL=http://relay:3010
+      - RELAY_API_KEY_FILE=/run/companion/relay.env
+      - RELAY_CLIENT_ID=auto
+      - STATUS_FILE=/run/companion/status.json
+      - PLAYERS_FILE=/data/players.yaml
+    volumes:
+      - ./gateway-data:/data
+      - ./companion-runtime:/run/companion:ro
+    expose:
+      - "8090"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-data:/data
+    ports:
+      # 8080 by default: rootless podman cannot bind <1024 (Pitfall 5).
+      - "${HOST_PORT_WEB:-8080}:80"
+    restart: unless-stopped
+
+  # Opt-in TLS on the operator's domain: `make setup` writes Caddyfile.tls and
+  # sets COMPOSE_PROFILES=tls in .env. Binding 80/443 rootless needs
+  # `sysctl net.ipv4.ip_unprivileged_port_start=80` (docs Part C).
+  web-tls:
+    profiles: ["tls"]
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    volumes:
+      - ./Caddyfile.tls:/etc/caddy/Caddyfile:ro
+      - ./caddy-data:/data
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
