@@ -140,4 +140,40 @@ describe('ClientIdResolver — auto mode', () => {
     await resolver.probeOnce();
     expect(resolver.resolvedWorld()).toEqual({ worldId: 'w1', worldTitle: 'My World', systemId: 'wod5e' });
   });
+
+  it('same clientId re-probed: refreshes systemId/worldTitle without re-emitting', async () => {
+    let clients = [info('fvtt_a', 'w1', true, 'My World', 'dnd5e')];
+    const { resolver, changes } = makeResolver({ clients: async () => clients });
+    await resolver.probeOnce();
+    clients = [info('fvtt_a', 'w1', true, 'Renamed World', 'wod5e')]; // same clientId+worldId, changed metadata
+    await resolver.probeOnce();
+    expect(resolver.resolvedWorld()).toEqual({ worldId: 'w1', worldTitle: 'Renamed World', systemId: 'wod5e' });
+    expect(changes).toEqual(['fvtt_a']); // no re-emit: current() (clientId) did not change
+  });
+
+  it('sticky after offline: resolvedWorld() still returns the last-resolved world', async () => {
+    let clients = [info('fvtt_a', 'w1', true, 'World One', 'dnd5e')];
+    const { resolver } = makeResolver({ clients: async () => clients });
+    await resolver.probeOnce();
+    clients = [info('fvtt_x', 'wOTHER', true, 'Impostor')]; // w1 gone, another world online
+    await resolver.probeOnce();
+    expect(resolver.resolvedWorld()).toEqual({ worldId: 'w1', worldTitle: 'World One', systemId: 'dnd5e' });
+  });
+
+  it('resolvedWorld() is null before any successful resolution', async () => {
+    const { resolver } = makeResolver({ clients: async () => [info('fvtt_a', 'w1', false)] });
+    await resolver.probeOnce();
+    expect(resolver.resolvedWorld()).toBeNull();
+  });
+});
+
+describe('ClientIdResolver — resolvedWorld() in explicit mode', () => {
+  it('returns null: explicit mode never resolves a world', async () => {
+    const { resolver } = makeResolver({
+      mode: 'fvtt_explicit',
+      clients: async () => [info('fvtt_a', 'w1', true, 'My World', 'wod5e')],
+    });
+    await resolver.probeOnce();
+    expect(resolver.resolvedWorld()).toBeNull();
+  });
 });
