@@ -1,14 +1,20 @@
 # Hosting & connecting Foundry's Unseen Servant
 
-Two deployment shapes, described end to end:
+Three deployment shapes, described end to end:
 
 - **A. Local** — everything on one machine (your PC), for testing or a LAN game.
 - **B. Online** — one VPS with a real domain and HTTPS, for remote play.
+- **C. Turnkey** — one command (`make setup`) on a server with docker or
+  rootless podman; the stack self-wires (mints its own relay key, resolves
+  the world automatically) so there's no manual relay pairing or key
+  juggling in the happy path. See Part C below.
 
-Both use the same four pieces: **Foundry** (the game), the **relay**
-(ThreeHats bridge), the **gateway** (our BFF), and the **web** PWA. The only
-hard external dependency is a foundryvtt.com account + license key (to download
-Foundry) and, for online, a domain name.
+All three use the same four pieces: **Foundry** (the game), the **relay**
+(ThreeHats bridge), the **gateway** (our BFF), and the **web** PWA. Part C adds
+a fifth, small piece — a **bootstrap sidecar** — that does the relay
+account/key/pairing work for you. The only hard external dependency is a
+foundryvtt.com account + license key (to download Foundry) and, for online (B)
+or remote players (C's TLS profile), a domain name.
 
 Pinned versions (see `VERSIONS.md`): Foundry `felddy/foundryvtt:13.351.0`,
 dnd5e `5.3.3`, module `foundry-rest-api 3.4.1`,
@@ -27,7 +33,9 @@ headless GM browser (Part B).
 
 ---
 
-## Prerequisites (both)
+## Prerequisites (Parts A & B)
+
+Part C (turnkey) has its own, shorter prerequisite list — see C1.
 
 - Docker Desktop (or Docker Engine + Compose v2).
 - Node 22 + `pnpm` (`corepack enable && corepack prepare pnpm@11 --activate`)
@@ -355,6 +363,174 @@ Same as A9: the admin console at `https://app.<domain>/admin`, or
 `node scripts/make-invite.mjs …` + paste the YAML into
 `stack/gateway-data/players.yaml` (hot-reloaded, no restart). Send each
 player their `https://app.<domain>/join#<token>` link.
+
+---
+
+## Part C — Turnkey quickstart (docker or rootless podman)
+
+Uses `stack/quickstart/docker-compose.yml`, a separate compose file from A/B
+(don't run it on the same host as `stack/docker-compose.prod.yml` without
+changing its ports — see C1). One `make setup` on a server: no manual relay
+pairing, no key juggling. A **bootstrap sidecar** (`apps/bootstrap`) registers
+the relay account, mints the gateway's API key at runtime and hands it to the
+gateway over a shared volume (the gateway hot-reloads it and resolves the
+world's `clientId` itself — `RELAY_CLIENT_ID=auto`), pre-installs the REST
+module into the Foundry data dir, and keeps your world online. You bring your
+own world — no demo content ships.
+
+### C1. Prerequisites
+
+- A server (Ubuntu or similar) with **docker + Compose v2** OR **rootless
+  podman ≥4** — either is auto-detected by `make setup`.
+- **Node 22** to run `make setup` and `scripts/make-invite.mjs` (plain Node
+  scripts on the host, no `pnpm` needed for this path — `compose ... --build`
+  builds the `bootstrap`, `gateway` and `web` images; `foundry` and `relay`
+  are pulled, not built).
+- A foundryvtt.com account with a **v13 license**. Nothing else.
+- The repo checked out.
+- Don't run this next to the A/B dev/prod stack on the same host without
+  changing the `HOST_PORT_*` variables in `stack/quickstart/.env` first —
+  the defaults (30000, 3010, 8080, 8321) collide with A/B's.
+- **Rootless podman:** the default web port is **8080**, not 80 (rootless
+  podman can't bind ports below 1024). If you opt into the TLS profile (C5),
+  which needs 80/443, first run
+  `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` on the host.
+
+### C2. Setup
+
+```bash
+make setup
+```
+
+(`Makefile` just runs `node scripts/setup-quickstart.mjs`.) It prompts for the
+minimum: your foundry.com username/password, license key (Enter = fetch it
+from the account), and — only if you want HTTPS — "Enable HTTPS on your own
+domain? [y/N]", then the app domain, the Foundry domain, and an email for
+Let's Encrypt. Everything else is **generated** and printed **once**:
+
+- the Foundry **admin key** (for the Foundry setup screen),
+- the **Gamemaster password** (set it on the Gamemaster user in your world),
+- the relay account password (account email is fixed:
+  `bootstrap@companion.local`),
+- the app **admin console password** (`/admin`, for invites).
+
+These are written to `stack/quickstart/secrets/*.env` and
+`secrets/foundry-config.json` (mode `0600`) — nothing else is typed, and
+nothing else needs editing. `make setup` finishes by auto-detecting your
+runtime and running `docker compose up -d --build` (or `podman compose` /
+`podman-compose`) for you.
+
+Re-running `make setup` is safe: existing secrets are kept and never
+re-shown. `make setup-reset` deletes the generated `.env`, `Caddyfile.tls` and
+`secrets/*` (after a y/N confirmation) so you can start over — the bind-mount
+data folders (C4) are untouched.
+
+### C3. First run — bring your own world
+
+Watch the status page at `http://<server>:8321` — it tells you which phase
+the sidecar is in and what to do next (see C5 for the phase list). Then, on
+`http://<server>:30000` (or `https://<vtt-domain>` if you set up TLS):
+
+1. Accept the EULA (still a one-time manual UI step even with the
+   credentials file — Foundry doesn't expose an API for it) and enter the
+   admin key `make setup` printed.
+2. Install your game system, **Create World**, and join it as **Gamemaster**.
+3. In User Management, set the **Gamemaster** user's password to the
+   generated Gamemaster password from C2.
+4. Enable the **Foundry REST API** module (Manage Modules) — the sidecar
+   already placed it in `Data/modules` for you, so there's nothing to
+   download. Then, in the module's settings, set **WebSocket Relay URL** to
+   `ws://<server-LAN-IP>:3010` — **use the LAN IP of the server, not
+   `localhost`**, unless the browser you're doing this from is running on
+   the server itself (the module runs inside whichever browser has the
+   world open). The module appends `/relay` itself, so
+   `ws://<ip>:3010` and `ws://<ip>:3010/relay` both work.
+5. Launch (or stay in) the world.
+
+From here the sidecar takes over. **Current default** (`HEADLESS_SELF_PAIR =
+false` — a virgin, never-paired world could not be verified to self-pair
+headlessly in this environment; see the Task 0 findings §1): the status page
+switches to **needs-pairing** and asks for a **one-time browser pairing** —
+open the REST API Connection dialog in the world (as GM), click **Pair**, then
+visit `http://<server>:3010/pair/<CODE>` yourself and approve it with the
+relay account (`bootstrap@companion.local` + the password from C2). After
+that one-time step (and automatically, if `HEADLESS_SELF_PAIR` is later
+verified and flipped to `true` on your host — see `docs/OPERATIONS.md`), the
+sidecar's converge loop keeps re-establishing the relay session on its own —
+no browser tab needs to stay open.
+
+If the status page shows **gm-login-failed**: the Gamemaster user's password
+in the world doesn't match `FOUNDRY_GM_PASSWORD` in
+`stack/quickstart/secrets/bootstrap.env` — redo step 3 above.
+
+### C4. Survive a restart (read this before you reboot)
+
+All state lives in **host bind-mount folders** next to
+`stack/quickstart/docker-compose.yml`: `./foundry_data`, `./relay-data`,
+`./gateway-data`, `./caddy-data`, `./companion-runtime`. Those, plus every
+service's `restart: unless-stopped`, mean the containers themselves come back
+after a reboot — **but Foundry does not relaunch your world by itself.**
+
+felddy's Foundry image only auto-launches a world at boot when
+`foundry_world` (or `FOUNDRY_WORLD`) is set — and the quickstart can't
+pre-set it, because there's no world before you create one. The sidecar's
+admin-API auto-relaunch is deliberately off by default (unverified —
+`ADMIN_RELAUNCH = false` in `apps/bootstrap/src/foundry-admin.ts`; see the
+Task 0 findings §2), so **without the step below, a reboot leaves Foundry at
+the setup screen and the sidecar has no running world to bring online.**
+
+Do this once, after you've created your world (C3):
+
+- Add `"foundry_world": "<your-world-id>"` to
+  `stack/quickstart/secrets/foundry-config.json` (the world id/folder name
+  under `Data/worlds/`), then restart the `foundry` container
+  (`docker compose restart foundry` from `stack/quickstart/` — it's a
+  bind-mounted file, so a restart re-reads it; no rebuild needed) so it
+  picks up the change.
+
+With that set, the stack survives a reboot end to end: Foundry relaunches the
+world, the sidecar's converge loop re-establishes the relay session (or, if
+still on the pairing fallback, the once-paired browser connection tokens
+still work once you reopen a GM tab), and the gateway re-resolves the
+`clientId` automatically.
+
+### C5. Status page and health
+
+- `http://<server>:8321` — read-only, LAN-bound, refreshes itself every 5s.
+  Never shows secrets. Phases (`apps/bootstrap/src/status.ts`): `starting` →
+  `waiting-relay` → `provisioning-account` → `minting-key` → `key-ready` →
+  `placing-module` → **`waiting-world`** (open Foundry and follow C3) →
+  `starting-session` → **`online`**, with **`gm-login-failed`** and
+  **`needs-pairing`** as the two "operator action needed" side branches, and
+  `error` for anything else (retried automatically).
+- The gateway's `GET /healthz` merges the same phase/detail (whitelisted —
+  never the relay key or `clientId`) alongside its own relay-reachability
+  probe, so you can check status from one place even without opening the
+  status page.
+
+### C6. Invite players
+
+Same tooling as A9/B6, unchanged: the admin console at
+`http://<server>:8080/admin` (or `https://app.<domain>/admin` with TLS), log
+in with the admin password from C2, **New player**. Or script it:
+`node scripts/make-invite.mjs <name> <actorId…>` and paste the printed YAML
+into `stack/quickstart/gateway-data/players.yaml` (hot-reloaded). Players
+open `https://app.<domain>/join#<token>` (TLS) or
+`http://<server>:8080/join#<token>` (plain HTTP).
+
+### C7. HTTPS for remote players (opt-in)
+
+Answer "y" to the HTTPS prompt during `make setup` (or `make setup-reset` and
+run it again). Point both domains' DNS A-records at the server first; `make
+setup` writes `stack/quickstart/Caddyfile.tls` from your answers and sets
+`COMPOSE_PROFILES=tls` in `.env`, which starts an extra `web-tls` service
+(Caddy with automatic Let's Encrypt certs) on 80/443 **alongside** the plain
+`web` service on 8080 — the plain-HTTP port stays up too (handy for LAN play
+while remote players use the domain). Rootless podman needs the `sysctl` from
+C1 to bind 80/443. Note: over plain HTTP on a LAN IP the PWA loses
+installability/offline support (browsers require a secure context for that)
+— this only affects the plain-HTTP path; remote players should always be
+given the TLS domain link.
 
 ---
 
