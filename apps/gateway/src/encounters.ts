@@ -135,6 +135,17 @@ export class EncounterManager {
     this.loopAc = null;
   }
 
+  /** Abort + restart the hooks loop and re-seed — the relay identity (api
+   *  key or clientId) changed, so both the open stream and any cached combat
+   *  may belong to the wrong identity. No-op before start()/after stop(). */
+  restartStream(): void {
+    if (this.loopAc === null) return;
+    this.loopAc.abort();
+    this.loopAc = new AbortController();
+    void this.reseed();
+    void this.subscribeLoop(this.loopAc);
+  }
+
   isActive(): boolean {
     // Task 0: the doc's `active` flag is false even mid-combat for tokenless
     // combats — key on round instead (Global Constraints).
