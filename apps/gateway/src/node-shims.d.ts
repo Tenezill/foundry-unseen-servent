@@ -24,6 +24,11 @@ declare module 'node:fs' {
     path: string,
     listener: (event: string, filename: string | null) => void,
   ): FSWatcher;
+  export function mkdtempSync(prefix: string): string;
+  export function mkdirSync(path: string, opts?: { recursive?: boolean }): void;
+  export function rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void;
+  export function renameSync(oldPath: string, newPath: string): void;
+  export function writeFileSync(path: string, data: string, encoding: 'utf8'): void;
 }
 
 declare module 'node:fs/promises' {

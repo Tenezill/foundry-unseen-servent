@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   };
   const relay = new FoundryRelayClient({
     baseUrl: cfg.relayUrl,
-    apiKey: cfg.relayApiKey,
+    apiKey: cfg.relayApiKey ?? '',
     clientId: cfg.relayClientId,
     log: { warn: (obj, msg) => logRef.warn(obj, msg) },
   });
