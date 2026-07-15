@@ -1,0 +1,194 @@
+#!/usr/bin/env node
+/**
+ * Turnkey quickstart setup (spec Phase 1, host-side by design: writing files
+ * and running `compose up` from the host needs no runtime socket and no
+ * restart choreography). Prompts for the MINIMUM (foundry.com credentials;
+ * optionally TLS domains), GENERATES everything else (base64url — symbol-
+ * safe by construction), writes stack/quickstart config + secret files
+ * (0600), prints the generated secrets ONCE, and runs compose up.
+ * Idempotent: existing files are kept (secrets never re-echoed); --reset
+ * wipes generated files (volumes untouched); --no-up skips the compose run.
+ */
+import { randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
+import { spawnSync } from 'node:child_process';
+import { networkInterfaces } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const QDIR = join(REPO_ROOT, 'stack', 'quickstart');
+const SECRETS = join(QDIR, 'secrets');
+
+export function generateSecret(bytes = 18) {
+  return randomBytes(bytes).toString('base64url');
+}
+
+export function buildFoundryConfigJson({ username, password, licenseKey, adminKey }) {
+  // Key names per Task 0 findings §2 (felddy 13.351.0 secrets file).
+  const cfg = { foundry_username: username, foundry_password: password };
+  if (licenseKey !== '') cfg.foundry_license_key = licenseKey;
+  cfg.foundry_admin_key = adminKey;
+  return JSON.stringify(cfg, null, 2) + '\n';
+}
+
+export function buildBootstrapEnv({ relayEmail, relayPassword, gmUser, gmPassword, adminKey }) {
+  return (
+    `RELAY_ACCOUNT_EMAIL=${relayEmail}\n` +
+    `RELAY_ACCOUNT_PASSWORD=${relayPassword}\n` +
+    `FOUNDRY_GM_USER=${gmUser}\n` +
+    `FOUNDRY_GM_PASSWORD=${gmPassword}\n` +
+    `FOUNDRY_ADMIN_KEY=${adminKey}\n`
+  );
+}
+
+export function buildGatewayEnv({ adminPassword }) {
+  return `ADMIN_PASSWORD=${adminPassword}\n`;
+}
+
+export function buildDotEnv({ tls }) {
+  const lines = ['HOST_PORT_WEB=8080', 'HOST_PORT_FOUNDRY=30000', 'HOST_PORT_RELAY=3010', 'HOST_PORT_STATUS=8321'];
+  if (tls) lines.push('COMPOSE_PROFILES=tls', 'FOUNDRY_PROXY_SSL=true', 'FOUNDRY_PROXY_PORT=443');
+  return lines.join('\n') + '\n';
+}
+
+export function buildTlsCaddyfile({ domainApp, domainVtt, acmeEmail }) {
+  const template = readFileSync(join(QDIR, 'Caddyfile.tls.example'), 'utf8');
+  return template
+    .replaceAll('{{DOMAIN_APP}}', domainApp)
+    .replaceAll('{{DOMAIN_VTT}}', domainVtt)
+    .replaceAll('{{ACME_EMAIL}}', acmeEmail);
+}
+
+export function detectComposeCommand(run = (cmd, args) => spawnSync(cmd, args, { stdio: 'ignore' })) {
+  if (run('docker', ['compose', 'version']).status === 0) return ['docker', 'compose'];
+  if (run('podman', ['compose', 'version']).status === 0) return ['podman', 'compose'];
+  if (run('podman-compose', ['version']).status === 0) return ['podman-compose'];
+  return null;
+}
+
+function lanIp() {
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family === 'IPv4' && !a.internal) return a.address;
+    }
+  }
+  return '<this-host-ip>';
+}
+
+function writeSecretIfAbsent(path, content) {
+  if (existsSync(path)) return false;
+  writeFileSync(path, content, { encoding: 'utf8', mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    /* windows dev box */
+  }
+  return true;
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    if (args.includes('--reset')) {
+      const sure = (await rl.question('Delete generated quickstart config + secrets (volumes untouched)? [y/N] ')).trim();
+      if (sure.toLowerCase() !== 'y') return;
+      for (const f of ['.env', 'Caddyfile.tls']) rmSync(join(QDIR, f), { force: true });
+      if (existsSync(SECRETS)) {
+        for (const f of ['foundry-config.json', 'bootstrap.env', 'gateway.env']) rmSync(join(SECRETS, f), { force: true });
+      }
+      console.log('reset done — run `make setup` to start over.');
+      return;
+    }
+
+    mkdirSync(SECRETS, { recursive: true });
+    try {
+      chmodSync(SECRETS, 0o700);
+    } catch {
+      /* windows dev box */
+    }
+
+    const generated = [];
+
+    if (!existsSync(join(SECRETS, 'foundry-config.json'))) {
+      console.log('foundryvtt.com credentials (used by the container to download Foundry v13):');
+      const username = (await rl.question('  foundry.com username/email: ')).trim();
+      const password = await rl.question('  foundry.com password (input is visible): ');
+      const licenseKey = (await rl.question('  license key (Enter = fetch from the account): ')).trim();
+      const adminKey = generateSecret();
+      writeSecretIfAbsent(join(SECRETS, 'foundry-config.json'), buildFoundryConfigJson({ username, password, licenseKey, adminKey }));
+      const gmPassword = generateSecret();
+      const relayPassword = generateSecret();
+      writeSecretIfAbsent(
+        join(SECRETS, 'bootstrap.env'),
+        buildBootstrapEnv({
+          relayEmail: 'bootstrap@companion.local',
+          relayPassword,
+          gmUser: 'Gamemaster',
+          gmPassword,
+          adminKey,
+        }),
+      );
+      const adminPassword = generateSecret();
+      writeSecretIfAbsent(join(SECRETS, 'gateway.env'), buildGatewayEnv({ adminPassword }));
+      generated.push(
+        ['Foundry admin key (setup screen)', adminKey],
+        ['Gamemaster password (set this on the Gamemaster user in YOUR world)', gmPassword],
+        ['Relay account (bootstrap@companion.local)', relayPassword],
+        ['App admin console password (/admin)', adminPassword],
+      );
+    } else {
+      console.log('secrets already present — keeping them (use `make setup-reset` to regenerate).');
+    }
+
+    if (!existsSync(join(QDIR, '.env'))) {
+      const wantTls = (await rl.question('Enable HTTPS on your own domain? [y/N] ')).trim().toLowerCase() === 'y';
+      if (wantTls) {
+        const domainApp = (await rl.question('  app domain (e.g. app.example.com): ')).trim();
+        const domainVtt = (await rl.question('  foundry domain (e.g. vtt.example.com): ')).trim();
+        const acmeEmail = (await rl.question("  email for Let's Encrypt: ")).trim();
+        writeFileSync(join(QDIR, 'Caddyfile.tls'), buildTlsCaddyfile({ domainApp, domainVtt, acmeEmail }), 'utf8');
+      }
+      writeFileSync(join(QDIR, '.env'), buildDotEnv({ tls: wantTls }), 'utf8');
+    }
+
+    if (generated.length > 0) {
+      console.log('\n================ GENERATED SECRETS — SHOWN ONCE, WRITE THEM DOWN ================');
+      for (const [label, value] of generated) console.log(`  ${label}:\n      ${value}`);
+      console.log('==================================================================================\n');
+    }
+
+    const ip = lanIp();
+    console.log('Next steps once the stack is up:');
+    console.log(`  1. Foundry:      http://${ip}:30000  (EULA once, admin key above, create YOUR world)`);
+    console.log('  2. In the world: set the Gamemaster user password to the generated one,');
+    console.log('     enable the "Foundry REST API" module, set its WebSocket Relay URL to');
+    console.log(`     ws://${ip}:3010  (Task 0 findings §5), then launch the world.`);
+    console.log(`  3. Watch:        http://${ip}:8321  (setup status page)`);
+    console.log(`  4. Play:         http://${ip}:8080  — invite players via /admin`);
+
+    if (args.includes('--no-up')) return;
+    const compose = detectComposeCommand();
+    if (compose === null) {
+      console.error('no container runtime found — install docker (with compose v2) or podman.');
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`\nrunning: ${compose.join(' ')} up -d --build   (in stack/quickstart)`);
+    const up = spawnSync(compose[0], [...compose.slice(1), 'up', '-d', '--build'], { cwd: QDIR, stdio: 'inherit' });
+    process.exitCode = up.status ?? 1;
+  } finally {
+    rl.close();
+  }
+}
+
+const invokedDirectly =
+  process.argv[1] !== undefined && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href;
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error('setup failed:', err.message);
+    process.exit(1);
+  });
+}
