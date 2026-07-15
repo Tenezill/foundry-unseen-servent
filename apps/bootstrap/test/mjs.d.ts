@@ -21,4 +21,5 @@ declare module '*setup-quickstart.mjs' {
   export function detectComposeCommand(
     run?: (cmd: string, args: string[]) => { status: number | null },
   ): string[] | null;
+  export function writeSecretIfAbsent(path: string, content: string): boolean;
 }

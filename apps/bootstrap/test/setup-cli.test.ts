@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildBootstrapEnv,
   buildDotEnv,
@@ -7,7 +10,18 @@ import {
   buildTlsCaddyfile,
   detectComposeCommand,
   generateSecret,
+  writeSecretIfAbsent,
 } from '../../../scripts/setup-quickstart.mjs';
+
+const dirs: string[] = [];
+function makeDir(): string {
+  const d = mkdtempSync(join(tmpdir(), 'setup-cli-'));
+  dirs.push(d);
+  return d;
+}
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
 describe('generateSecret', () => {
   it('is base64url (symbol-safe: no $, no quotes, no spaces) and long enough', () => {
@@ -74,5 +88,14 @@ describe('detectComposeCommand', () => {
     expect(detectComposeCommand((cmd) => (cmd === 'docker' ? nope : ok))).toEqual(['podman', 'compose']);
     expect(detectComposeCommand((cmd) => (cmd === 'podman-compose' ? ok : nope))).toEqual(['podman-compose']);
     expect(detectComposeCommand(() => nope)).toBeNull();
+  });
+});
+
+describe('writeSecretIfAbsent', () => {
+  it.skipIf(process.platform === 'win32')('sets mode 0600 and is idempotent', () => {
+    const f = join(makeDir(), 'test-secret.env');
+    expect(writeSecretIfAbsent(f, 'SECRET_VALUE=abc123\n')).toBe(true);
+    expect(statSync(f).mode & 0o777).toBe(0o600);
+    expect(writeSecretIfAbsent(f, 'SHOULD_NOT_OVERWRITE=xyz\n')).toBe(false);
   });
 });

@@ -77,7 +77,7 @@ function lanIp() {
   return '<this-host-ip>';
 }
 
-function writeSecretIfAbsent(path, content) {
+export function writeSecretIfAbsent(path, content) {
   if (existsSync(path)) return false;
   writeFileSync(path, content, { encoding: 'utf8', mode: 0o600 });
   try {
