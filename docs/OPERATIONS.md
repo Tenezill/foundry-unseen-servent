@@ -11,8 +11,9 @@ checked out on the server and `stack/` is the working directory.
    Uses a separate compose file (`stack/quickstart/docker-compose.yml`); see
    the "Turnkey quickstart" checklist below before relying on it in
    production.
-1. DNS: point `vtt.<domain>` and `app.<domain>` at the VPS; edit
-   `stack/Caddyfile` with the real names.
+1. DNS: point `vtt.<domain>` and `app.<domain>` at the VPS. On the A/B stack,
+   also edit `stack/Caddyfile` with the real names; on the turnkey quickstart,
+   `make setup` generates it automatically.
 2. `stack/.env`: foundryvtt.com credentials (only needed until the image has
    downloaded Foundry into `foundry-data/container_cache`), license key,
    admin key, plus `RELAY_API_KEY` / `RELAY_CLIENT_ID` (from step 5).
@@ -69,9 +70,9 @@ hold everything stateful:
 | `foundry_data/` | the world, systems, modules, felddy's container cache | same as `foundry-data/` above |
 | `relay-data/` | relay sqlite (accounts, keys, pairings) | same as `relay-data/` above |
 | `gateway-data/` | `players.yaml` (player → actor mapping + token hashes) | same backup job |
-| `caddy-data/` | Caddy's ACME state (TLS profile only) | regenerable (re-issues certs); backup optional |
+| `caddy-data/` | Caddy's ACME state (certificates only with TLS profile) | regenerable (certificates re-issue if needed); backup optional |
 | `companion-runtime/` | the sidecar's `relay.env` (minted key) + `status.json` | **regenerable — no backup needed**; the sidecar re-mints the key and re-derives status on next boot |
-| `stack/quickstart/secrets/` | generated stack secrets: `foundry-config.json` (foundry.com creds + admin key), `bootstrap.env` (relay account + GM creds), `gateway.env` (admin console password) | **include in the same backup job** — these are only shown once by `make setup` and are not recoverable otherwise |
+| `stack/quickstart/secrets/` | generated stack secrets: `foundry-config.json` (foundry.com creds + admin key), `bootstrap.env` (relay account + GM creds + foundry admin key), `gateway.env` (admin console password) | **include in the same backup job** — these are only shown once by `make setup` and are not recoverable otherwise |
 
 Restore = stop the stack (`docker compose down` from `stack/quickstart/`),
 restore the folders above (`secrets/` and the four persistent data folders;
