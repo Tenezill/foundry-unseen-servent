@@ -50,8 +50,9 @@ export class ApiKeySource {
     return this.key;
   }
 
-  /** Fires on every key CHANGE, including the first appearance. Callers that
-   *  subscribe after startWatching() see no event for the boot-time read. */
+  /** Fires only on a subsequent key CHANGE (after the boot-time read).
+   *  The boot-time read never emits onChange, even to already-subscribed
+   *  listeners: onChange signals a live rotation, not the initial state. */
   onChange(cb: (key: string) => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
@@ -79,6 +80,7 @@ export class ApiKeySource {
    *  boot-time read never emits onChange (even to already-subscribed
    *  listeners): onChange signals a live rotation, not the initial state. */
   startWatching(log?: KeySourceLog): void {
+    if (this.watcher !== null || this.pollTimer !== null) return;
     if (log !== undefined) this.log = log;
     this.initialRead();
     this.tryWatch();
