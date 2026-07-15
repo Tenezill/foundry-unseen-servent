@@ -13,6 +13,7 @@ export interface GatewayConfig {
   /** Turnkey: path to the sidecar-written relay.env, hot-reloaded via
    *  ApiKeySource; legitimately absent at boot. */
   relayApiKeyFile?: string;
+  /** 'auto' or an explicit fvtt_… world client id. */
   relayClientId: string;
   /** Bounded boot wait for the key file before starting degraded. */
   keyBootWaitMs: number;
@@ -63,7 +64,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     relayUrl: required('RELAY_URL'),
     ...(hasExplicitKey ? { relayApiKey: relayApiKey as string } : {}),
     ...(hasKeyFile && !hasExplicitKey ? { relayApiKeyFile: relayApiKeyFile as string } : {}),
-    relayClientId: required('RELAY_CLIENT_ID'),
+    // 'auto' (turnkey; also the default when unset/empty) or an explicit
+    // fvtt_… id (back-compat — behaves exactly as before).
+    relayClientId:
+      env.RELAY_CLIENT_ID === undefined || env.RELAY_CLIENT_ID === '' || env.RELAY_CLIENT_ID === 'auto'
+        ? 'auto'
+        : env.RELAY_CLIENT_ID,
     keyBootWaitMs: int('KEY_BOOT_WAIT_MS', 15_000),
     playersFile: required('PLAYERS_FILE'),
     defaultSystemId: env.DEFAULT_SYSTEM_ID ?? 'dnd5e',

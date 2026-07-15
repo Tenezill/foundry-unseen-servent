@@ -39,6 +39,13 @@ describe('loadConfig', () => {
   it('throws when neither key source is configured', () => {
     expect(() => loadConfig({ ...base, RELAY_API_KEY: undefined })).toThrow(/RELAY_API_KEY/);
   });
+
+  it('normalizes RELAY_CLIENT_ID: unset/empty/auto -> "auto"; explicit id kept', () => {
+    expect(loadConfig({ ...base, RELAY_CLIENT_ID: undefined }).relayClientId).toBe('auto');
+    expect(loadConfig({ ...base, RELAY_CLIENT_ID: '' }).relayClientId).toBe('auto');
+    expect(loadConfig({ ...base, RELAY_CLIENT_ID: 'auto' }).relayClientId).toBe('auto');
+    expect(loadConfig({ ...base }).relayClientId).toBe('fvtt_x'); // back-compat
+  });
 });
 
 describe('redactUrlToken', () => {
