@@ -17,6 +17,7 @@ import { EncounterManager } from './encounters.js';
 import { FilePlayerStore } from './player-store.js';
 import { ApiKeySource } from './key-source.js';
 import { ClientIdResolver } from './client-id-resolver.js';
+import { readBootstrapStatus } from './status-file.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -99,6 +100,10 @@ async function main(): Promise<void> {
       identityListeners.add(cb);
       return () => identityListeners.delete(cb);
     },
+    worldStatus: () => resolver.healthView(),
+    ...(cfg.statusFile !== undefined
+      ? { bootstrapStatus: () => readBootstrapStatus(cfg.statusFile as string) }
+      : {}),
     ...(cfg.adminPassword !== undefined ? { admin: { password: cfg.adminPassword, store } } : {}),
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',

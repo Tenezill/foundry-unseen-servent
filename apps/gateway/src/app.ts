@@ -35,6 +35,8 @@ import { PlayerStoreError } from './player-store.js';
 import { LiveManager } from './live.js';
 import type { EncounterView } from './encounters.js';
 import type { AdapterRegistry } from './registry.js';
+import type { WorldHealth } from './client-id-resolver.js';
+import type { BootstrapStatusView } from './status-file.js';
 
 /** Live view of the player list; backed by FilePlayerStore in production. */
 export interface PlayersPort {
@@ -173,6 +175,14 @@ export interface GatewayDeps {
    *  EncounterManager's stream is restarted by server.ts, which owns it.
    *  Returns an unsubscribe function. */
   relayIdentityChanged?: (cb: () => void) => () => void;
+  /** Turnkey: world-resolution state merged into /healthz (client-safe — no
+   *  clientId). Absent, or returning null, omits the field. */
+  worldStatus?: () => WorldHealth | null;
+  /** Turnkey: whitelisted sidecar status.json view merged into /healthz;
+   *  null (absent/unreadable) omits the field. */
+  bootstrapStatus?: () => BootstrapStatusView | null;
+  /** Bound for /healthz's relay probe (M18 pattern). Default 3000. */
+  healthTimeoutMs?: number;
 }
 
 type ErrorCode =
@@ -346,6 +356,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   const adminNameTimeoutMs = deps.adminNameTimeoutMs ?? 3_000;
   const encounterFetchTimeoutMs = deps.encounterFetchTimeoutMs ?? 3_000;
   const customItemTimeoutMs = deps.customItemTimeoutMs ?? 3_000;
+  const healthTimeoutMs = deps.healthTimeoutMs ?? 3_000;
   const limiter = new SlidingWindowLimiter(deps.rateLimitMax ?? 30, deps.rateLimitWindowMs ?? 60_000);
   const { relay, players, registry } = deps;
 
@@ -485,14 +496,27 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   // ---- routes --------------------------------------------------------------
 
   app.get('/healthz', async (_req, reply) => {
+    // Bounded probe: the relay is known to stall requests (docs/RELAY.md) —
+    // the health surface must never hang with it.
     let relayState: 'connected' | 'disconnected' = 'connected';
     try {
-      await relay.listClients();
+      const ok = await Promise.race([
+        relay.listClients().then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), healthTimeoutMs)),
+      ]);
+      if (!ok) relayState = 'disconnected';
     } catch (err) {
       app.log.warn({ err }, 'relay health check failed');
       relayState = 'disconnected';
     }
-    return reply.code(200).send({ ok: true, relay: relayState });
+    const world = deps.worldStatus?.() ?? null;
+    const bootstrap = deps.bootstrapStatus?.() ?? null;
+    return reply.code(200).send({
+      ok: true,
+      relay: relayState,
+      ...(world !== null ? { world } : {}),
+      ...(bootstrap !== null ? { bootstrap } : {}),
+    });
   });
 
   app.get('/api/me', { preHandler: auth(false) }, async (req, reply) => {

@@ -24,6 +24,8 @@ export interface GatewayConfig {
   livePollMs: number;
   /** Enables /api/admin/* when set. Unset/empty = admin surface disabled. */
   adminPassword?: string;
+  /** Turnkey: sidecar status.json merged into /healthz when set. */
+  statusFile?: string;
 }
 
 /**
@@ -77,5 +79,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ...(env.ADMIN_PASSWORD !== undefined && env.ADMIN_PASSWORD !== ''
       ? { adminPassword: env.ADMIN_PASSWORD }
       : {}),
+    ...(env.STATUS_FILE !== undefined && env.STATUS_FILE !== '' ? { statusFile: env.STATUS_FILE } : {}),
   };
 }
