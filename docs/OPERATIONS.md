@@ -131,6 +131,17 @@ path as production-hardened:
   Manage Modules, either make `foundry_data/Data` group/world-writable for
   UID 3000 on the host, or install the module by hand once (same zip as
   `VERSIONS.md`'s pinned release) — it's a one-time fix either way.
+- **(e) Gateway-reads-the-key invariant (don't break it when hardening).** The
+  sidecar writes `companion-runtime/relay.env` at mode `0600` owned by UID 3000;
+  the gateway reads it because its image (`apps/gateway/Dockerfile`) declares no
+  `USER` and so runs as container-root (which can read the file under both
+  docker and rootless podman — the latter via its mapped-UID `CAP_DAC_OVERRIDE`).
+  This is a load-bearing invariant: if you ever harden the gateway image to a
+  non-root UID **other than 3000**, `ApiKeySource` will read `null` and the
+  gateway runs degraded forever (`/healthz` → `relay: "disconnected"`,
+  `world.reason: "key-unavailable"`) with no louder signal. If you harden it,
+  also give that UID read access to `relay.env` (shared group, or write the file
+  world-readable). `status.json` is `0644`, so only the key file is affected.
 
 ## Upgrades — honor VERSIONS.md
 
