@@ -170,3 +170,219 @@ export function renderGonePage() {
 <p>Setup was continued in the terminal, so this page is no longer active. Finish the prompts in the terminal that ran <code>make setup</code>.</p>`,
   });
 }
+
+/* ---------------------------------------------------------------------------
+   Server + state machine
+   collecting -> submitting -> secrets-shown -> composing -> done | failed
+   plus `gone` (terminal takeover). Backward transitions are refused; replays
+   render the current-state page. `submitted` resolves the moment a VALID form
+   arrives so the CLI can cancel its terminal listener; `acked` gates compose
+   behind the "I've written these down" click (auto-resolved when there were
+   no new secrets to show).
+--------------------------------------------------------------------------- */
+
+const MAX_BODY_BYTES = 64 * 1024;
+
+function readBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > maxBytes) {
+        reject(Object.assign(new Error('body too large'), { code: 'E_TOO_LARGE' }));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+/** null when valid, else a user-facing error string. */
+function validateForm(form, { needCreds, needTls }) {
+  if (needCreds) {
+    if ((form.username ?? '').trim() === '') return 'foundry.com username is required.';
+    if ((form.password ?? '') === '') return 'foundry.com password is required.';
+  }
+  if (needTls && form.tls === 'on') {
+    for (const f of ['domainApp', 'domainVtt', 'acmeEmail']) {
+      if ((form[f] ?? '').trim() === '') return 'HTTPS needs all three fields (both domains and the email).';
+    }
+  }
+  return null;
+}
+
+function normalizeForm(form, { needCreds, needTls }) {
+  const creds = !needCreds
+    ? null
+    : {
+        username: form.username.trim(),
+        password: form.password,
+        licenseKey: (form.licenseKey ?? '').trim(),
+      };
+  const tls =
+    needTls && form.tls === 'on'
+      ? {
+          enabled: true,
+          domainApp: form.domainApp.trim(),
+          domainVtt: form.domainVtt.trim(),
+          acmeEmail: form.acmeEmail.trim(),
+        }
+      : { enabled: false };
+  return { creds, tls };
+}
+
+export function createWizard({ token, needCreds, needTls, bgPath, statusUrl, onSubmit }) {
+  let state = 'collecting';
+  let exitCode = 1;
+  let bg = null; // lazily read so construction is side-effect-free
+
+  let submitResolve;
+  const submitted = new Promise((r) => (submitResolve = r));
+  let ackResolve;
+  const acked = new Promise((r) => (ackResolve = r));
+  let finalResolve;
+  const finalServed = new Promise((r) => (finalResolve = r));
+
+  function pageForState() {
+    switch (state) {
+      case 'collecting':
+        return renderCredsForm({ needCreds, needTls });
+      case 'submitting':
+      case 'composing':
+        return renderProgressPage();
+      case 'secrets-shown':
+        return renderAlreadyShownPage();
+      case 'done':
+        finalResolve(true);
+        return renderDonePage(statusUrl);
+      case 'failed':
+        return renderFailedPage(exitCode);
+      default:
+        return renderGonePage(); // 'gone'
+    }
+  }
+
+  function html(res, page, status = 200) {
+    res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(page);
+  }
+
+  const server = createServer((req, res) => {
+    void handle(req, res).catch(() => {
+      // never leak error details to the network
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain' });
+      res.end('error');
+    });
+  });
+
+  async function handle(req, res) {
+    const url = new URL(req.url ?? '/', 'http://wizard.invalid');
+    const m = /^\/s\/([^/]+)(\/.*)?$/.exec(url.pathname);
+    if (m === null || !tokenMatches(token, m[1])) {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('not found');
+      return;
+    }
+    const path = m[2] ?? '/';
+
+    if (req.method === 'GET' && path === '/bg.jpg') {
+      if (bg === null) bg = readFileSync(bgPath);
+      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'max-age=3600' });
+      res.end(bg);
+      return;
+    }
+
+    if (req.method === 'POST' && path === '/submit') {
+      if (state !== 'collecting') {
+        html(res, pageForState());
+        return;
+      }
+      // Reject oversized bodies BEFORE reading: once readBody destroys the
+      // socket mid-stream, no 413 can be delivered. fetch/browsers always
+      // send content-length for form posts; readBody's cap stays as the
+      // backstop for chunked/lying clients (those may just see a reset).
+      if (Number(req.headers['content-length'] ?? 0) > MAX_BODY_BYTES) {
+        res.writeHead(413, { 'content-type': 'text/plain' });
+        res.end('payload too large');
+        return;
+      }
+      let body;
+      try {
+        body = await readBody(req, MAX_BODY_BYTES);
+      } catch {
+        return; // backstop path: socket already destroyed
+      }
+      const form = parseFormBody(body);
+      const error = validateForm(form, { needCreds, needTls });
+      if (error !== null) {
+        html(res, renderCredsForm({ needCreds, needTls, error, username: form.username ?? '' }));
+        return;
+      }
+      state = 'submitting';
+      submitResolve('browser'); // the CLI race cancels its terminal listener now
+      let secrets;
+      try {
+        secrets = await onSubmit(normalizeForm(form, { needCreds, needTls }));
+      } catch (err) {
+        state = 'collecting';
+        html(res, renderCredsForm({ needCreds, needTls, error: err.message, username: form.username ?? '' }));
+        return;
+      }
+      if (secrets.length === 0) {
+        state = 'composing'; // nothing to show once -> no ack gate
+        ackResolve();
+        html(res, renderProgressPage());
+        return;
+      }
+      state = 'secrets-shown';
+      html(res, renderSecretsPage(secrets)); // the once-only response
+      return;
+    }
+
+    if (req.method === 'POST' && path === '/ack') {
+      if (state === 'secrets-shown') {
+        state = 'composing';
+        ackResolve();
+      }
+      res.writeHead(303, { location: './' });
+      res.end();
+      return;
+    }
+
+    html(res, pageForState());
+  }
+
+  return {
+    token,
+    server,
+    submitted,
+    acked,
+    listen(port, host = '0.0.0.0') {
+      return new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, host, () => {
+          server.removeListener('error', reject);
+          resolve(server.address().port);
+        });
+      });
+    },
+    setPhase(phase, extra = {}) {
+      if (phase === 'failed') exitCode = extra.exitCode ?? 1;
+      state = phase;
+    },
+    takeover() {
+      state = 'gone';
+    },
+    waitForFinalPage(timeoutMs) {
+      return Promise.race([finalServed, new Promise((r) => setTimeout(() => r(false), timeoutMs))]);
+    },
+    close() {
+      server.close();
+      server.closeAllConnections?.();
+    },
+  };
+}
