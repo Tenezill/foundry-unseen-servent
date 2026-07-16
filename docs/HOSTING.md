@@ -420,6 +420,24 @@ nothing else needs editing. `make setup` finishes by auto-detecting your
 runtime and running `docker compose up -d --build` (or `podman compose` /
 `podman-compose`) for you.
 
+#### The setup wizard (default) vs terminal prompts
+
+`make setup` starts an **ephemeral web wizard** on port **8322** and prints a
+one-time URL (`http://<lan-ip>:8322/s/<token>/`). Open it in a browser on your
+network: enter the foundry.com credentials (password input is masked, unlike
+the terminal), optionally enable HTTPS, write down the generated secrets shown
+**once**, and the page follows `compose up` and then forwards to the status
+page (`:8321`). The wizard lives only inside the `make setup` process — when
+setup ends, the server is gone; there is nothing to disable.
+
+- Prefer the terminal? Press **Enter** at the prompt instead of opening the
+  URL, or run `node scripts/setup-quickstart.mjs --no-wizard`.
+- **Remote server (VPS)?** Do not open port 8322 to the internet — tunnel it:
+  `ssh -L 8322:localhost:8322 <host>`, then open
+  `http://localhost:8322/s/<token>/`.
+- The generated secrets are also printed to the terminal on both paths.
+- If port 8322 is taken, setup falls back to terminal prompts by itself.
+
 #### Rootless-Podman file ownership
 
 On the Podman path, `make setup` also writes
