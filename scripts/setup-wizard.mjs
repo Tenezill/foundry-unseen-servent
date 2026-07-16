@@ -1,0 +1,172 @@
+/**
+ * Ephemeral first-run web wizard (spec Phase 2). Hosted INSIDE `make setup`
+ * on the operator's host (spec Approach A): the server dies with the CLI, so
+ * "one-time token" and "auto-disable" are structural properties, not flags.
+ * Zero runtime deps, zero client JS — progress polling is <meta refresh>,
+ * the Phase 1 status-page idiom.
+ *
+ * Security model (spec): LAN or SSH tunnel only; every path is gated by a
+ * per-run token (/s/<token>/…) compared constant-time; wrong token -> bare
+ * 404. No cookies. No response after the once-only secrets page contains a
+ * secret. All dynamic text is HTML-escaped.
+ */
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+
+export function escapeHtml(s) {
+  return String(s)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+}
+
+/** Constant-time token check; sha256 both sides so lengths always match. */
+export function tokenMatches(expected, presented) {
+  const a = createHash('sha256').update(String(expected)).digest();
+  const b = createHash('sha256').update(String(presented)).digest();
+  return timingSafeEqual(a, b);
+}
+
+/** application/x-www-form-urlencoded -> plain object; first value wins. */
+export function parseFormBody(body) {
+  const out = {};
+  for (const [k, v] of new URLSearchParams(body)) {
+    if (!(k in out)) out[k] = v;
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------------------------
+   Gilded Tome shell — token values copied from apps/web/app/assets/css/main.css
+   (Midnight Tome, dark). The wizard cannot import the Nuxt CSS; keep this
+   block in sync with that source of truth by hand.
+--------------------------------------------------------------------------- */
+const STYLE = `
+:root{--panel:#1d1922;--panel-2:#262029;--line:#3a3140;--ink:#ece5d8;--ink-dim:#a99f8f;
+--gold:#d9a441;--gold-bright:#f0c56a;--garnet:#c94640;--accent-ink:#241a08;--radius:14px;
+--serif:'Palatino Linotype','Book Antiqua',Palatino,Georgia,serif}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--ink);
+font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+background:#131017 url(bg.jpg) center/cover no-repeat fixed}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;
+background:radial-gradient(ellipse at center,transparent 35%,rgba(0,0,0,.55))}
+.wrap{position:relative;width:min(34rem,92vw);margin:36vh auto 4vh}
+@media (max-aspect-ratio:1/1){.wrap{margin-top:14vh}}
+.card{background:rgba(29,25,34,.95);border:1px solid var(--line);
+border-radius:var(--radius);padding:1.6rem;box-shadow:0 10px 40px rgba(0,0,0,.55)}
+h1{font-family:var(--serif);color:var(--gold-bright);font-size:1.45rem;margin:0 0 .75rem}
+p{line-height:1.5}
+label{display:block;margin:.85rem 0 .3rem;color:var(--ink-dim);font-size:.9rem}
+input[type=text],input[type=password],input[type=email]{width:100%;padding:.6rem .7rem;
+background:var(--panel-2);border:1px solid var(--line);border-radius:10px;
+color:var(--ink);font-size:1rem}
+input:focus{outline:2px solid var(--gold);outline-offset:1px}
+details{margin-top:1rem;border:1px solid var(--line);border-radius:10px;padding:.6rem .8rem}
+summary{cursor:pointer;color:var(--gold)}
+button{margin-top:1.3rem;width:100%;padding:.85rem;border:0;border-radius:10px;
+background:var(--gold);color:var(--accent-ink);font-size:1.05rem;font-weight:700;cursor:pointer}
+button:hover{background:var(--gold-bright)}
+.err{color:var(--garnet)}
+.secret{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--panel-2);
+border:1px solid var(--line);border-radius:8px;padding:.5rem .6rem;margin:.15rem 0 .7rem;
+user-select:all;overflow-wrap:anywhere}
+small{color:var(--ink-dim)}
+`;
+
+export function renderShell({ title, body, head = '' }) {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+${head}<title>${escapeHtml(title)}</title><style>${STYLE}</style></head>
+<body><div class="wrap"><div class="card">${body}</div></div></body></html>`;
+}
+
+export function renderCredsForm({ needCreds, needTls, error = null, username = '' }) {
+  const err = error === null ? '' : `<p class="err">${escapeHtml(error)}</p>`;
+  const creds = !needCreds
+    ? ''
+    : `<label for="username">foundry.com username or email</label>
+<input type="text" id="username" name="username" value="${escapeHtml(username)}" autocomplete="username" required>
+<label for="password">foundry.com password</label>
+<input type="password" id="password" name="password" autocomplete="current-password" required>
+<label for="licenseKey">license key <small>(leave blank to fetch from the account)</small></label>
+<input type="text" id="licenseKey" name="licenseKey">`;
+  const tls = !needTls
+    ? ''
+    : `<details><summary>Enable HTTPS on your own domain (optional)</summary>
+<label><input type="checkbox" name="tls" value="on"> use HTTPS (Let's Encrypt)</label>
+<label for="domainApp">app domain</label>
+<input type="text" id="domainApp" name="domainApp" placeholder="app.example.com">
+<label for="domainVtt">foundry domain</label>
+<input type="text" id="domainVtt" name="domainVtt" placeholder="vtt.example.com">
+<label for="acmeEmail">email for Let's Encrypt</label>
+<input type="email" id="acmeEmail" name="acmeEmail" placeholder="you@example.com">
+</details>`;
+  const intro = needCreds
+    ? '<p>These credentials let the Foundry container download and license your server. They are written to a <code>0600</code> secret file on this host and never leave it.</p>'
+    : '<p>Choose whether to enable HTTPS. Credentials are already configured.</p>';
+  return renderShell({
+    title: 'Setup — Foundry’s Unseen Servant',
+    body: `<h1>Summon your servant</h1>${err}${intro}
+<form method="post" action="submit">${creds}${tls}<button type="submit">Begin the ritual</button></form>`,
+  });
+}
+
+export function renderSecretsPage(secrets) {
+  const rows = secrets
+    .map(([label, value]) => `<label>${escapeHtml(label)}</label><div class="secret">${escapeHtml(value)}</div>`)
+    .join('');
+  return renderShell({
+    title: 'Your secrets — shown once',
+    body: `<h1>Written in invisible ink</h1>
+<p><strong>These are shown once.</strong> Copy them somewhere safe now — they are also printed in the terminal that ran <code>make setup</code>.</p>
+${rows}
+<form method="post" action="ack"><button type="submit">I’ve written these down — start the stack</button></form>`,
+  });
+}
+
+export function renderProgressPage() {
+  return renderShell({
+    title: 'Starting your stack…',
+    head: '<meta http-equiv="refresh" content="3">\n',
+    body: `<h1>The servant is busy…</h1>
+<p>Pulling images and starting containers. This page refreshes itself; the terminal shows detailed logs.</p>`,
+  });
+}
+
+export function renderDonePage(statusUrl) {
+  return renderShell({
+    title: 'Stack started',
+    head: `<meta http-equiv="refresh" content="3;url=${escapeHtml(statusUrl)}">\n`,
+    body: `<h1>At your service!</h1>
+<p>The stack is up. Continuing to the <a href="${escapeHtml(statusUrl)}">setup status page</a>, which walks you through creating your world…</p>`,
+  });
+}
+
+export function renderFailedPage(exitCode) {
+  return renderShell({
+    title: 'Stack failed to start',
+    body: `<h1>Mostly clumsy, indeed</h1>
+<p class="err">compose exited with code ${escapeHtml(String(exitCode))}.</p>
+<p>See the terminal that ran <code>make setup</code> for the full logs, fix the cause, and run <code>make setup</code> again — your secrets are kept.</p>`,
+  });
+}
+
+export function renderAlreadyShownPage() {
+  return renderShell({
+    title: 'Secrets already shown',
+    body: `<h1>Already revealed</h1>
+<p>The generated secrets were already shown once and will not be rendered again. Check your notes — or the terminal that ran <code>make setup</code>, which printed them too.</p>
+<form method="post" action="ack"><button type="submit">I have them — start the stack</button></form>`,
+  });
+}
+
+export function renderGonePage() {
+  return renderShell({
+    title: 'Continued in the terminal',
+    body: `<h1>The ritual moved</h1>
+<p>Setup was continued in the terminal, so this page is no longer active. Finish the prompts in the terminal that ran <code>make setup</code>.</p>`,
+  });
+}
