@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -13,7 +13,9 @@ import {
   generateSecret,
   isPodmanRuntime,
   PODMAN_OVERRIDE_MARKER,
+  writeEnvFiles,
   writeSecretIfAbsent,
+  writeSecretsBundle,
 } from '../../../scripts/setup-quickstart.mjs';
 
 const dirs: string[] = [];
@@ -123,5 +125,67 @@ describe('buildPodmanComposeOverride', () => {
     expect(out).not.toContain('gateway:');
     expect(out).not.toContain('web:');
     expect(out).not.toContain('bootstrap:');
+  });
+});
+
+describe('writeSecretsBundle', () => {
+  it('writes the three secret files and returns the four labeled secrets', () => {
+    const dir = makeDir();
+    const out = writeSecretsBundle(
+      { username: 'me@ex.com', password: 'p$w', licenseKey: '' },
+      { secrets: dir },
+    );
+    expect(out.map(([label]) => label)).toEqual([
+      'Foundry admin key (setup screen)',
+      'Gamemaster password (set this on the Gamemaster user in YOUR world)',
+      'Relay account (bootstrap@companion.local)',
+      'App admin console password (/admin)',
+    ]);
+    const cfg = JSON.parse(readFileSync(join(dir, 'foundry-config.json'), 'utf8'));
+    expect(cfg.foundry_username).toBe('me@ex.com');
+    expect(cfg.foundry_password).toBe('p$w');
+    expect(cfg.foundry_license_key).toBeUndefined(); // blank key omitted
+    const bootstrapEnv = readFileSync(join(dir, 'bootstrap.env'), 'utf8');
+    expect(bootstrapEnv).toContain(`FOUNDRY_ADMIN_KEY=${cfg.foundry_admin_key}`);
+    const gatewayEnv = readFileSync(join(dir, 'gateway.env'), 'utf8');
+    expect(gatewayEnv).toContain(`ADMIN_PASSWORD=${out[3]?.[1]}`);
+  });
+
+  it.skipIf(process.platform === 'win32')('writes every secret file with mode 0600', () => {
+    const dir = makeDir();
+    writeSecretsBundle({ username: 'u', password: 'p', licenseKey: 'LK' }, { secrets: dir });
+    for (const f of ['foundry-config.json', 'bootstrap.env', 'gateway.env']) {
+      expect(statSync(join(dir, f)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it('keeps existing files (writeSecretIfAbsent semantics)', () => {
+    const dir = makeDir();
+    const first = writeSecretsBundle({ username: 'u', password: 'p', licenseKey: '' }, { secrets: dir });
+    const before = readFileSync(join(dir, 'foundry-config.json'), 'utf8');
+    writeSecretsBundle({ username: 'other', password: 'x', licenseKey: '' }, { secrets: dir });
+    expect(readFileSync(join(dir, 'foundry-config.json'), 'utf8')).toBe(before);
+    expect(first).toHaveLength(4);
+  });
+});
+
+describe('writeEnvFiles', () => {
+  it('writes only .env when TLS is off', () => {
+    const dir = makeDir();
+    writeEnvFiles({ enabled: false }, { qdir: dir });
+    expect(readFileSync(join(dir, '.env'), 'utf8')).toContain('HOST_PORT_WEB=8080');
+    expect(existsSync(join(dir, 'Caddyfile.tls'))).toBe(false);
+  });
+
+  it('writes .env with the tls profile plus Caddyfile.tls when enabled', () => {
+    const dir = makeDir();
+    writeEnvFiles(
+      { enabled: true, domainApp: 'app.ex.com', domainVtt: 'vtt.ex.com', acmeEmail: 'e@x.com' },
+      { qdir: dir },
+    );
+    expect(readFileSync(join(dir, '.env'), 'utf8')).toContain('COMPOSE_PROFILES=tls');
+    const caddy = readFileSync(join(dir, 'Caddyfile.tls'), 'utf8');
+    expect(caddy).toContain('app.ex.com');
+    expect(caddy).toContain('e@x.com');
   });
 });

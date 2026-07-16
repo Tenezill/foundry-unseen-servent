@@ -25,6 +25,14 @@ declare module '*setup-quickstart.mjs' {
   export const PODMAN_OVERRIDE_MARKER: string;
   export function isPodmanRuntime(compose: string[] | null): boolean;
   export function buildPodmanComposeOverride(): string;
+  export function writeSecretsBundle(
+    creds: { username: string; password: string; licenseKey: string },
+    dirs?: { secrets: string },
+  ): Array<[string, string]>;
+  export function writeEnvFiles(
+    tls: { enabled: boolean; domainApp?: string; domainVtt?: string; acmeEmail?: string },
+    dirs?: { qdir: string },
+  ): void;
 }
 
 declare module '*setup-wizard.mjs' {

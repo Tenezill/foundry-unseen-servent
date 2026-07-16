@@ -11,7 +11,8 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createWizard } from './setup-wizard.mjs';
 import { networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,9 +109,58 @@ export function writeSecretIfAbsent(path, content) {
   return true;
 }
 
+/** Generate + write the three secret files (0600, keep-if-present) and
+ *  return the four operator-facing generated secrets as [label, value]. */
+export function writeSecretsBundle(creds, dirs = { secrets: SECRETS }) {
+  const adminKey = generateSecret();
+  writeSecretIfAbsent(
+    join(dirs.secrets, 'foundry-config.json'),
+    buildFoundryConfigJson({ username: creds.username, password: creds.password, licenseKey: creds.licenseKey, adminKey }),
+  );
+  const gmPassword = generateSecret();
+  const relayPassword = generateSecret();
+  writeSecretIfAbsent(
+    join(dirs.secrets, 'bootstrap.env'),
+    buildBootstrapEnv({
+      relayEmail: 'bootstrap@companion.local',
+      relayPassword,
+      gmUser: 'Gamemaster',
+      gmPassword,
+      adminKey,
+    }),
+  );
+  const adminPassword = generateSecret();
+  writeSecretIfAbsent(join(dirs.secrets, 'gateway.env'), buildGatewayEnv({ adminPassword }));
+  return [
+    ['Foundry admin key (setup screen)', adminKey],
+    ['Gamemaster password (set this on the Gamemaster user in YOUR world)', gmPassword],
+    ['Relay account (bootstrap@companion.local)', relayPassword],
+    ['App admin console password (/admin)', adminPassword],
+  ];
+}
+
+/** Write .env (+ Caddyfile.tls when TLS is enabled). tls: {enabled, domainApp?, domainVtt?, acmeEmail?} */
+export function writeEnvFiles(tls, dirs = { qdir: QDIR }) {
+  if (tls.enabled) {
+    writeFileSync(
+      join(dirs.qdir, 'Caddyfile.tls'),
+      buildTlsCaddyfile({ domainApp: tls.domainApp, domainVtt: tls.domainVtt, acmeEmail: tls.acmeEmail }),
+      'utf8',
+    );
+  }
+  writeFileSync(join(dirs.qdir, '.env'), buildDotEnv({ tls: tls.enabled }), 'utf8');
+}
+
+function printGeneratedSecrets(generated) {
+  console.log('\n================ GENERATED SECRETS — SHOWN ONCE, WRITE THEM DOWN ================');
+  for (const [label, value] of generated) console.log(`  ${label}:\n      ${value}`);
+  console.log('==================================================================================\n');
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let wizard = null;
   try {
     if (args.includes('--reset')) {
       const sure = (await rl.question('Delete generated quickstart config + secrets (volumes untouched)? [y/N] ')).trim();
@@ -130,57 +180,82 @@ async function main() {
       /* windows dev box */
     }
 
-    const generated = [];
+    const needCreds = !existsSync(join(SECRETS, 'foundry-config.json'));
+    const needTls = !existsSync(join(QDIR, '.env'));
+    const ip = lanIp();
+    let generated = [];
 
-    if (!existsSync(join(SECRETS, 'foundry-config.json'))) {
-      console.log('foundryvtt.com credentials (used by the container to download Foundry v13):');
-      const username = (await rl.question('  foundry.com username/email: ')).trim();
-      const password = await rl.question('  foundry.com password (input is visible): ');
-      const licenseKey = (await rl.question('  license key (Enter = fetch from the account): ')).trim();
-      const adminKey = generateSecret();
-      writeSecretIfAbsent(join(SECRETS, 'foundry-config.json'), buildFoundryConfigJson({ username, password, licenseKey, adminKey }));
-      const gmPassword = generateSecret();
-      const relayPassword = generateSecret();
-      writeSecretIfAbsent(
-        join(SECRETS, 'bootstrap.env'),
-        buildBootstrapEnv({
-          relayEmail: 'bootstrap@companion.local',
-          relayPassword,
-          gmUser: 'Gamemaster',
-          gmPassword,
-          adminKey,
-        }),
-      );
-      const adminPassword = generateSecret();
-      writeSecretIfAbsent(join(SECRETS, 'gateway.env'), buildGatewayEnv({ adminPassword }));
-      generated.push(
-        ['Foundry admin key (setup screen)', adminKey],
-        ['Gamemaster password (set this on the Gamemaster user in YOUR world)', gmPassword],
-        ['Relay account (bootstrap@companion.local)', relayPassword],
-        ['App admin console password (/admin)', adminPassword],
-      );
-    } else {
+    if (!needCreds) {
       console.log('secrets already present — keeping them (use `make setup-reset` to regenerate).');
     }
 
-    if (!existsSync(join(QDIR, '.env'))) {
-      const wantTls = (await rl.question('Enable HTTPS on your own domain? [y/N] ')).trim().toLowerCase() === 'y';
-      if (wantTls) {
-        const domainApp = (await rl.question('  app domain (e.g. app.example.com): ')).trim();
-        const domainVtt = (await rl.question('  foundry domain (e.g. vtt.example.com): ')).trim();
-        const acmeEmail = (await rl.question("  email for Let's Encrypt: ")).trim();
-        writeFileSync(join(QDIR, 'Caddyfile.tls'), buildTlsCaddyfile({ domainApp, domainVtt, acmeEmail }), 'utf8');
+    // Ephemeral web wizard (spec Phase 2, Approach A): hosted in THIS process,
+    // so it dies with the CLI — one-time token + auto-disable are structural.
+    // Raced against terminal-Enter; --no-wizard or a failed listen (port in
+    // use) falls back to the terminal prompts. Never expose it when there is
+    // nothing to collect.
+    if ((needCreds || needTls) && !args.includes('--no-wizard')) {
+      const w = createWizard({
+        token: generateSecret(),
+        needCreds,
+        needTls,
+        bgPath: join(REPO_ROOT, 'scripts', 'assets', 'unseen-servant.jpg'),
+        statusUrl: `http://${ip}:8321/`,
+        onSubmit: async ({ creds, tls }) => {
+          if (creds !== null) generated = writeSecretsBundle(creds);
+          if (needTls) writeEnvFiles(tls);
+          if (generated.length > 0) printGeneratedSecrets(generated); // terminal backup, both paths
+          return generated;
+        },
+      });
+      try {
+        await w.listen(8322, '0.0.0.0');
+        wizard = w;
+      } catch (err) {
+        console.error(`wizard could not start (${err.code ?? err.message}) — using terminal prompts.`);
       }
-      writeFileSync(join(QDIR, '.env'), buildDotEnv({ tls: wantTls }), 'utf8');
     }
 
-    if (generated.length > 0) {
-      console.log('\n================ GENERATED SECRETS — SHOWN ONCE, WRITE THEM DOWN ================');
-      for (const [label, value] of generated) console.log(`  ${label}:\n      ${value}`);
-      console.log('==================================================================================\n');
+    if (wizard !== null) {
+      console.log(`\nOpen  http://${ip}:8322/s/${wizard.token}/  in a browser on your network`);
+      console.log('to finish setup — or press Enter here to use terminal prompts instead.');
+      console.log('(remote server? tunnel first:  ssh -L 8322:localhost:8322 <host>)');
+      const ac = new AbortController();
+      const enter = rl.question('', { signal: ac.signal }).then(
+        () => 'terminal',
+        () => 'aborted', // AbortError when the browser wins
+      );
+      const winner = await Promise.race([wizard.submitted, enter]);
+      if (winner === 'terminal') {
+        wizard.takeover();
+        wizard.close();
+        wizard = null;
+      } else {
+        ac.abort();
+      }
     }
 
-    const ip = lanIp();
+    if (wizard === null && (needCreds || needTls)) {
+      if (needCreds) {
+        console.log('foundry.com credentials (used by the container to download Foundry):');
+        const username = (await rl.question('  foundry.com username/email: ')).trim();
+        const password = await rl.question('  foundry.com password (input is visible): ');
+        const licenseKey = (await rl.question('  license key (Enter = fetch from the account): ')).trim();
+        generated = writeSecretsBundle({ username, password, licenseKey });
+      }
+      if (needTls) {
+        const wantTls = (await rl.question('Enable HTTPS on your own domain? [y/N] ')).trim().toLowerCase() === 'y';
+        const tls = { enabled: wantTls };
+        if (wantTls) {
+          tls.domainApp = (await rl.question('  app domain (e.g. app.example.com): ')).trim();
+          tls.domainVtt = (await rl.question('  foundry domain (e.g. vtt.example.com): ')).trim();
+          tls.acmeEmail = (await rl.question("  email for Let's Encrypt: ")).trim();
+        }
+        writeEnvFiles(tls);
+      }
+      if (generated.length > 0) printGeneratedSecrets(generated);
+    }
+
     console.log('Next steps once the stack is up:');
     console.log(`  1. Foundry:      http://${ip}:30000  (EULA once, admin key above, create YOUR world)`);
     console.log('  2. In the world: set the Gamemaster user password to the generated one,');
@@ -203,17 +278,38 @@ async function main() {
       rmSync(override, { force: true });
     }
 
-    if (args.includes('--no-up')) return;
+    if (args.includes('--no-up')) {
+      wizard?.close();
+      return;
+    }
     if (compose === null) {
       console.error('no container runtime found — install docker (with compose v2) or podman.');
       process.exitCode = 1;
+      wizard?.close();
       return;
     }
     console.log(`\nrunning: ${compose.join(' ')} up -d --build   (in stack/quickstart)`);
-    const up = spawnSync(compose[0], [...compose.slice(1), 'up', '-d', '--build'], { cwd: QDIR, stdio: 'inherit' });
-    process.exitCode = up.status ?? 1;
+    if (wizard !== null) {
+      // Browser path: the "I've written these down" click gates compose, and
+      // compose runs async so the wizard can keep serving the progress page.
+      await wizard.acked;
+      const code = await new Promise((resolve) => {
+        const child = spawn(compose[0], [...compose.slice(1), 'up', '-d', '--build'], { cwd: QDIR, stdio: 'inherit' });
+        child.on('close', (c) => resolve(c ?? 1));
+        child.on('error', () => resolve(1));
+      });
+      wizard.setPhase(code === 0 ? 'done' : 'failed', { exitCode: code });
+      process.exitCode = code;
+      await wizard.waitForFinalPage(30_000); // bounded — let the browser land on the redirect page
+      wizard.close();
+      wizard = null;
+    } else {
+      const up = spawnSync(compose[0], [...compose.slice(1), 'up', '-d', '--build'], { cwd: QDIR, stdio: 'inherit' });
+      process.exitCode = up.status ?? 1;
+    }
   } finally {
     rl.close();
+    wizard?.close();
   }
 }
 
