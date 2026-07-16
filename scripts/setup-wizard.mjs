@@ -239,6 +239,12 @@ export function createWizard({ token, needCreds, needTls, bgPath, statusUrl, onS
   let state = 'collecting';
   let exitCode = 1;
   let bg = null; // lazily read so construction is side-effect-free
+  // Synchronous lock taken BEFORE the first await in the /submit path
+  // (readBody), so two near-simultaneous valid POSTs can't both slip past
+  // the `state` check while the first is still parked awaiting its body.
+  // Released on the validation-error and onSubmit-throw paths so the
+  // operator can retry after a rejected form.
+  let submitLocked = false;
 
   let submitResolve;
   const submitted = new Promise((r) => (submitResolve = r));
@@ -297,8 +303,11 @@ export function createWizard({ token, needCreds, needTls, bgPath, statusUrl, onS
     }
 
     if (req.method === 'POST' && path === '/submit') {
-      if (state !== 'collecting') {
-        html(res, pageForState());
+      if (submitLocked || state !== 'collecting') {
+        // A submit is already in flight (locked, still 'collecting') or the
+        // state has moved on; either way this is a concurrent/replayed
+        // request that must never reach onSubmit or render secrets again.
+        html(res, state === 'collecting' ? renderProgressPage() : pageForState());
         return;
       }
       // Reject oversized bodies BEFORE reading: once readBody destroys the
@@ -310,15 +319,21 @@ export function createWizard({ token, needCreds, needTls, bgPath, statusUrl, onS
         res.end('payload too large');
         return;
       }
+      // Take the lock synchronously, BEFORE the first await below, so no
+      // other request can observe `submitLocked === false` until this one
+      // either releases it (error path) or moves `state` past 'collecting'.
+      submitLocked = true;
       let body;
       try {
         body = await readBody(req, MAX_BODY_BYTES);
       } catch {
+        submitLocked = false;
         return; // backstop path: socket already destroyed
       }
       const form = parseFormBody(body);
       const error = validateForm(form, { needCreds, needTls });
       if (error !== null) {
+        submitLocked = false;
         html(res, renderCredsForm({ needCreds, needTls, error, username: form.username ?? '' }));
         return;
       }
@@ -329,6 +344,7 @@ export function createWizard({ token, needCreds, needTls, bgPath, statusUrl, onS
         secrets = await onSubmit(normalizeForm(form, { needCreds, needTls }));
       } catch (err) {
         state = 'collecting';
+        submitLocked = false;
         html(res, renderCredsForm({ needCreds, needTls, error: err.message, username: form.username ?? '' }));
         return;
       }
@@ -366,6 +382,9 @@ export function createWizard({ token, needCreds, needTls, bgPath, statusUrl, onS
         server.once('error', reject);
         server.listen(port, host, () => {
           server.removeListener('error', reject);
+          // A later runtime 'error' event (e.g. a broken client socket) must
+          // not crash the process now that no listener remains for it.
+          server.on('error', () => {});
           resolve(server.address().port);
         });
       });
@@ -378,7 +397,14 @@ export function createWizard({ token, needCreds, needTls, bgPath, statusUrl, onS
       state = 'gone';
     },
     waitForFinalPage(timeoutMs) {
-      return Promise.race([finalServed, new Promise((r) => setTimeout(() => r(false), timeoutMs))]);
+      let timer;
+      const timeout = new Promise((r) => {
+        timer = setTimeout(() => r(false), timeoutMs);
+      });
+      return Promise.race([finalServed, timeout]).then((v) => {
+        clearTimeout(timer);
+        return v;
+      });
     },
     close() {
       server.close();

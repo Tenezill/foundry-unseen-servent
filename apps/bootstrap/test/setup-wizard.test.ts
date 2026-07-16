@@ -13,8 +13,10 @@ import {
   tokenMatches,
 } from '../../../scripts/setup-wizard.mjs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { afterEach } from 'vitest';
 import { createWizard, type WizardHandle, type WizardSubmission } from '../../../scripts/setup-wizard.mjs';
 
@@ -117,6 +119,7 @@ describe('createWizard (real server)', () => {
     needCreds?: boolean;
     needTls?: boolean;
     secrets?: Array<[string, string]>;
+    onSubmitDelayMs?: number;
   }): Promise<Booted> {
     const dir = mkdtempSync(join(tmpdir(), 'wiz-'));
     const bgPath = join(dir, 'bg.jpg');
@@ -129,6 +132,7 @@ describe('createWizard (real server)', () => {
       bgPath,
       statusUrl: 'http://192.168.1.20:8321/',
       onSubmit: async (v) => {
+        if (opts?.onSubmitDelayMs) await new Promise((r) => setTimeout(r, opts.onSubmitDelayMs));
         submissions.push(v);
         return opts?.secrets ?? [['Admin key', 'sec-admin-1']];
       },
@@ -201,6 +205,60 @@ describe('createWizard (real server)', () => {
     const done = await (await fetch(`${base}/`)).text();
     expect(done).toContain('url=http://192.168.1.20:8321/');
     expect(await finalP).toBe(true);
+  });
+
+  it('double-submit race: concurrent valid POSTs run onSubmit once and serve the secret once', async () => {
+    const { base, submissions } = await boot({ onSubmitDelayMs: 50 });
+    const body = Buffer.from('username=me%40ex.com&password=p%24w&licenseKey=', 'utf8');
+
+    // Simulate two near-simultaneous submits (e.g. a double-clicked button):
+    // both requests' headers must reach the server — and pass the pre-body
+    // `state`/lock guard — before either request's body finishes arriving,
+    // i.e. while both are genuinely "parked in readBody". A plain `fetch` +
+    // `Promise.all` isn't a reliable enough clock for that: Node's http
+    // client buffers headers until the first body write, so the two
+    // connections don't actually reach the server concurrently. Instead,
+    // open two raw requests, flush their headers immediately, and hold both
+    // bodies back on a shared gate until both are certainly parked.
+    let release!: () => void;
+    const bodiesReleased = new Promise<void>((r) => (release = r));
+    function slowPost(): Promise<{ status: number; text: string }> {
+      return new Promise((resolve, reject) => {
+        const url = new URL(`${base}/submit`);
+        const bodyStream = new Readable({ read() {} });
+        const req = httpRequest(
+          {
+            hostname: url.hostname,
+            port: url.port,
+            path: url.pathname,
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': body.length },
+          },
+          (res) => {
+            let data = '';
+            res.on('data', (c) => (data += c));
+            res.on('end', () => resolve({ status: res.statusCode ?? 0, text: data }));
+          },
+        );
+        req.on('error', reject);
+        req.flushHeaders(); // send headers now, independent of the (not yet pushed) body
+        bodyStream.pipe(req);
+        void bodiesReleased.then(() => {
+          bodyStream.push(body);
+          bodyStream.push(null);
+        });
+      });
+    }
+
+    const p1 = slowPost();
+    const p2 = slowPost();
+    await new Promise((r) => setTimeout(r, 30)); // let both headers land at the guard
+    release();
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    expect(submissions).toHaveLength(1);
+    const secretCount = [r1.text, r2.text].filter((t) => t.includes('sec-admin-1')).length;
+    expect(secretCount).toBe(1);
   });
 
   it('parses the TLS section: checkbox on requires all three fields', async () => {
