@@ -45,6 +45,11 @@ declare module '*setup-wizard.mjs' {
     needTls: boolean;
     error?: string | null;
     username?: string;
+    licenseKey?: string;
+    tls?: boolean;
+    domainApp?: string;
+    domainVtt?: string;
+    acmeEmail?: string;
   }): string;
   export function renderSecretsPage(secrets: Array<[string, string]>): string;
   export function renderProgressPage(): string;

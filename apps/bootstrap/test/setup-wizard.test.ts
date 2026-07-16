@@ -72,6 +72,27 @@ describe('renderCredsForm', () => {
     expect(html).toContain('value="me@ex.com"');
     expect(html).not.toContain('name="password" value');
   });
+  it('preserves non-secret values (license, domains, tls checked/open) when passed, and never a password', () => {
+    const html = renderCredsForm({
+      needCreds: true,
+      needTls: true,
+      error: 'bad',
+      username: 'me@ex.com',
+      licenseKey: 'LIC-<1>',
+      tls: true,
+      domainApp: 'app.ex.com',
+      domainVtt: 'vtt.ex.com',
+      acmeEmail: 'e@x.com',
+    });
+    expect(html).toContain('value="me@ex.com"');
+    expect(html).toContain('value="LIC-&lt;1&gt;"');
+    expect(html).toContain('value="app.ex.com"');
+    expect(html).toContain('value="vtt.ex.com"');
+    expect(html).toContain('value="e@x.com"');
+    expect(html).toContain('checked');
+    expect(html).toContain('<details open>');
+    expect(html).not.toContain('name="password" value');
+  });
 });
 
 describe('renderSecretsPage', () => {
@@ -305,6 +326,42 @@ describe('createWizard (real server)', () => {
     await fetch(`${base}/ack`, { method: 'POST', redirect: 'manual' });
     w.setPhase('failed', { exitCode: 7 });
     expect(await (await fetch(`${base}/`)).text()).toContain('7');
+  });
+
+  it('failed phase resolves waitForFinalPage promptly instead of burning the full timeout', async () => {
+    const { w, base } = await boot();
+    await fetch(`${base}/submit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'username=u&password=p',
+    });
+    await fetch(`${base}/ack`, { method: 'POST', redirect: 'manual' });
+    w.setPhase('failed', { exitCode: 3 });
+    const finalP = w.waitForFinalPage(5000);
+    const start = Date.now();
+    const page = await (await fetch(`${base}/`)).text();
+    expect(page).toContain('3');
+    expect(await finalP).toBe(true);
+    expect(Date.now() - start).toBeLessThan(1000); // well under the 5000ms timeout
+  });
+
+  it('invalid submit preserves non-secret values (license, tls fields) but never the password', async () => {
+    const { base } = await boot();
+    const res = await fetch(`${base}/submit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body:
+        'username=&password=hunter2SECRET&licenseKey=LIC-1&tls=on&domainApp=app.ex.com&domainVtt=vtt.ex.com&acmeEmail=e%40x.com',
+    });
+    const html = await res.text();
+    expect(html).toContain('class="err"');
+    expect(html).toContain('value="LIC-1"');
+    expect(html).toContain('value="app.ex.com"');
+    expect(html).toContain('value="vtt.ex.com"');
+    expect(html).toContain('value="e@x.com"');
+    expect(html).toContain('checked');
+    expect(html).toContain('open');
+    expect(html).not.toContain('hunter2SECRET');
   });
 
   it('takeover(): pages go gone, submits are refused', async () => {

@@ -83,7 +83,17 @@ ${head}<title>${escapeHtml(title)}</title><style>${STYLE}</style></head>
 <body><div class="wrap"><div class="card">${body}</div></div></body></html>`;
 }
 
-export function renderCredsForm({ needCreds, needTls, error = null, username = '' }) {
+export function renderCredsForm({
+  needCreds,
+  needTls,
+  error = null,
+  username = '',
+  licenseKey = '',
+  tls = false,
+  domainApp = '',
+  domainVtt = '',
+  acmeEmail = '',
+}) {
   const err = error === null ? '' : `<p class="err">${escapeHtml(error)}</p>`;
   const creds = !needCreds
     ? ''
@@ -92,17 +102,17 @@ export function renderCredsForm({ needCreds, needTls, error = null, username = '
 <label for="password">foundry.com password</label>
 <input type="password" id="password" name="password" autocomplete="current-password" required>
 <label for="licenseKey">license key <small>(leave blank to fetch from the account)</small></label>
-<input type="text" id="licenseKey" name="licenseKey">`;
-  const tls = !needTls
+<input type="text" id="licenseKey" name="licenseKey" value="${escapeHtml(licenseKey)}">`;
+  const tlsSection = !needTls
     ? ''
-    : `<details><summary>Enable HTTPS on your own domain (optional)</summary>
-<label><input type="checkbox" name="tls" value="on"> use HTTPS (Let's Encrypt)</label>
+    : `<details${tls ? ' open' : ''}><summary>Enable HTTPS on your own domain (optional)</summary>
+<label><input type="checkbox" name="tls" value="on"${tls ? ' checked' : ''}> use HTTPS (Let's Encrypt)</label>
 <label for="domainApp">app domain</label>
-<input type="text" id="domainApp" name="domainApp" placeholder="app.example.com">
+<input type="text" id="domainApp" name="domainApp" placeholder="app.example.com" value="${escapeHtml(domainApp)}">
 <label for="domainVtt">foundry domain</label>
-<input type="text" id="domainVtt" name="domainVtt" placeholder="vtt.example.com">
+<input type="text" id="domainVtt" name="domainVtt" placeholder="vtt.example.com" value="${escapeHtml(domainVtt)}">
 <label for="acmeEmail">email for Let's Encrypt</label>
-<input type="email" id="acmeEmail" name="acmeEmail" placeholder="you@example.com">
+<input type="email" id="acmeEmail" name="acmeEmail" placeholder="you@example.com" value="${escapeHtml(acmeEmail)}">
 </details>`;
   const intro = needCreds
     ? '<p>These credentials let the Foundry container download and license your server. They are written to a <code>0600</code> secret file on this host and never leave it.</p>'
@@ -110,7 +120,7 @@ export function renderCredsForm({ needCreds, needTls, error = null, username = '
   return renderShell({
     title: 'Setup — Foundry’s Unseen Servant',
     body: `<h1>Summon your servant</h1>${err}${intro}
-<form method="post" action="submit">${creds}${tls}<button type="submit">Begin the ritual</button></form>`,
+<form method="post" action="submit">${creds}${tlsSection}<button type="submit">Begin the ritual</button></form>`,
   });
 }
 
@@ -266,6 +276,7 @@ export function createWizard({ token, needCreds, needTls, bgPath, statusUrl, onS
         finalResolve(true);
         return renderDonePage(statusUrl);
       case 'failed':
+        finalResolve(true);
         return renderFailedPage(exitCode);
       default:
         return renderGonePage(); // 'gone'
@@ -332,9 +343,19 @@ export function createWizard({ token, needCreds, needTls, bgPath, statusUrl, onS
       }
       const form = parseFormBody(body);
       const error = validateForm(form, { needCreds, needTls });
+      const preservedFields = {
+        needCreds,
+        needTls,
+        username: form.username ?? '',
+        licenseKey: form.licenseKey ?? '',
+        tls: form.tls === 'on',
+        domainApp: form.domainApp ?? '',
+        domainVtt: form.domainVtt ?? '',
+        acmeEmail: form.acmeEmail ?? '',
+      };
       if (error !== null) {
         submitLocked = false;
-        html(res, renderCredsForm({ needCreds, needTls, error, username: form.username ?? '' }));
+        html(res, renderCredsForm({ ...preservedFields, error }));
         return;
       }
       state = 'submitting';
@@ -345,7 +366,7 @@ export function createWizard({ token, needCreds, needTls, bgPath, statusUrl, onS
       } catch (err) {
         state = 'collecting';
         submitLocked = false;
-        html(res, renderCredsForm({ needCreds, needTls, error: err.message, username: form.username ?? '' }));
+        html(res, renderCredsForm({ ...preservedFields, error: err.message }));
         return;
       }
       if (secrets.length === 0) {
