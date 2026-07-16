@@ -7,9 +7,12 @@ import {
   buildDotEnv,
   buildFoundryConfigJson,
   buildGatewayEnv,
+  buildPodmanComposeOverride,
   buildTlsCaddyfile,
   detectComposeCommand,
   generateSecret,
+  isPodmanRuntime,
+  PODMAN_OVERRIDE_MARKER,
   writeSecretIfAbsent,
 } from '../../../scripts/setup-quickstart.mjs';
 
@@ -97,5 +100,28 @@ describe('writeSecretIfAbsent', () => {
     expect(writeSecretIfAbsent(f, 'SECRET_VALUE=abc123\n')).toBe(true);
     expect(statSync(f).mode & 0o777).toBe(0o600);
     expect(writeSecretIfAbsent(f, 'SHOULD_NOT_OVERWRITE=xyz\n')).toBe(false);
+  });
+});
+
+describe('isPodmanRuntime', () => {
+  it('is true for podman runtimes, false for docker/null', () => {
+    expect(isPodmanRuntime(['docker', 'compose'])).toBe(false);
+    expect(isPodmanRuntime(['podman', 'compose'])).toBe(true);
+    expect(isPodmanRuntime(['podman-compose'])).toBe(true);
+    expect(isPodmanRuntime(null)).toBe(false);
+  });
+});
+
+describe('buildPodmanComposeOverride', () => {
+  it('starts with the marker and applies keep-id to foundry ONLY', () => {
+    const out = buildPodmanComposeOverride();
+    expect(out.startsWith(PODMAN_OVERRIDE_MARKER)).toBe(true);
+    expect(out).toContain('foundry:');
+    expect(out).toContain('userns_mode: "keep-id"');
+    // never apply keep-id to root-running services
+    expect(out).not.toContain('relay:');
+    expect(out).not.toContain('gateway:');
+    expect(out).not.toContain('web:');
+    expect(out).not.toContain('bootstrap:');
   });
 });

@@ -16,7 +16,7 @@ account/key/pairing work for you. The only hard external dependency is a
 foundryvtt.com account + license key (to download Foundry) and, for online (B)
 or remote players (C's TLS profile), a domain name.
 
-Pinned versions (see `VERSIONS.md`): Foundry `felddy/foundryvtt:13.351.0`,
+Pinned versions (see `VERSIONS.md`): Foundry `felddy/foundryvtt:14.364.0`,
 dnd5e `5.3.3`, module `foundry-rest-api 3.4.1`,
 relay `threehats/foundryvtt-rest-api-relay:3.4.1`.
 
@@ -386,7 +386,7 @@ own world — no demo content ships.
   scripts on the host, no `pnpm` needed for this path — `compose ... --build`
   builds the `bootstrap`, `gateway` and `web` images; `foundry` and `relay`
   are pulled, not built).
-- A foundryvtt.com account with a **v13 license**. Nothing else.
+- A foundryvtt.com account with a **v14 license**. Nothing else.
 - The repo checked out.
 - Don't run this next to the A/B dev/prod stack on the same host without
   changing the `HOST_PORT_*` variables in `stack/quickstart/.env` first —
@@ -419,6 +419,20 @@ These are written to `stack/quickstart/secrets/*.env` and
 nothing else needs editing. `make setup` finishes by auto-detecting your
 runtime and running `docker compose up -d --build` (or `podman compose` /
 `podman-compose`) for you.
+
+#### Rootless-Podman file ownership
+
+On the Podman path, `make setup` also writes
+`stack/quickstart/docker-compose.override.yml` giving the `foundry` service
+`userns_mode: "keep-id"`. This is required because felddy runs as a fixed
+non-root uid, which under rootless Podman cannot read the host-owned
+`foundry_data` bind mount or the `0600` `secrets/foundry-config.json`. `keep-id`
+maps foundry's uid to your host user, so both work — and you keep read access to
+your own admin key. The override is **not** applied on Docker (unnecessary
+there, and auto-removed if you switch to Docker). Only `foundry` gets it:
+`relay`, `gateway`, `web`, and `bootstrap` run as root (or start as root and
+self-chown), which already maps to the host user under rootless Podman. The file
+is generated (git-ignored) and wiped by `make setup-reset`.
 
 Re-running `make setup` is safe: existing secrets are kept and never
 re-shown. `make setup-reset` deletes the generated `.env`, `Caddyfile.tls` and

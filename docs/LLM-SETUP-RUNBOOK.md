@@ -35,7 +35,7 @@ disagree, HOSTING.md wins.
 
 ## Version pins (do not deviate)
 
-From `VERSIONS.md`: Foundry `felddy/foundryvtt:13.351.0`, system
+From `VERSIONS.md`: Foundry `felddy/foundryvtt:14.364.0`, system
 **dnd5e 5.3.3**, module **foundry-rest-api 3.4.1**, relay image
 `threehats/foundryvtt-rest-api-relay:3.4.1`. The dnd5e adapter reads
 data paths pinned to dnd5e 5.3.3 on Foundry v13 — a different system version
