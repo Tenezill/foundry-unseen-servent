@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Turnkey quickstart setup (spec Phase 1, host-side by design: writing files
  * and running `compose up` from the host needs no runtime socket and no
