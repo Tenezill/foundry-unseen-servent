@@ -16,7 +16,7 @@ account/key/pairing work for you. The only hard external dependency is a
 foundryvtt.com account + license key (to download Foundry) and, for online (B)
 or remote players (C's TLS profile), a domain name.
 
-Pinned versions (see `VERSIONS.md`): Foundry `felddy/foundryvtt:13.351.0`,
+Pinned versions (see `VERSIONS.md`): Foundry `felddy/foundryvtt:14.364.0`,
 dnd5e `5.3.3`, module `foundry-rest-api 3.4.1`,
 relay `threehats/foundryvtt-rest-api-relay:3.4.1`.
 
@@ -386,7 +386,7 @@ own world — no demo content ships.
   scripts on the host, no `pnpm` needed for this path — `compose ... --build`
   builds the `bootstrap`, `gateway` and `web` images; `foundry` and `relay`
   are pulled, not built).
-- A foundryvtt.com account with a **v13 license**. Nothing else.
+- A foundryvtt.com account with a **v14 license**. Nothing else.
 - The repo checked out.
 - Don't run this next to the A/B dev/prod stack on the same host without
   changing the `HOST_PORT_*` variables in `stack/quickstart/.env` first —

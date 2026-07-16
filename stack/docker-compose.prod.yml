@@ -57,7 +57,7 @@ services:
 
   foundry:
     profiles: ["foundry"]
-    image: felddy/foundryvtt:13.351.0
+    image: felddy/foundryvtt:14.364.0
     # Stable hostname: Foundry's license signature binds to it — without this,
     # every container recreate invalidates the license and re-prompts the EULA.
     # Matches the dev compose so the same data volume works under both stacks.
