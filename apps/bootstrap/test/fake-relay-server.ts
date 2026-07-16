@@ -4,6 +4,7 @@
  * against real HTTP (node:http) exactly like the gateway's FakeRelay drives
  * routes — no network mocking.
  */
+import { constants, generateKeyPairSync, type KeyObject, privateDecrypt } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 export interface FakeRelayClientRow {
@@ -28,6 +29,20 @@ export class FakeRelayServer {
   gmPassword = 'gm-pass';
   /** set true to make /start-session mark the first client online. */
   sessionBringsOnline = true;
+
+  // Lazily-generated RSA keypair for the session-handshake/start-session
+  // encryption contract (relay 3.4.1). Only session tests trigger keygen.
+  private rsa: { privateKey: KeyObject; publicKeyPem: string } | null = null;
+  private readonly handshakes = new Map<string, string>(); // token -> nonce
+  private hsSeq = 0;
+
+  private ensureRsa(): { privateKey: KeyObject; publicKeyPem: string } {
+    if (this.rsa === null) {
+      const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      this.rsa = { privateKey, publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }) as string };
+    }
+    return this.rsa;
+  }
 
   private server: Server | null = null;
   // Separate counters: bearer allocation (register/login) must never shift
@@ -95,12 +110,38 @@ export class FakeRelayServer {
     if (req.method === 'POST' && url === '/session-handshake') {
       const key = (req.headers['x-api-key'] as string | undefined) ?? '';
       if (!this.keys.has(key)) return send(401, { error: 'unauthorized' });
-      return send(200, { token: 'hs-token-1' });
+      const token = `hs-${++this.hsSeq}`;
+      const nonce = `nonce-${this.hsSeq}`;
+      this.handshakes.set(token, nonce);
+      return send(200, {
+        token,
+        nonce,
+        publicKey: this.ensureRsa().publicKeyPem,
+        instanceId: 'local',
+        foundryUrl: (req.headers['x-foundry-url'] as string | undefined) ?? '',
+        username: (req.headers['x-username'] as string | undefined) ?? '',
+      });
     }
     if (req.method === 'POST' && url === '/start-session') {
-      const { token, password } = body as { token?: string; password?: string };
-      if (token !== 'hs-token-1') return send(400, { error: 'bad handshake token' });
-      if (password !== this.gmPassword) return send(401, { error: 'invalid credentials' });
+      const { handshakeToken, encryptedPassword } = body as { handshakeToken?: string; encryptedPassword?: string };
+      // Mirror relay 3.4.1: both fields required, password RSA-OAEP/SHA-256.
+      if (typeof handshakeToken !== 'string' || typeof encryptedPassword !== 'string') {
+        return send(400, { error: 'handshakeToken and encryptedPassword are required' });
+      }
+      const nonce = this.handshakes.get(handshakeToken);
+      if (nonce === undefined) return send(400, { error: 'unknown handshakeToken' });
+      let creds: { password?: string; nonce?: string };
+      try {
+        const buf = privateDecrypt(
+          { key: this.ensureRsa().privateKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
+          Buffer.from(encryptedPassword, 'base64'),
+        );
+        creds = JSON.parse(buf.toString('utf8')) as { password?: string; nonce?: string };
+      } catch {
+        return send(400, { error: 'invalid encrypted password' });
+      }
+      if (creds.nonce !== nonce) return send(400, { error: 'nonce mismatch' });
+      if (creds.password !== this.gmPassword) return send(401, { error: 'invalid credentials' });
       if (this.sessionBringsOnline && this.clients.length > 0) {
         (this.clients[0] as FakeRelayClientRow).isOnline = true;
       }
