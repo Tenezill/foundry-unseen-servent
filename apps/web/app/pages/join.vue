@@ -22,6 +22,14 @@
       </p>
     </div>
 
+    <div v-else-if="state === 'expired'" class="status card">
+      <p class="status-title">Your session ended</p>
+      <p class="status-body">
+        Your invite link was replaced or has expired. Ask your game master for a new link,
+        then open it on this device.
+      </p>
+    </div>
+
     <div v-else-if="state === 'invalid'" class="status card">
       <p class="status-title">This invite didn&rsquo;t work</p>
       <p class="status-body">
@@ -40,7 +48,7 @@
 <script setup lang="ts">
 import type { MeResponse } from '~/types/api'
 
-type JoinState = 'checking' | 'no-token' | 'invalid' | 'error'
+type JoinState = 'checking' | 'no-token' | 'expired' | 'invalid' | 'error'
 
 const state = ref<JoinState>('checking')
 const { api } = useApi()
@@ -57,7 +65,9 @@ async function validate(): Promise<void> {
 
   const token = getToken()
   if (!token) {
-    state.value = 'no-token'
+    // A prior session on this device (lastActor set) means the token was
+    // rotated/expired mid-use — not that the player never had an invite.
+    state.value = getLastActor() ? 'expired' : 'no-token'
     return
   }
 
