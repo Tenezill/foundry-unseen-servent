@@ -23,6 +23,7 @@ declare module '*setup-quickstart.mjs' {
   ): string[] | null;
   export function writeSecretIfAbsent(path: string, content: string): boolean;
   export const PODMAN_OVERRIDE_MARKER: string;
+  export const QUICKSTART_BIND_DIRS: string[];
   export function isPodmanRuntime(compose: string[] | null): boolean;
   export function buildPodmanComposeOverride(): string;
   export function writeSecretsBundle(

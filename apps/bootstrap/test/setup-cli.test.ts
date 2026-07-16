@@ -13,6 +13,7 @@ import {
   generateSecret,
   isPodmanRuntime,
   PODMAN_OVERRIDE_MARKER,
+  QUICKSTART_BIND_DIRS,
   writeEnvFiles,
   writeSecretIfAbsent,
   writeSecretsBundle,
@@ -125,6 +126,34 @@ describe('buildPodmanComposeOverride', () => {
     expect(out).not.toContain('gateway:');
     expect(out).not.toContain('web:');
     expect(out).not.toContain('bootstrap:');
+  });
+});
+
+describe('QUICKSTART_BIND_DIRS', () => {
+  it('is the expected set of five data dirs', () => {
+    expect([...QUICKSTART_BIND_DIRS].sort()).toEqual([
+      'caddy-data',
+      'companion-runtime',
+      'foundry_data',
+      'gateway-data',
+      'relay-data',
+    ]);
+  });
+
+  it('covers every directory bind-mount source in the quickstart compose (drift guard)', () => {
+    // rootless Podman (crun) will not auto-create bind-mount source dirs, so the
+    // list must stay complete. Extract "- ./<src>:" sources, drop file mounts
+    // (Caddyfile*, secrets/*), and assert the remaining dirs match the list.
+    const compose = readFileSync(new URL('../../../stack/quickstart/docker-compose.yml', import.meta.url), 'utf8');
+    const sources = [...compose.matchAll(/-\s*\.\/([^:\n]+):/g)]
+      .map((m) => m[1])
+      .filter((s): s is string => s !== undefined);
+    const dirTops = new Set(
+      sources
+        .map((s) => s.split('/')[0] ?? '')
+        .filter((s) => s !== '' && s !== 'secrets' && !s.startsWith('Caddyfile')),
+    );
+    expect([...dirTops].sort()).toEqual([...QUICKSTART_BIND_DIRS].sort());
   });
 });
 
