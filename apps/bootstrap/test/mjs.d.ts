@@ -22,6 +22,9 @@ declare module '*setup-quickstart.mjs' {
     run?: (cmd: string, args: string[]) => { status: number | null },
   ): string[] | null;
   export function writeSecretIfAbsent(path: string, content: string): boolean;
+  export const PODMAN_OVERRIDE_MARKER: string;
+  export function isPodmanRuntime(compose: string[] | null): boolean;
+  export function buildPodmanComposeOverride(): string;
 }
 
 declare module '*setup-wizard.mjs' {
