@@ -382,6 +382,19 @@ own world — no demo content ships.
 
 - A server (Ubuntu or similar) with **docker + Compose v2** OR **rootless
   podman ≥4** — either is auto-detected by `make setup`.
+- **Rootless podman must use Docker Compose v2 as its compose provider**, not
+  `podman-compose`. `podman-compose` places all services in a shared pod, which
+  is incompatible with the per-service `userns_mode: keep-id` that `make setup`
+  applies to `foundry` (`Error: --userns and --pod cannot be set together`).
+  Install the Compose v2 binary and point podman at it, e.g.:
+  ```bash
+  mkdir -p ~/.local/bin
+  curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" -o ~/.local/bin/docker-compose
+  chmod +x ~/.local/bin/docker-compose
+  mkdir -p ~/.config/containers
+  printf '[engine]\ncompose_providers=["%s/.local/bin/docker-compose"]\n' "$HOME" > ~/.config/containers/containers.conf
+  podman compose version   # should report "Docker Compose version v2+"
+  ```
 - **Node 22** to run `make setup` and `scripts/make-invite.mjs` (plain Node
   scripts on the host, no `pnpm` needed for this path — `compose ... --build`
   builds the `bootstrap`, `gateway` and `web` images; `foundry` and `relay`
