@@ -420,6 +420,20 @@ nothing else needs editing. `make setup` finishes by auto-detecting your
 runtime and running `docker compose up -d --build` (or `podman compose` /
 `podman-compose`) for you.
 
+#### Rootless-Podman file ownership
+
+On the Podman path, `make setup` also writes
+`stack/quickstart/docker-compose.override.yml` giving the `foundry` service
+`userns_mode: "keep-id"`. This is required because felddy runs as a fixed
+non-root uid, which under rootless Podman cannot read the host-owned
+`foundry_data` bind mount or the `0600` `secrets/foundry-config.json`. `keep-id`
+maps foundry's uid to your host user, so both work — and you keep read access to
+your own admin key. The override is **not** applied on Docker (unnecessary
+there, and auto-removed if you switch to Docker). Only `foundry` gets it:
+`relay`, `gateway`, `web`, and `bootstrap` run as root (or start as root and
+self-chown), which already maps to the host user under rootless Podman. The file
+is generated (git-ignored) and wiped by `make setup-reset`.
+
 Re-running `make setup` is safe: existing secrets are kept and never
 re-shown. `make setup-reset` deletes the generated `.env`, `Caddyfile.tls` and
 `secrets/*` (after a y/N confirmation) so you can start over — the bind-mount
