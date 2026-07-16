@@ -50,6 +50,18 @@ describe('ensureKey', () => {
     expect(status.current().phase).toBe('key-ready');
   });
 
+  it('relay rejects an unknown system scope (wod5e): drops only it and re-mints', async () => {
+    server.rejectScopes.add('wod5e');
+    const key = await ensureKey(deps());
+    expect(key).toBe('key-1');
+    expect(server.mintedScopes.length).toBe(2); // first attempt rejected, second succeeds
+    const finalScopes = server.mintedScopes[1] ?? [];
+    expect(finalScopes).not.toContain('wod5e');
+    expect(finalScopes).toContain('dnd5e'); // supported system scope preserved
+    expect(finalScopes).toContain('entity:read');
+    expect(status.current().phase).toBe('key-ready');
+  });
+
   it('valid persisted key: returns it with ZERO /auth calls (probe only)', async () => {
     await ensureKey(deps());
     const authCallsAfterFirst = server.authCalls.length;
