@@ -21,6 +21,9 @@ export class FakeRelayServer {
   /** every /auth/* path hit, in order — lets tests assert "no auth calls". */
   readonly authCalls: string[] = [];
   readonly mintedScopes: string[][] = [];
+  /** scopes the fake rejects at mint time, mirroring relay 3.4.1's
+   *  `400 {"error":"Invalid scope: <name>"}` for unknown system scopes. */
+  readonly rejectScopes = new Set<string>();
   throttleAuth = false;
   gmPassword = 'gm-pass';
   /** set true to make /start-session mark the first client online. */
@@ -77,9 +80,11 @@ export class FakeRelayServer {
       const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
       if (!this.bearers.has(bearer)) return send(401, { error: 'unauthorized' });
       const scopes = (body as { scopes?: string[] }).scopes ?? [];
+      this.mintedScopes.push([...scopes]); // record every attempt, incl. rejected
+      const bad = scopes.find((s) => this.rejectScopes.has(s));
+      if (bad !== undefined) return send(400, { error: `Invalid scope: ${bad}` });
       const key = `key-${++this.keySeq}`;
       this.keys.set(key, [...scopes]);
-      this.mintedScopes.push([...scopes]);
       return send(200, { key });
     }
     if (req.method === 'GET' && url.startsWith('/clients')) {

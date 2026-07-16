@@ -87,17 +87,36 @@ export class RelayAuthClient {
     throw new RelayAuthError(`login failed (${status})`, status, '/auth/login');
   }
 
-  /** POST /auth/api-keys {name, scopes} (Bearer) -> the key. Shown once. */
+  /** POST /auth/api-keys {name, scopes} (Bearer) -> the key. Shown once.
+   *  Some relay builds reject an unknown system scope (e.g. `wod5e` on 3.4.1)
+   *  with 400 `Invalid scope: <name>`, failing the WHOLE request. Rather than
+   *  never mint, drop the named scope and retry — the fallback scopes.ts
+   *  documents. Only the rejected scope is dropped, so a supported system scope
+   *  like `dnd5e` is preserved. */
   async mintKey(bearer: string, name: string, scopes: readonly string[]): Promise<string> {
-    const { status, body } = await this.call('POST', '/auth/api-keys', {
-      headers: { authorization: `Bearer ${bearer}` },
-      body: { name, scopes: [...scopes] },
-    });
-    if (status === 429) throw new RelayAuthError('auth throttled', 429, '/auth/api-keys');
-    // Field name per Task 0 findings §4 (docs: key; apiKey = fallback).
-    const key = typeof body.key === 'string' ? body.key : typeof body.apiKey === 'string' ? body.apiKey : null;
-    if (status >= 200 && status < 300 && key !== null) return key;
-    throw new RelayAuthError(`api-key mint failed (${status})`, status, '/auth/api-keys');
+    let current = [...scopes];
+    // At most one drop per scope, plus the initial attempt.
+    for (let attempt = 0; attempt <= scopes.length; attempt++) {
+      const { status, body } = await this.call('POST', '/auth/api-keys', {
+        headers: { authorization: `Bearer ${bearer}` },
+        body: { name, scopes: current },
+      });
+      if (status === 429) throw new RelayAuthError('auth throttled', 429, '/auth/api-keys');
+      // Field name per Task 0 findings §4 (docs: key; apiKey = fallback).
+      const key = typeof body.key === 'string' ? body.key : typeof body.apiKey === 'string' ? body.apiKey : null;
+      if (status >= 200 && status < 300 && key !== null) return key;
+      const match =
+        status === 400 && typeof body.error === 'string' ? /invalid scope:\s*(\S+)/i.exec(body.error) : null;
+      if (match !== null) {
+        const filtered = current.filter((s) => s !== match[1]);
+        if (filtered.length < current.length) {
+          current = filtered;
+          continue;
+        }
+      }
+      throw new RelayAuthError(`api-key mint failed (${status})`, status, '/auth/api-keys');
+    }
+    throw new RelayAuthError('api-key mint failed (every scope rejected)', 400, '/auth/api-keys');
   }
 
   /** GET /clients as a cheap authenticated probe — NOT throttled like /auth. */
