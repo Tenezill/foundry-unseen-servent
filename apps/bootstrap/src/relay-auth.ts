@@ -6,6 +6,8 @@
  * field name differs from the extraction below, fix it HERE (and in the fake
  * server) — callers only see the typed results. Every call is bounded.
  */
+import { constants, publicEncrypt } from 'node:crypto';
+
 export class RelayAuthError extends Error {
   constructor(
     message: string,
@@ -146,12 +148,26 @@ export class RelayAuthClient {
     });
   }
 
-  /** POST /start-session — handshake body forwarded + the GM password
-   *  (exact contract per Task 0 findings §4). */
+  /** POST /start-session — relay 3.4.1 headless login. The handshake returns
+   *  { token, publicKey, nonce }; the relay expects the GM password RSA-encrypted
+   *  (OAEP / SHA-256, base64) over `{password, nonce}` and sent as
+   *  { handshakeToken, encryptedPassword } — NOT a plaintext `password` (that
+   *  now 400s: "handshakeToken and encryptedPassword are required"). Contract
+   *  per the relay's session API docs/examples. */
   async startSession(key: string, handshakeBody: Record<string, unknown>, gmPassword: string): Promise<CallResult> {
+    const token = typeof handshakeBody.token === 'string' ? handshakeBody.token : '';
+    const publicKey = typeof handshakeBody.publicKey === 'string' ? handshakeBody.publicKey : '';
+    const nonce = typeof handshakeBody.nonce === 'string' ? handshakeBody.nonce : '';
+    if (token === '' || publicKey === '') {
+      throw new RelayAuthError('session handshake missing token/publicKey', undefined, '/start-session');
+    }
+    const encryptedPassword = publicEncrypt(
+      { key: publicKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
+      Buffer.from(JSON.stringify({ password: gmPassword, nonce }), 'utf8'),
+    ).toString('base64');
     return this.call('POST', '/start-session', {
       headers: { 'x-api-key': key },
-      body: { ...handshakeBody, password: gmPassword },
+      body: { handshakeToken: token, encryptedPassword },
     });
   }
 }
