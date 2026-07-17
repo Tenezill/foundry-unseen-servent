@@ -43,6 +43,60 @@
           <button class="btn small danger" type="button" :disabled="busy" @click="revoke(p.name)">Revoke</button>
         </div>
       </div>
+
+      <!-- Relay & Pairing: the account + URL an operator needs to approve a
+           pairing request on the self-hosted relay -->
+      <details class="card relay-panel">
+        <summary class="relay-summary">Relay &amp; pairing</summary>
+
+        <div class="relay-body">
+          <p v-if="relayError" class="hint">
+            Couldn’t load the relay account. It appears once the stack’s bootstrap sidecar has run.
+          </p>
+
+          <template v-else-if="relay">
+            <p class="hint">
+              Sign in with this account to <strong>approve a pairing request</strong> from the Foundry module.
+            </p>
+
+            <div v-if="relay.account" class="cred-grid">
+              <span class="cred-label">Email</span>
+              <code class="cred-value">{{ relay.account.email }}</code>
+              <button class="btn small" type="button" @click="copyText(relay.account.email, 'Email')">Copy</button>
+
+              <span class="cred-label">Password</span>
+              <code class="cred-value">{{ showRelayPw ? relay.account.password : '••••••••••' }}</code>
+              <button class="btn small" type="button" @click="showRelayPw = !showRelayPw">
+                {{ showRelayPw ? 'Hide' : 'Show' }}
+              </button>
+              <span class="cred-spacer" />
+              <button class="btn small" type="button" @click="copyText(relay.account!.password, 'Password')">
+                Copy password
+              </button>
+            </div>
+            <p v-else class="hint">The relay account isn’t available yet — check back after the stack finishes starting.</p>
+
+            <ol class="pair-steps">
+              <li>In Foundry, open the Unseen Servant REST API module settings and click <strong>Pair</strong>.</li>
+              <li>
+                Approve the request at
+                <template v-if="relay.pairBaseUrl">
+                  <code class="cred-value inline">{{ relay.pairBaseUrl }}/pair/&lt;code&gt;</code>
+                </template>
+                <template v-else>your relay’s <code class="cred-value inline">/pair/&lt;code&gt;</code> page</template>
+                using the account above.
+              </li>
+              <li>Reload the world so the module reconnects.</li>
+            </ol>
+            <p v-if="!relay.pairBaseUrl" class="hint">
+              Tip: set <code>RELAY_PUBLIC_URL</code> in the stack’s <code>.env</code> so pairing links point at your relay
+              instead of foundryrestapi.com.
+            </p>
+          </template>
+
+          <p v-else class="hint">Loading…</p>
+        </div>
+      </details>
     </template>
 
     <!-- new player sheet -->
@@ -97,7 +151,13 @@
 </template>
 
 <script setup lang="ts">
-import type { AdminActorsResponse, AdminInviteResponse, AdminPlayer, AdminPlayersResponse } from '~/types/api'
+import type {
+  AdminActorsResponse,
+  AdminInviteResponse,
+  AdminPlayer,
+  AdminPlayersResponse,
+  AdminRelayResponse,
+} from '~/types/api'
 
 type AdminState = 'login' | 'disabled' | 'console'
 
@@ -119,6 +179,10 @@ const selectedActors = ref<Array<{ id: string; name: string }>>([])
 
 const invite = ref<{ name: string; link: string } | null>(null)
 
+const relay = ref<AdminRelayResponse | null>(null)
+const relayError = ref(false)
+const showRelayPw = ref(false)
+
 function askConfirm(message: string): Promise<boolean> {
   return new Promise((resolve) => {
     confirmState.value = { message, resolve }
@@ -134,6 +198,19 @@ async function loadPlayers(): Promise<void> {
   const res = await adminApi<AdminPlayersResponse>('/api/admin/players')
   players.value = res.players
   state.value = 'console'
+  // Relay/pairing info is a reference panel — its failure must never block the
+  // console (which is about player links). Best-effort, non-fatal.
+  void loadRelay()
+}
+
+async function loadRelay(): Promise<void> {
+  relayError.value = false
+  try {
+    relay.value = await adminApi<AdminRelayResponse>('/api/admin/relay')
+  } catch {
+    relay.value = null
+    relayError.value = true
+  }
 }
 
 async function boot(): Promise<void> {
@@ -178,6 +255,10 @@ async function login(): Promise<void> {
 function logout(): void {
   clearAdminSecret()
   players.value = []
+  // The relay account (incl. its password) must not linger on the login screen.
+  relay.value = null
+  relayError.value = false
+  showRelayPw.value = false
   // Close every overlay: a modal must not survive into the login screen
   // (the invite sheet may still hold a shown-once token).
   createOpen.value = false
@@ -309,11 +390,15 @@ async function revoke(name: string): Promise<void> {
 
 async function copy(): Promise<void> {
   if (!invite.value) return
+  await copyText(invite.value.link, 'Link')
+}
+
+async function copyText(text: string, label: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(invite.value.link)
-    toast.show('Link copied')
+    await navigator.clipboard.writeText(text)
+    toast.show(`${label} copied`)
   } catch {
-    toast.show('Copy failed — long-press the link to copy it manually.')
+    toast.show('Copy failed — long-press to copy it manually.')
   }
 }
 
@@ -466,5 +551,76 @@ onBeforeUnmount(() => {
 
 .once {
   text-align: center;
+}
+
+.relay-panel {
+  padding: 14px;
+  margin-top: 10px;
+}
+
+.relay-summary {
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+
+.relay-summary::-webkit-details-marker {
+  display: none;
+}
+
+.relay-summary::before {
+  content: '▸ ';
+  color: var(--text-dim);
+}
+
+.relay-panel[open] .relay-summary::before {
+  content: '▾ ';
+}
+
+.relay-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+}
+
+.cred-grid {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.cred-label {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.cred-value {
+  font-family: var(--mono, monospace);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.cred-value.inline {
+  font-size: 0.8rem;
+}
+
+.cred-spacer {
+  grid-column: 1 / 3;
+}
+
+.pair-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 20px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  list-style: decimal;
+}
+
+.pair-steps strong {
+  color: inherit;
 }
 </style>

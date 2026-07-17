@@ -528,6 +528,13 @@ verified and flipped to `true` on your host — see `docs/OPERATIONS.md`), the
 sidecar's converge loop keeps re-establishing the relay session on its own —
 no browser tab needs to stay open.
 
+**Where to find the relay account:** the app's **`/admin` → "Relay & pairing"**
+panel shows the relay account email + password and the exact self-hosted approval
+URL, so you don't have to dig them out of `secrets/bootstrap.env`. Set
+`RELAY_PUBLIC_URL` in `stack/quickstart/.env` (the URL your browser uses to reach
+the relay, e.g. `https://relay.<domain>`) so both the panel and the module's pair
+link point at **your** relay instead of the public `foundryrestapi.com`.
+
 If the status page shows **gm-login-failed**: the **`Companion`** user's password
 in the world doesn't match `FOUNDRY_GM_PASSWORD` in
 `stack/quickstart/secrets/bootstrap.env`, or the `Companion` user doesn't exist —

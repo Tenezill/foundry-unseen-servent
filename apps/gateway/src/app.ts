@@ -37,6 +37,7 @@ import type { EncounterView } from './encounters.js';
 import type { AdapterRegistry } from './registry.js';
 import type { WorldHealth } from './client-id-resolver.js';
 import type { BootstrapStatusView } from './status-file.js';
+import type { RelayAccountView } from './relay-account.js';
 
 /** Live view of the player list; backed by FilePlayerStore in production. */
 export interface PlayersPort {
@@ -181,6 +182,13 @@ export interface GatewayDeps {
   /** Turnkey: whitelisted sidecar status.json view merged into /healthz;
    *  null (absent/unreadable) omits the field. */
   bootstrapStatus?: () => BootstrapStatusView | null;
+  /** Turnkey: relay account (email+password) for the admin pairing panel,
+   *  surfaced only via GET /api/admin/relay. null when the sidecar file is
+   *  absent/unreadable. Requires `admin` to be configured to have any effect. */
+  relayAccount?: () => RelayAccountView | null;
+  /** Turnkey: the self-hosted relay URL shown in the admin pairing panel so
+   *  approvals open the right page. Absent -> panel reports it as unknown. */
+  relayPairBaseUrl?: string;
   /** Bound for /healthz's relay probe (M18 pattern). Default 3000. */
   healthTimeoutMs?: number;
 }
@@ -661,6 +669,19 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       return reply.code(200).send({ actors });
     },
   );
+
+  // Relay & Pairing panel (admin-only): the relay account credentials needed
+  // to APPROVE a pairing request, plus the self-hosted URL where that approval
+  // happens. Both are behind requireAdmin — the password never appears on any
+  // unauthenticated surface. account is null until the sidecar has written its
+  // relay-account.json (fresh stack, before the first converge pass).
+  app.get('/api/admin/relay', { preHandler: requireAdmin }, async (_req, reply) => {
+    const account = deps.relayAccount?.() ?? null;
+    return reply.code(200).send({
+      account,
+      pairBaseUrl: deps.relayPairBaseUrl ?? null,
+    });
+  });
 
   /** Map a raw relay roll to the client-facing RollEntry (M9). */
   const toRollEntry = (r: RawRoll): RollEntry => ({

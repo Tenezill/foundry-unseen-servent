@@ -26,6 +26,14 @@ export interface GatewayConfig {
   adminPassword?: string;
   /** Turnkey: sidecar status.json merged into /healthz when set. */
   statusFile?: string;
+  /** Turnkey: sidecar relay-account.json, surfaced (admin-only) by
+   *  GET /api/admin/relay so the operator can find the relay account
+   *  credentials needed to approve pairing. */
+  relayAccountFile?: string;
+  /** Turnkey: the URL the operator's browser uses to reach the relay
+   *  (same value as the relay's FRONTEND_URL). Shown in the admin pairing
+   *  panel so approvals open the self-hosted page, not foundryrestapi.com. */
+  relayPublicUrl?: string;
 }
 
 /**
@@ -80,5 +88,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       ? { adminPassword: env.ADMIN_PASSWORD }
       : {}),
     ...(env.STATUS_FILE !== undefined && env.STATUS_FILE !== '' ? { statusFile: env.STATUS_FILE } : {}),
+    ...(env.RELAY_ACCOUNT_FILE !== undefined && env.RELAY_ACCOUNT_FILE !== ''
+      ? { relayAccountFile: env.RELAY_ACCOUNT_FILE }
+      : {}),
+    ...(env.RELAY_PUBLIC_URL !== undefined && env.RELAY_PUBLIC_URL !== ''
+      ? { relayPublicUrl: env.RELAY_PUBLIC_URL }
+      : {}),
   };
 }

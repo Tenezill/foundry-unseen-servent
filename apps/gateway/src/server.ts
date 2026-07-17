@@ -18,6 +18,7 @@ import { FilePlayerStore } from './player-store.js';
 import { ApiKeySource } from './key-source.js';
 import { ClientIdResolver } from './client-id-resolver.js';
 import { readBootstrapStatus } from './status-file.js';
+import { readRelayAccount } from './relay-account.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -105,6 +106,10 @@ async function main(): Promise<void> {
       ? { bootstrapStatus: () => readBootstrapStatus(cfg.statusFile as string) }
       : {}),
     ...(cfg.adminPassword !== undefined ? { admin: { password: cfg.adminPassword, store } } : {}),
+    ...(cfg.relayAccountFile !== undefined
+      ? { relayAccount: () => readRelayAccount(cfg.relayAccountFile as string) }
+      : {}),
+    ...(cfg.relayPublicUrl !== undefined ? { relayPairBaseUrl: cfg.relayPublicUrl } : {}),
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
       redact: {
