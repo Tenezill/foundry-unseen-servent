@@ -166,7 +166,7 @@ describe('writeSecretsBundle', () => {
     );
     expect(out.map(([label]) => label)).toEqual([
       'Foundry admin key (setup screen)',
-      'Gamemaster password (set this on the Gamemaster user in YOUR world)',
+      'Companion user password (create a Gamemaster-role user named "Companion" with this)',
       'Relay account (bootstrap@companion.local)',
       'App admin console password (/admin)',
     ]);
@@ -176,6 +176,10 @@ describe('writeSecretsBundle', () => {
     expect(cfg.foundry_license_key).toBeUndefined(); // blank key omitted
     const bootstrapEnv = readFileSync(join(dir, 'bootstrap.env'), 'utf8');
     expect(bootstrapEnv).toContain(`FOUNDRY_ADMIN_KEY=${cfg.foundry_admin_key}`);
+    // The headless keep-alive logs in as the dedicated Companion user; its
+    // password is the second returned secret.
+    expect(bootstrapEnv).toContain('FOUNDRY_GM_USER=Companion');
+    expect(bootstrapEnv).toContain(`FOUNDRY_GM_PASSWORD=${out[1]?.[1]}`);
     const gatewayEnv = readFileSync(join(dir, 'gateway.env'), 'utf8');
     expect(gatewayEnv).toContain(`ADMIN_PASSWORD=${out[3]?.[1]}`);
   });
