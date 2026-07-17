@@ -52,6 +52,13 @@ services:
       - APP_ENV=production
       - PORT=3010
       - DB_TYPE=sqlite
+      # The relay builds the module's pairing approval URL as FRONTEND_URL/pair/<code>
+      # (default https://foundryrestapi.com — the PUBLIC relay, where your account
+      # does not exist). Set RELAY_PUBLIC_URL in .env to the URL your browser uses
+      # to reach THIS relay (e.g. https://relay.example.com) so pairing approvals
+      # open your self-hosted page. Empty -> the relay keeps its foundryrestapi.com
+      # default (getEnv treats "" as unset).
+      - FRONTEND_URL=${RELAY_PUBLIC_URL:-}
     volumes:
       - ./relay-data:/app/data
     ports:

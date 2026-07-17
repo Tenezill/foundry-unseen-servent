@@ -70,10 +70,10 @@ describe('file builders', () => {
 
   it('buildDotEnv: HTTP default vs TLS profile', () => {
     expect(buildDotEnv({ tls: false })).toBe(
-      'HOST_PORT_WEB=8080\nHOST_PORT_FOUNDRY=30000\nHOST_PORT_RELAY=3010\nHOST_PORT_STATUS=8321\n# FOUNDRY_WORLD=your-world-id\n',
+      'HOST_PORT_WEB=8080\nHOST_PORT_FOUNDRY=30000\nHOST_PORT_RELAY=3010\nHOST_PORT_STATUS=8321\n# FOUNDRY_WORLD=your-world-id\n# RELAY_PUBLIC_URL=https://relay.example.com\n',
     );
     expect(buildDotEnv({ tls: true })).toBe(
-      'HOST_PORT_WEB=8080\nHOST_PORT_FOUNDRY=30000\nHOST_PORT_RELAY=3010\nHOST_PORT_STATUS=8321\nCOMPOSE_PROFILES=tls\nFOUNDRY_PROXY_SSL=true\nFOUNDRY_PROXY_PORT=443\n# FOUNDRY_WORLD=your-world-id\n',
+      'HOST_PORT_WEB=8080\nHOST_PORT_FOUNDRY=30000\nHOST_PORT_RELAY=3010\nHOST_PORT_STATUS=8321\nCOMPOSE_PROFILES=tls\nFOUNDRY_PROXY_SSL=true\nFOUNDRY_PROXY_PORT=443\n# FOUNDRY_WORLD=your-world-id\n# RELAY_PUBLIC_URL=https://relay.example.com\n',
     );
   });
 
