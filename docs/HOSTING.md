@@ -422,7 +422,11 @@ domain? [y/N]", then the app domain, the Foundry domain, and an email for
 Let's Encrypt. Everything else is **generated** and printed **once**:
 
 - the Foundry **admin key** (for the Foundry setup screen),
-- the **Gamemaster password** (set it on the Gamemaster user in your world),
+- the **Companion user password** — create a Gamemaster-role user named
+  `Companion` with this password in your world. The stack's headless keep-alive
+  logs in as `Companion`, NOT `Gamemaster`, so it never fights you for a seat
+  (Foundry allows one session per user): you stay logged in as Gamemaster while
+  the app runs. (`FOUNDRY_GM_USER=Companion` in `secrets/bootstrap.env`.)
 - the relay account password (account email is fixed:
   `bootstrap@companion.local`),
 - the app **admin console password** (`/admin`, for invites).
@@ -496,9 +500,12 @@ the sidecar is in and what to do next (see C5 for the phase list). Then, on
 1. Accept the EULA (still a one-time manual UI step even with the
    credentials file — Foundry doesn't expose an API for it) and enter the
    admin key `make setup` printed.
-2. Install your game system, **Create World**, and join it as **Gamemaster**.
-3. In User Management, set the **Gamemaster** user's password to the
-   generated Gamemaster password from C2.
+2. Install your game system, **Create World**, and join it as **Gamemaster**
+   (set your own Gamemaster password — it's yours, the stack doesn't use it).
+3. In User Management, **create a new Gamemaster-role user named `Companion`**
+   and set its password to the **Companion password** from C2. This is the
+   dedicated login the headless keep-alive uses, so it never takes your
+   Gamemaster seat (Foundry allows one session per user).
 4. Enable the **Foundry REST API** module (Manage Modules) — the sidecar
    already placed it in `Data/modules` for you, so there's nothing to
    download. Then, in the module's settings, set **WebSocket Relay URL** to
@@ -521,9 +528,11 @@ verified and flipped to `true` on your host — see `docs/OPERATIONS.md`), the
 sidecar's converge loop keeps re-establishing the relay session on its own —
 no browser tab needs to stay open.
 
-If the status page shows **gm-login-failed**: the Gamemaster user's password
+If the status page shows **gm-login-failed**: the **`Companion`** user's password
 in the world doesn't match `FOUNDRY_GM_PASSWORD` in
-`stack/quickstart/secrets/bootstrap.env` — redo step 3 above.
+`stack/quickstart/secrets/bootstrap.env`, or the `Companion` user doesn't exist —
+redo step 3 above. (It also appears transiently if the `Companion` user is
+already logged in elsewhere — one session per user.)
 
 ### C4. Survive a restart (read this before you reboot)
 

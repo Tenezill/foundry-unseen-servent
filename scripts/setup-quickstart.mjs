@@ -126,15 +126,19 @@ export function writeSecretsBundle(creds, dirs = { secrets: SECRETS }) {
     join(dirs.secrets, 'foundry-config.json'),
     buildFoundryConfigJson({ username: creds.username, password: creds.password, licenseKey: creds.licenseKey, adminKey }),
   );
-  const gmPassword = generateSecret();
+  // The headless keep-alive session logs in as a DEDICATED "Companion" user, not
+  // Gamemaster — Foundry allows one session per user, so sharing Gamemaster would
+  // lock the operator out (or vice-versa). The operator creates a Gamemaster-role
+  // user named "Companion" with this password (one-time, see the Next steps).
+  const companionPassword = generateSecret();
   const relayPassword = generateSecret();
   writeSecretIfAbsent(
     join(dirs.secrets, 'bootstrap.env'),
     buildBootstrapEnv({
       relayEmail: 'bootstrap@companion.local',
       relayPassword,
-      gmUser: 'Gamemaster',
-      gmPassword,
+      gmUser: 'Companion',
+      gmPassword: companionPassword,
       adminKey,
     }),
   );
@@ -142,7 +146,7 @@ export function writeSecretsBundle(creds, dirs = { secrets: SECRETS }) {
   writeSecretIfAbsent(join(dirs.secrets, 'gateway.env'), buildGatewayEnv({ adminPassword }));
   return [
     ['Foundry admin key (setup screen)', adminKey],
-    ['Gamemaster password (set this on the Gamemaster user in YOUR world)', gmPassword],
+    ['Companion user password (create a Gamemaster-role user named "Companion" with this)', companionPassword],
     ['Relay account (bootstrap@companion.local)', relayPassword],
     ['App admin console password (/admin)', adminPassword],
   ];
@@ -267,9 +271,10 @@ async function main() {
 
     console.log('Next steps once the stack is up:');
     console.log(`  1. Foundry:      http://${ip}:30000  (EULA once, admin key above, create YOUR world)`);
-    console.log('  2. In the world: set the Gamemaster user password to the generated one,');
-    console.log('     enable the "Foundry REST API" module, set its WebSocket Relay URL to');
-    console.log(`     ws://${ip}:3010  (Task 0 findings §5), then launch the world.`);
+    console.log('  2. In the world: create a Gamemaster-role user named "Companion" with the');
+    console.log('     Companion password above (this is the app’s headless login — keeps YOUR');
+    console.log('     Gamemaster seat free). Then enable the "Foundry REST API" module, set its');
+    console.log(`     WebSocket Relay URL to ws://${ip}:3010, launch the world, and pair.`);
     console.log(`  3. Watch:        http://${ip}:8321  (setup status page)`);
     console.log(`  4. Play:         http://${ip}:8080  — invite players via /admin`);
 
