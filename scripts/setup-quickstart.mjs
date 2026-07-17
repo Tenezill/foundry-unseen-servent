@@ -52,6 +52,9 @@ export function buildDotEnv({ tls }) {
   if (tls) lines.push('COMPOSE_PROFILES=tls', 'FOUNDRY_PROXY_SSL=true', 'FOUNDRY_PROXY_PORT=443');
   // Auto-launch your world on start/reboot — fill in the world id once it exists:
   lines.push('# FOUNDRY_WORLD=your-world-id');
+  // The URL your browser uses to reach the relay, so module pairing approvals
+  // open your self-hosted page instead of the public foundryrestapi.com:
+  lines.push('# RELAY_PUBLIC_URL=https://relay.example.com');
   return lines.join('\n') + '\n';
 }
 
