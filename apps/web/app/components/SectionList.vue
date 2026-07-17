@@ -75,16 +75,9 @@
           compact
           @step="(id, dir) => emit('step', id, dir)"
         />
-        <button
-          v-if="verbOf(item)"
-          class="act-btn"
-          type="button"
-          :class="{ pending: actionBusy === item.actionId }"
-          :disabled="readonly || actionBusy !== null"
-          @click="tap(item)"
-        >
-          {{ verbOf(item) }}
-        </button>
+        <!-- Outlined toggles (Prepared / Equipped / Attune) tuck inward so the
+             yellow primary button stays flush-right, consistent with the
+             Actions tab. -->
         <button
           v-if="toggleOf(item)"
           class="equip-btn"
@@ -106,6 +99,16 @@
           @click="item.attuneActionId && emit('action', item.attuneActionId)"
         >
           {{ attuneOf(item)!.attuned ? 'Attuned' : 'Attune' }}
+        </button>
+        <button
+          v-if="verbOf(item)"
+          class="act-btn"
+          type="button"
+          :class="{ pending: actionBusy === item.actionId }"
+          :disabled="readonly || actionBusy !== null"
+          @click="tap(item)"
+        >
+          {{ verbOf(item) }}
         </button>
       </div>
       <p v-if="rows.length === 0" class="empty-hint">Empty</p>
