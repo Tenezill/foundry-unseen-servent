@@ -1684,6 +1684,17 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       if (item && activityType(item) === 'heal') {
         return buildHealAction(actor, item, intent.actionId);
       }
+      // Damage spells (Fire Bolt, Sacred Flame, Guiding Bolt, …): the relay has
+      // no spell-damage endpoint, so — exactly like weapon/item damage — compute
+      // the display roll client-side while the use-spell activation runs first
+      // (slot/uses follow Foundry's own rules). A spell with no damage dice
+      // (pure buff/utility) falls through to a plain cast.
+      if (item && effectTypeOf(item) === 'damage') {
+        const formula = itemDamageFormula(actor, item);
+        if (formula !== undefined) {
+          return { endpoint: 'use-and-roll', use: 'use-spell', itemId, formula, flavor: `${item.name} — Damage` };
+        }
+      }
       return { endpoint: 'use-spell', itemId };
     }
     case 'equip': {
