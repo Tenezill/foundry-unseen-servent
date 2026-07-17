@@ -29,6 +29,10 @@ services:
     hostname: foundry
     environment:
       - FOUNDRY_MINIFY_STATIC_FILES=true
+      # Auto-launch a world on start/restart so the stack survives a reboot
+      # unattended (empty = felddy waits at Setup; set FOUNDRY_WORLD=<world-id>
+      # in .env once your world exists — see HOSTING.md Part C "Surviving a reboot").
+      - FOUNDRY_WORLD=${FOUNDRY_WORLD:-}
       # TLS profile knobs (non-secret, from .env; empty = direct HTTP —
       # Task 0 findings §2 verified empty FOUNDRY_PROXY_PORT is treated as unset):
       - FOUNDRY_PROXY_SSL=${FOUNDRY_PROXY_SSL:-false}
