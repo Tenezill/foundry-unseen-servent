@@ -59,6 +59,17 @@ export function saveCachedSheet(actorId: string, sheet: SheetViewModel): void {
   safeSet(sheetKey(actorId), JSON.stringify(sheet))
 }
 
+/** Evict a cached sheet — e.g. when the current token turns out not to own
+ *  the actor (device switched to another player's invite): the stale render
+ *  must not keep masquerading as a working sheet. */
+export function clearCachedSheet(actorId: string): void {
+  try {
+    localStorage.removeItem(sheetKey(actorId))
+  } catch {
+    /* noop */
+  }
+}
+
 const ADMIN_KEY = 'fc:admin'
 
 export function getAdminSecret(): string | null {

@@ -710,6 +710,16 @@ function applySheet(next: SheetViewModel): void {
   saveCachedSheet(actorId.value, next)
 }
 
+/** The current token cannot access this actor (e.g. the device switched to
+ *  another player's invite): drop the stale cached render — it must not keep
+ *  masquerading as a working sheet — and land on the error card. */
+function showNotLinked(): void {
+  clearCachedSheet(actorId.value)
+  sheet.value = null
+  loading.value = false
+  loadError.value = 'This character is not linked to your invite.'
+}
+
 async function fetchSheet(): Promise<void> {
   try {
     const res = await api<SheetResponse>(`/api/actors/${actorId.value}/sheet`)
@@ -721,12 +731,13 @@ async function fetchSheet(): Promise<void> {
       await navigateTo('/join', { replace: true })
       return
     }
+    if (status === 404) {
+      showNotLinked()
+      return
+    }
     if (!sheet.value) {
       loading.value = false
-      loadError.value =
-        status === 404
-          ? 'This character is not linked to your invite.'
-          : 'The table is unreachable right now.'
+      loadError.value = 'The table is unreachable right now.'
     }
   }
 }
@@ -1046,6 +1057,11 @@ async function onPoolSubmit(intent: ActionIntent, preview: string): Promise<void
     if (status === 401) {
       clearToken()
       await navigateTo('/join', { replace: true })
+    } else if (status === 404) {
+      // Ownership check: this token doesn't own the actor (device switched
+      // to another player's invite). Retrying can never succeed — stop
+      // pretending the cached sheet works.
+      showNotLinked()
     } else if (status === 403 || status === 422) {
       toast.show('That action isn’t available right now.')
       void fetchSheet()
@@ -1078,6 +1094,11 @@ async function onRouse(): Promise<void> {
     if (status === 401) {
       clearToken()
       await navigateTo('/join', { replace: true })
+    } else if (status === 404) {
+      // Ownership check: this token doesn't own the actor (device switched
+      // to another player's invite). Retrying can never succeed — stop
+      // pretending the cached sheet works.
+      showNotLinked()
     } else if (status === 403 || status === 422) {
       toast.show('That action isn’t available right now.')
       void fetchSheet()
@@ -1333,6 +1354,11 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
     if (status === 401) {
       clearToken()
       await navigateTo('/join', { replace: true })
+    } else if (status === 404) {
+      // Ownership check: this token doesn't own the actor (device switched
+      // to another player's invite). Retrying can never succeed — stop
+      // pretending the cached sheet works.
+      showNotLinked()
     } else if (status === 403 || status === 422) {
       toast.show('That action isn’t available right now.')
       void fetchSheet()
