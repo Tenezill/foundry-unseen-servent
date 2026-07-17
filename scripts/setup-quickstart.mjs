@@ -50,6 +50,8 @@ export function buildGatewayEnv({ adminPassword }) {
 export function buildDotEnv({ tls }) {
   const lines = ['HOST_PORT_WEB=8080', 'HOST_PORT_FOUNDRY=30000', 'HOST_PORT_RELAY=3010', 'HOST_PORT_STATUS=8321'];
   if (tls) lines.push('COMPOSE_PROFILES=tls', 'FOUNDRY_PROXY_SSL=true', 'FOUNDRY_PROXY_PORT=443');
+  // Auto-launch your world on start/reboot — fill in the world id once it exists:
+  lines.push('# FOUNDRY_WORLD=your-world-id');
   return lines.join('\n') + '\n';
 }
 

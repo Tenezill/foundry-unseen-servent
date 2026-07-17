@@ -465,6 +465,23 @@ there, and auto-removed if you switch to Docker). Only `foundry` gets it:
 self-chown), which already maps to the host user under rootless Podman. The file
 is generated (git-ignored) and wiped by `make setup-reset`.
 
+#### Surviving a reboot (rootless Podman)
+
+Rootless-Podman containers do **not** restart after a host reboot by default, and
+felddy waits at Setup unless told which world to launch. Three one-time steps make
+the whole stack return unattended:
+
+1. **Auto-launch the world:** once your world exists, set its id in
+   `stack/quickstart/.env` (`FOUNDRY_WORLD=<world-id>`), then
+   `podman compose up -d foundry`. felddy then launches it on every start and the
+   bootstrap's headless session brings it online with no GM tab.
+2. **Start containers on boot** via a systemd *user* service that runs
+   `podman compose up -d` (WorkingDirectory = `stack/quickstart`,
+   `After`/`Requires=podman.socket`), then
+   `systemctl --user enable --now podman.socket unseen-servant.service`.
+3. **Enable lingering** (sudo) so your user's systemd runs at boot without a
+   login: `sudo loginctl enable-linger $USER`.
+
 Re-running `make setup` is safe: existing secrets are kept and never
 re-shown. `make setup-reset` deletes the generated `.env`, `Caddyfile.tls` and
 `secrets/*` (after a y/N confirmation) so you can start over — the bind-mount
