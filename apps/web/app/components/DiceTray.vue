@@ -50,6 +50,7 @@
 
 <script setup lang="ts">
 const props = defineProps<{ actorId: string; readonly?: boolean }>()
+const emit = defineEmits<{ (e: 'roll', entry: { formula: string; total: number }): void }>()
 
 const DICE = [20, 12, 100, 10, 8, 6, 4] as const
 const counts = reactive<Record<number, number>>({})
@@ -91,6 +92,7 @@ async function roll(): Promise<void> {
     )
     if (res.result) {
       lastResult.value = res.result
+      emit('roll', res.result)
       toast.show(`🎲 ${res.result.formula} = ${res.result.total}`)
     } else {
       toast.show('Rolled — see Foundry')
