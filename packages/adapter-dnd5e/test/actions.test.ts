@@ -346,17 +346,25 @@ describe('buildAction — attack / cast / use / equip', () => {
     });
   });
 
-  it('cast maps to use-spell at base level (a requested slotLevel is ignored — the bridge cannot upcast)', () => {
+  it('damage spell cast rolls damage via use-and-roll; a requested slotLevel is ignored (no upcast)', () => {
+    // Guiding Bolt (attack, 4d6 radiant). The use-spell activation runs first
+    // (consuming the base slot); the damage is the display roll.
     expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast', slotLevel: 2 })).toEqual({
-      endpoint: 'use-spell',
+      endpoint: 'use-and-roll',
+      use: 'use-spell',
       itemId: 'pZMrJb3AXiRYO5E8',
+      formula: '4d6',
+      flavor: 'Guiding Bolt — Damage',
     });
   });
 
-  it('cantrip cast maps to use-spell with no slot', () => {
+  it('cantrip damage cast rolls damage via use-and-roll (Sacred Flame: 1d8, no slot)', () => {
     expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.P97npemu7j70IZAQ.cast' })).toEqual({
-      endpoint: 'use-spell',
+      endpoint: 'use-and-roll',
+      use: 'use-spell',
       itemId: 'P97npemu7j70IZAQ',
+      formula: '1d8',
+      flavor: 'Sacred Flame — Damage',
     });
   });
 
@@ -575,11 +583,16 @@ describe('buildAction — heal formulas & self-heal write-through (M15)', () => 
     });
   });
 
-  it('non-heal use/cast actions are unaffected (Guiding Bolt still maps to use-spell)', () => {
-    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' })).toEqual({
-      endpoint: 'use-spell',
+  it('a damage spell is NOT treated as a heal (Guiding Bolt casts + rolls damage, no heal write-through)', () => {
+    const action = build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' });
+    expect(action).toEqual({
+      endpoint: 'use-and-roll',
+      use: 'use-spell',
       itemId: 'pZMrJb3AXiRYO5E8',
+      formula: '4d6',
+      flavor: 'Guiding Bolt — Damage',
     });
+    expect('heal' in action).toBe(false); // no self-heal write-through
   });
 });
 
