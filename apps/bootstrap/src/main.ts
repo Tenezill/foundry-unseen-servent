@@ -24,6 +24,7 @@ import { ensureModulePlaced } from './module-install.js';
 import { relaunchWorldIfIdle } from './foundry-admin.js';
 import { startStatusPage } from './status-page.js';
 import { readPersistedKey } from './key-file.js';
+import { writeRelayAccountFile } from './account-file.js';
 
 function requiredEnv(name: string): string {
   const v = process.env[name];
@@ -197,6 +198,15 @@ async function main(): Promise<void> {
   const relay = new RelayAuthClient({ baseUrl: relayUrl });
   startStatusPage(statusPort, () => status.current());
   log.info(`bootstrap sidecar up; status page on :${statusPort}`);
+
+  // Hand the relay account (email + password) to the gateway so the admin
+  // "Relay & Pairing" panel can surface it — the credentials that approve a
+  // pairing request. Static (comes from env), so written once at startup.
+  try {
+    writeRelayAccountFile(join(runtimeDir, 'relay-account.json'), { email, password });
+  } catch (err) {
+    log.warn(`could not write relay-account.json: ${(err as Error).message}`);
+  }
 
   const deps: ConvergePassDeps = {
     relay,

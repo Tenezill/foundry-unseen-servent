@@ -104,6 +104,12 @@ services:
       - RELAY_API_KEY_FILE=/run/companion/relay.env
       - RELAY_CLIENT_ID=auto
       - STATUS_FILE=/run/companion/status.json
+      # Relay account (email+password) the sidecar hands over, surfaced only in
+      # the admin "Relay & Pairing" panel so approving a pairing is foolproof.
+      - RELAY_ACCOUNT_FILE=/run/companion/relay-account.json
+      # Same value the relay uses for FRONTEND_URL: shown in that panel so pair
+      # approvals point at THIS relay, not the public foundryrestapi.com.
+      - RELAY_PUBLIC_URL=${RELAY_PUBLIC_URL:-}
       - PLAYERS_FILE=/data/players.yaml
     volumes:
       - ./gateway-data:/data

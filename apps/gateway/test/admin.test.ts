@@ -27,7 +27,12 @@ afterEach(async () => {
 });
 
 async function setup(
-  opts: { password?: string | undefined; adminNameTimeoutMs?: number } = { password: ADMIN_PW },
+  opts: {
+    password?: string | undefined;
+    adminNameTimeoutMs?: number;
+    relayAccount?: (() => { email: string; password: string } | null) | undefined;
+    relayPairBaseUrl?: string;
+  } = { password: ADMIN_PW },
 ) {
   const dir = await mkdtemp(join(tmpdir(), 'gw-admin-'));
   const file = join(dir, 'players.yaml');
@@ -44,6 +49,8 @@ async function setup(
     pingMs: 60_000,
     ...(opts.adminNameTimeoutMs !== undefined ? { adminNameTimeoutMs: opts.adminNameTimeoutMs } : {}),
     ...(opts.password === undefined ? {} : { admin: { password: opts.password, store } }),
+    ...(opts.relayAccount !== undefined ? { relayAccount: opts.relayAccount } : {}),
+    ...(opts.relayPairBaseUrl !== undefined ? { relayPairBaseUrl: opts.relayPairBaseUrl } : {}),
   });
   return { app, store, relay, file };
 }
@@ -59,6 +66,7 @@ describe('admin feature flag', () => {
       ['POST', '/api/admin/players/Anna/rotate'],
       ['DELETE', '/api/admin/players/Anna'],
       ['GET', '/api/admin/actors?q=x'],
+      ['GET', '/api/admin/relay'],
     ] as const) {
       const res = await app.inject({ method, url, headers: asAdmin });
       expect(res.statusCode, `${method} ${url}`).toBe(404);
@@ -221,6 +229,43 @@ describe('GET /api/admin/actors', () => {
   });
 });
 
+describe('GET /api/admin/relay', () => {
+  const account = () => ({ email: 'bootstrap@companion.local', password: 'relay-pw' });
+
+  it('returns the relay account and self-hosted pair URL behind the admin credential', async () => {
+    const { app } = await setup({
+      password: ADMIN_PW,
+      relayAccount: account,
+      relayPairBaseUrl: 'https://relay.example.com',
+    });
+    const res = await app.inject({ method: 'GET', url: '/api/admin/relay', headers: asAdmin });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      account: { email: 'bootstrap@companion.local', password: 'relay-pw' },
+      pairBaseUrl: 'https://relay.example.com',
+    });
+  });
+
+  it('requires the admin credential — 401 without it', async () => {
+    const { app } = await setup({ password: ADMIN_PW, relayAccount: account });
+    const res = await app.inject({ method: 'GET', url: '/api/admin/relay' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('reports account:null when the sidecar file is not written yet', async () => {
+    const { app } = await setup({ password: ADMIN_PW, relayAccount: () => null });
+    const res = await app.inject({ method: 'GET', url: '/api/admin/relay', headers: asAdmin });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ account: null, pairBaseUrl: null });
+  });
+
+  it('omits the pair URL (null) when it is not configured', async () => {
+    const { app } = await setup({ password: ADMIN_PW, relayAccount: account });
+    const res = await app.inject({ method: 'GET', url: '/api/admin/relay', headers: asAdmin });
+    expect((res.json() as { pairBaseUrl: unknown }).pairBaseUrl).toBeNull();
+  });
+});
+
 describe('config', () => {
   const BASE = {
     RELAY_URL: 'http://r',
@@ -232,5 +277,15 @@ describe('config', () => {
     expect(loadConfig({ ...BASE, ADMIN_PASSWORD: 'pw' }).adminPassword).toBe('pw');
     expect(loadConfig({ ...BASE }).adminPassword).toBeUndefined();
     expect(loadConfig({ ...BASE, ADMIN_PASSWORD: '' }).adminPassword).toBeUndefined();
+  });
+
+  it('reads RELAY_ACCOUNT_FILE and RELAY_PUBLIC_URL when set, omits them when unset or empty', () => {
+    const set = loadConfig({ ...BASE, RELAY_ACCOUNT_FILE: '/run/companion/relay-account.json', RELAY_PUBLIC_URL: 'https://relay.example.com' });
+    expect(set.relayAccountFile).toBe('/run/companion/relay-account.json');
+    expect(set.relayPublicUrl).toBe('https://relay.example.com');
+    expect(loadConfig({ ...BASE }).relayAccountFile).toBeUndefined();
+    expect(loadConfig({ ...BASE }).relayPublicUrl).toBeUndefined();
+    expect(loadConfig({ ...BASE, RELAY_ACCOUNT_FILE: '', RELAY_PUBLIC_URL: '' }).relayAccountFile).toBeUndefined();
+    expect(loadConfig({ ...BASE, RELAY_ACCOUNT_FILE: '', RELAY_PUBLIC_URL: '' }).relayPublicUrl).toBeUndefined();
   });
 });

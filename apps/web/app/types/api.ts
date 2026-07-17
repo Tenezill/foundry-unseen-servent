@@ -91,6 +91,15 @@ export interface AdminActorsResponse {
   actors: Array<{ id: string; name: string; img?: string }>
 }
 
+/** Relay & Pairing panel: the relay account needed to approve a pairing
+ *  request, plus the self-hosted URL where approvals happen. `account` is null
+ *  until the bootstrap sidecar has written it; `pairBaseUrl` is null when
+ *  RELAY_PUBLIC_URL is not configured. */
+export interface AdminRelayResponse {
+  account: { email: string; password: string } | null
+  pairBaseUrl: string | null
+}
+
 // ---- encounters (M22) -------------------------------------------------------
 
 /** One combatant as the gateway serializes it (docs/API.md, mirrors
