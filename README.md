@@ -5,10 +5,25 @@ characters from a phone while the game runs in Foundry VTT. Foundry stays the
 single source of truth; this app is an alternative player-facing client.
 See `PLAN.md` for scope and decisions, `VERSIONS.md` for the pinned upstreams.
 
+## What it looks like
+
+A one-tap join link drops each player onto their own character — live-synced to
+Foundry, no account or install. Below: the mobile player app (a level-11
+Sorcerer), plus the self-hosted setup wizard. **Full tour with every screen:
+[`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md).**
+
+| Overview | Actions (cast / attack / use) | Spellbook |
+|---|---|---|
+| <img src="docs/screenshots/02-overview-top.png" width="240"> | <img src="docs/screenshots/03-actions.png" width="240"> | <img src="docs/screenshots/10-spells-leveled.png" width="240"> |
+
+| Inventory & attunement | Roll with advantage | One-time setup wizard |
+|---|---|---|
+| <img src="docs/screenshots/08-gear-weapons.png" width="240"> | <img src="docs/screenshots/17-skill-roll.png" width="240"> | <img src="docs/screenshots/25-wizard-creds.png" width="240"> |
+
 ```
 [ PWA (Nuxt) ] ──HTTPS/WSS──▶ [ Gateway (BFF) ] ──REST/SSE──▶ [ Relay (ThreeHats) ]
                                                                     ▲ outbound WS
-                                                             [ Foundry v13 + module ]
+                                                             [ Foundry v14 + module ]
 ```
 
 | path | what |
