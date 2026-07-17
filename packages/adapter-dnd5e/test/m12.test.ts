@@ -349,6 +349,21 @@ describe('M12 enrich — stats detail (encumbrance)', () => {
     expect(gearStat(enriched, 'weight').value).toBe('120/195 lb');
   });
 
+  it('merges derived AC from stats (active-effect bonuses the local fallback cannot see)', async () => {
+    // Live bug: Fighting Style: Defense (+1 ac.bonus active effect) → Foundry
+    // derives 19, but the local fallback from equipped armor computes 18. The
+    // stats detail carries the real derived AC — it must win.
+    const enriched = await enrichWith(martialCaptured, { stats: { ac: 19 } });
+    expect(dnd5eAdapter.resources(enriched).find((r) => r.id === 'ac')).toMatchObject({ value: 19 });
+  });
+
+  it('junk stats.ac is tolerated (local armor computation stands)', async () => {
+    for (const ac of [null, 'x', Number.NaN]) {
+      const enriched = await enrichWith(martialCaptured, { stats: { ac } });
+      expect(dnd5eAdapter.resources(enriched).find((r) => r.id === 'ac')).toMatchObject({ value: 18 });
+    }
+  });
+
   it('IO failure returns the actor unchanged', async () => {
     if (!dnd5eAdapter.enrich) throw new Error('adapter must expose enrich()');
     const out = await dnd5eAdapter.enrich(martialCaptured, {

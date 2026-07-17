@@ -1961,8 +1961,10 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
  * value+max into the document so bounds are correct and empty slots do not
  * vanish from the sheet. The `stats` detail (M10-verified) additionally
  * exposes derived encumbrance, merged under `system.attributes.encumbrance`
- * for the carried-weight counter — one call covers both details. IO failure
- * returns the actor unchanged.
+ * for the carried-weight counter, and the real derived `ac` (active-effect
+ * bonuses like Fighting Style: Defense that the local armor fallback cannot
+ * see), merged under `system.attributes.ac.value` — one call covers both
+ * details. IO failure returns the actor unchanged.
  */
 async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryActorDoc> {
   // Everyone gets `stats` (encumbrance); only casters need `spells`.
@@ -1997,7 +1999,16 @@ async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryAct
     merged = { ...system, spells };
   }
 
-  const encumbrance = rec(rec(body.stats).encumbrance);
+  const stats = rec(body.stats);
+  const acDerived = typeof stats.ac === 'number' && Number.isFinite(stats.ac) ? stats.ac : undefined;
+  if (acDerived !== undefined) {
+    const base = merged ?? { ...system };
+    const attributes = rec(base.attributes);
+    base.attributes = { ...attributes, ac: { ...rec(attributes.ac), value: acDerived } };
+    merged = base;
+  }
+
+  const encumbrance = rec(stats.encumbrance);
   const encValue = typeof encumbrance.value === 'number' && Number.isFinite(encumbrance.value) ? encumbrance.value : undefined;
   const encMax = typeof encumbrance.max === 'number' && Number.isFinite(encumbrance.max) ? encumbrance.max : undefined;
   if (encValue !== undefined || encMax !== undefined) {
