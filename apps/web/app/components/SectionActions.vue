@@ -35,15 +35,9 @@
           <span v-else class="row-label">{{ action.label }}</span>
           <span v-if="noSlots(action)" class="row-sub">No spell slots left</span>
         </div>
-        <button
-          class="act-btn"
-          type="button"
-          :class="{ pending: actionBusy === action.id }"
-          :disabled="readonly || actionBusy !== null || noSlots(action)"
-          @click="emit('action', action.id)"
-        >
-          {{ group.verb }}
-        </button>
+        <!-- Dmg rides inward (left of the primary button) and only shows when the
+             action has a damage component, so the yellow Cast/Attack/Use button
+             stays flush-right and aligned across every row. -->
         <button
           v-if="(group.id === 'attacks' || group.id === 'spells') && damageOf(action)"
           class="act-btn secondary"
@@ -53,6 +47,15 @@
           @click="emit('action', damageOf(action)!.id)"
         >
           Dmg
+        </button>
+        <button
+          class="act-btn"
+          type="button"
+          :class="{ pending: actionBusy === action.id }"
+          :disabled="readonly || actionBusy !== null || noSlots(action)"
+          @click="emit('action', action.id)"
+        >
+          {{ group.verb }}
         </button>
       </div>
     </div>

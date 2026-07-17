@@ -283,7 +283,7 @@
       </div>
     </div>
 
-    <DiceTray v-if="sheet" :actor-id="actorId" :readonly="conn === 'offline'" />
+    <DiceTray v-if="sheet" :actor-id="actorId" :readonly="conn === 'offline'" @roll="onDiceRoll" />
   </div>
 </template>
 
@@ -889,22 +889,33 @@ function effectDisplay(result: ActionRollResult, effectType: EffectType | undefi
   return undefined
 }
 
+/** Prepend a roll to the session history (newest first), capped at the max. */
+function pushHistory(entry: Omit<RollLogEntry, 'id'>): void {
+  rollHistory.value.unshift({ id: ++rollSeq, ...entry })
+  if (rollHistory.value.length > ROLL_HISTORY_MAX) {
+    rollHistory.value = rollHistory.value.slice(0, ROLL_HISTORY_MAX)
+  }
+}
+
 function showRoll(result: ActionRollResult, label: string, effectType?: EffectType): void {
   lastRoll.value = { result, label, display: effectDisplay(result, effectType) }
-  rollHistory.value.unshift({
-    id: ++rollSeq,
+  pushHistory({
     label,
     total: result.total,
     formula: result.formula,
     isCritical: result.isCritical === true,
     isFumble: result.isFumble === true,
   })
-  if (rollHistory.value.length > ROLL_HISTORY_MAX) {
-    rollHistory.value = rollHistory.value.slice(0, ROLL_HISTORY_MAX)
-  }
   haptics(result)
   if (rollTimer !== undefined) clearTimeout(rollTimer)
   rollTimer = setTimeout(() => (lastRoll.value = null), 6000)
+}
+
+/** Dice-tray rolls carry no crit/fumble semantics; they still belong in the
+ *  session's roll history. The tray shows its own inline result + toast, so we
+ *  only record it here (no floating lastRoll card). */
+function onDiceRoll(entry: { formula: string; total: number }): void {
+  pushHistory({ label: 'Dice roll', total: entry.total, formula: entry.formula, isCritical: false, isFumble: false })
 }
 
 function dismissRoll(): void {

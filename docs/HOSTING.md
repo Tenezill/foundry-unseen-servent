@@ -154,12 +154,15 @@ curl -s -X POST http://localhost:3010/auth/register \
 curl -s -X POST http://localhost:3010/auth/api-keys \
   -H 'content-type: application/json' \
   -H 'authorization: Bearer <sessionToken>' \
-  -d '{"name":"gateway","scopes":["entity:read","entity:write","search","events:subscribe","clients:read","dnd5e","roll:execute","chat:read","roll:read"]}'
+  -d '{"name":"gateway","scopes":["entity:read","entity:write","search","events:subscribe","clients:read","dnd5e","roll:execute","chat:read","roll:read","encounter:read"]}'
 ```
 
 Save the `key` from step 2 into `stack/.env.gateway` as **RELAY_API_KEY**. It
 is shown once. (Those scopes cover reads, scoped writes, live push, the dnd5e
-actions, dice rolling, and the GM roll feed.)
+actions — weapon attacks and item uses route through the `dnd5e` scope, so
+omitting it makes those 502 — dice rolling, the GM roll feed, and the encounter
+list. The turnkey `make setup` mints these automatically; this list is only for
+manual setups.)
 
 ### A7. Pair the module to the relay
 
@@ -571,6 +574,34 @@ world, the sidecar's converge loop re-establishes the relay session (or, if
 still on the pairing fallback, the once-paired browser connection tokens
 still work once you reopen a GM tab), and the gateway re-resolves the
 `clientId` automatically.
+
+### C4b. Updating without losing your setup
+
+Because all state lives in the host bind-mount folders (C4), updating is safe:
+pull the new code, refresh/rebuild the images, and recreate only the changed
+containers. Your world, `players.yaml`, secrets and the relay DB are reattached,
+never rebuilt.
+
+```bash
+make update
+# equivalently: node scripts/update-stack.mjs
+#   git pull --ff-only  →  compose pull  →  compose up -d --build
+# flags: --no-pull (rebuild/restart only, skip git)
+```
+
+What it will **never** do: `down`, `-v`, `--volumes`, `rm`, `prune` — there is
+no code path in `scripts/update-stack.mjs` that removes a container, volume or
+bind mount, and a unit test (`apps/bootstrap/test/update-cli.test.ts`) fails the
+build if one is ever introduced. If a step errors mid-update, your data is
+untouched — fix the cause and re-run `make update`.
+
+> Why not an in-app "Update" button? The app runs *inside* the stack, so it
+> can't safely tear down and restart the host's containers from within one of
+> them. `make update` runs on the host, where that's safe and atomic.
+
+After an image bump that changes the pinned Foundry/relay versions, re-read
+`docs/OPERATIONS.md` and `VERSIONS.md` first — adapter fixtures pin document
+shapes and will flag a breaking system upgrade.
 
 ### C5. Status page and health
 
