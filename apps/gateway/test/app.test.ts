@@ -11,7 +11,7 @@ interface EventStream {
 }
 import { IntentError, type SystemAdapter } from '@companion/adapter-sdk';
 import { wod5eAdapter } from '@companion/adapter-wod5e';
-import { buildApp } from '../src/app.js';
+import { buildApp, isSafeDiceFormula } from '../src/app.js';
 import { sha256Hex, type Player } from '../src/players.js';
 import { createRegistry } from '../src/registry.js';
 import {
@@ -156,6 +156,43 @@ describe('secret hygiene', () => {
     const res = await app.inject({ method: 'GET', url: '/healthz' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true, relay: 'connected' });
+  });
+});
+
+describe('dice tray (/api/actors/:id/roll)', () => {
+  it('isSafeDiceFormula accepts simple pools, rejects anything else', () => {
+    for (const ok of ['1d20', 'd20', '2d6 + 1d8 + 3', '4d6 - 1', '100d1000']) {
+      expect(isSafeDiceFormula(ok)).toBe(true);
+    }
+    // reject: no-die (pure modifier), refs, injection, bad tokens, over caps
+    for (const bad of ['', '   ', '3', '@abilities.str.mod', '1d20; drop', '1d20 + x', '2 d6', '101d6', '1d1001', '1d20 +', 'kaboom()']) {
+      expect(isSafeDiceFormula(bad)).toBe(false);
+    }
+  });
+
+  const roll = (appInst: FastifyInstance, actorId: string, payload: unknown) =>
+    appInst.inject({ method: 'POST', url: `/api/actors/${actorId}/roll`, headers: asAnna, payload: payload as object });
+
+  it('rolls a valid pool as the actor and returns the result', async () => {
+    const { app, relay } = setup();
+    relay.rollResult = { formula: '2d6 + 3', total: 11 };
+    const res = await roll(app, 'a1', { formula: '2d6 + 3', flavor: 'Custom roll' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().result).toMatchObject({ total: 11, formula: '2d6 + 3' });
+    expect(relay.rollCalls.at(-1)).toMatchObject({ actorUuid: 'Actor.a1', formula: '2d6 + 3', flavor: 'Custom roll' });
+  });
+
+  it('rejects an unsafe formula (422) without touching the relay', async () => {
+    const { app, relay } = setup();
+    const res = await roll(app, 'a1', { formula: '@abilities.str.mod + 1d20' });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('INVALID_INTENT');
+    expect(relay.rollCalls).toHaveLength(0);
+  });
+
+  it('404s on a foreign actor', async () => {
+    const { app } = setup();
+    expect((await roll(app, 'b1', { formula: '1d20' })).statusCode).toBe(404);
   });
 });
 

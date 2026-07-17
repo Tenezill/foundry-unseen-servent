@@ -282,6 +282,8 @@
         <NuxtLink to="/" class="btn">All characters</NuxtLink>
       </div>
     </div>
+
+    <DiceTray v-if="sheet" :actor-id="actorId" :readonly="conn === 'offline'" />
   </div>
 </template>
 

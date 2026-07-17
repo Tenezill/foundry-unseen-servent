@@ -348,6 +348,30 @@ function extractRoll(value: unknown): ActionRollResult | null {
   return 'roll' in obj ? extractRoll(obj.roll) : null;
 }
 
+/**
+ * Whitelist for the manual dice tray: only `NdM` dice terms and integer
+ * modifiers joined by + / - (e.g. "2d6 + 1d8 + 3"). Keeps the endpoint a dice
+ * tray, not a Foundry-formula console — no @refs, functions, or code paths
+ * reach the relay. Caps count/sides so a roll can't be abusive.
+ */
+export function isSafeDiceFormula(formula: string): boolean {
+  if (formula === '' || formula.length > 100) return false;
+  if (!/^[0-9d+\-\s]+$/i.test(formula)) return false;
+  const terms = formula.split(/[+-]/).map((t) => t.trim());
+  let hasDie = false;
+  for (const term of terms) {
+    if (term === '') return false; // trailing/double operator
+    if (/^\d+$/.test(term)) continue; // flat integer modifier
+    const m = /^(\d*)d(\d+)$/i.exec(term);
+    if (!m) return false;
+    const count = m[1] === '' ? 1 : Number(m[1]);
+    const sides = Number(m[2]);
+    if (count < 1 || count > 100 || sides < 1 || sides > 1000) return false;
+    hasDie = true;
+  }
+  return hasDie;
+}
+
 export function buildApp(deps: GatewayDeps): FastifyInstance {
   const resolveDefaultSystemId = (): string =>
     typeof deps.defaultSystemId === 'function' ? deps.defaultSystemId() : (deps.defaultSystemId ?? 'dnd5e');
@@ -973,6 +997,36 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const freshAdapter = adapterFor(fresh) ?? adapter;
       return reply.code(200).send({ result, sheet: buildSheet(freshAdapter, fresh) });
+    },
+  );
+
+  // ---- manual dice tray (fallback for anything without a dedicated button) --
+  // Rolls a simple dice pool as the actor. Whitelisted to NdM terms + integer
+  // modifiers (isSafeDiceFormula) so this stays a dice tray, not a Foundry
+  // formula console. No sheet echo — a bare roll changes nothing on the actor.
+  app.post<{ Params: { id: string } }>(
+    '/api/actors/:id/roll',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const player = req.player as Player;
+      if (!limiter.allow(player.tokenHash)) {
+        return sendError(reply, 429, 'RATE_LIMITED', 'too many rolls');
+      }
+      const { id } = req.params;
+      if (!player.actorIds.includes(id)) return sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      const body = req.body;
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        return sendError(reply, 422, 'INVALID_INTENT', 'roll body must be an object');
+      }
+      const raw = body as Record<string, unknown>;
+      const formula = typeof raw.formula === 'string' ? raw.formula.trim() : '';
+      if (!isSafeDiceFormula(formula)) {
+        return sendError(reply, 422, 'INVALID_INTENT', 'formula must be a simple dice pool, e.g. "2d6 + 1d8 + 3"');
+      }
+      const flavor =
+        typeof raw.flavor === 'string' && raw.flavor.trim() !== '' ? raw.flavor.trim().slice(0, 60) : 'Dice roll';
+      const result = extractRoll(await relay.rollFormula(`Actor.${id}`, formula, flavor));
+      return reply.code(200).send({ result });
     },
   );
 
