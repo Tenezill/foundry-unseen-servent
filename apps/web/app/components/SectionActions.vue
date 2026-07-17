@@ -45,11 +45,11 @@
           {{ group.verb }}
         </button>
         <button
-          v-if="group.id === 'attacks' && damageOf(action)"
+          v-if="(group.id === 'attacks' || group.id === 'spells') && damageOf(action)"
           class="act-btn secondary"
           type="button"
           :class="{ pending: actionBusy === damageOf(action)?.id }"
-          :disabled="readonly || actionBusy !== null"
+          :disabled="readonly || actionBusy !== null || noSlots(action)"
           @click="emit('action', damageOf(action)!.id)"
         >
           Dmg
@@ -121,7 +121,8 @@ const damageById = computed(() => {
 })
 
 function damageOf(action: ActionDescriptor): ActionDescriptor | undefined {
-  return damageById.value.get(action.id.replace(/\.attack$/, '.damage'))
+  // Weapons pair item.<id>.attack -> .damage; spells pair spell.<id>.cast -> .damage.
+  return damageById.value.get(action.id.replace(/\.(attack|cast)$/, '.damage'))
 }
 </script>
 

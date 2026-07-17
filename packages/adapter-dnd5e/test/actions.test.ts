@@ -170,13 +170,14 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     ]);
     expect(all.filter((a) => a.kind === 'use' && a.group === 'items')).toHaveLength(7);
     // 18 skills + 12 ability checks/saves + 1 initiative (M10) + 2 attacks
-    // + 2 weapon damage rolls (M14) + 4 equips + 8 casts (castable-now spells only)
+    // + 2 weapon damage rolls (M14) + 2 spell damage rolls (Sacred Flame,
+    // Guiding Bolt) + 4 equips + 8 casts (castable-now spells only)
     // + 13 prepare toggles (18 spells − 3 cantrips − 2 always-prepared)
     // + 1 feature use + 7 item uses (Waterskin, Torch, Common Clothes,
     // Rations, Rope, Vestments, Potion of Healing)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
     // + 21 move descriptors, one per physical item (M19)
-    expect(all).toHaveLength(91);
+    expect(all).toHaveLength(93);
   });
 
   it('a leveled spell with a base-level slot is directly castable (no slotLevels — the bridge casts at base only)', () => {
@@ -346,23 +347,28 @@ describe('buildAction — attack / cast / use / equip', () => {
     });
   });
 
-  it('damage spell cast rolls damage via use-and-roll; a requested slotLevel is ignored (no upcast)', () => {
-    // Guiding Bolt (attack, 4d6 radiant). The use-spell activation runs first
-    // (consuming the base slot); the damage is the display roll.
+  it('cast is the to-hit/activation: use-spell at base level (a requested slotLevel is ignored — no upcast)', () => {
     expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast', slotLevel: 2 })).toEqual({
-      endpoint: 'use-and-roll',
-      use: 'use-spell',
+      endpoint: 'use-spell',
       itemId: 'pZMrJb3AXiRYO5E8',
-      formula: '4d6',
-      flavor: 'Guiding Bolt — Damage',
     });
   });
 
-  it('cantrip damage cast rolls damage via use-and-roll (Sacred Flame: 1d8, no slot)', () => {
+  it('cantrip cast maps to use-spell with no slot', () => {
     expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.P97npemu7j70IZAQ.cast' })).toEqual({
-      endpoint: 'use-and-roll',
-      use: 'use-spell',
+      endpoint: 'use-spell',
       itemId: 'P97npemu7j70IZAQ',
+    });
+  });
+
+  it('a damage spell gets a companion damage action that rolls its dice (like weapons)', () => {
+    // Guiding Bolt (attack, 4d6) and Sacred Flame (save cantrip, 1d8) each emit
+    // a spell.<id>.damage alongside the cast, resolving to a bare display roll.
+    const all = actions(casterCaptured);
+    expect(all.find((a) => a.id === 'spell.pZMrJb3AXiRYO5E8.damage')).toMatchObject({ kind: 'damage' });
+    expect(formulaOf(casterCaptured, { kind: 'damage', actionId: 'spell.pZMrJb3AXiRYO5E8.damage' })).toBe('4d6');
+    expect(build(casterCaptured, { kind: 'damage', actionId: 'spell.P97npemu7j70IZAQ.damage' })).toEqual({
+      endpoint: 'roll',
       formula: '1d8',
       flavor: 'Sacred Flame — Damage',
     });
@@ -583,16 +589,11 @@ describe('buildAction — heal formulas & self-heal write-through (M15)', () => 
     });
   });
 
-  it('a damage spell is NOT treated as a heal (Guiding Bolt casts + rolls damage, no heal write-through)', () => {
-    const action = build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' });
-    expect(action).toEqual({
-      endpoint: 'use-and-roll',
-      use: 'use-spell',
+  it('non-heal use/cast actions are unaffected (Guiding Bolt cast still maps to use-spell)', () => {
+    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' })).toEqual({
+      endpoint: 'use-spell',
       itemId: 'pZMrJb3AXiRYO5E8',
-      formula: '4d6',
-      flavor: 'Guiding Bolt — Damage',
     });
-    expect('heal' in action).toBe(false); // no self-heal write-through
   });
 });
 
@@ -966,7 +967,7 @@ describe('view model wiring', () => {
 
   it('the sheet embeds the full action list', () => {
     expect(dnd5eAdapter.toViewModel(martialCaptured).actions).toEqual(actions(martialCaptured));
-    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(91);
+    expect(dnd5eAdapter.toViewModel(casterCaptured).actions).toHaveLength(93);
   });
 });
 

@@ -1549,6 +1549,11 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
           effectType: effectTypeOf(item),
           ...(level > 0 && !canCastAtBase(actor, level) ? { slotLevels: [] } : {}),
         });
+        // Damage spells get a companion damage-roll action, exactly like weapons
+        // (attack + Dmg): cast is the to-hit/activation, this rolls the damage.
+        if (effectTypeOf(item) === 'damage' && itemDamageFormula(actor, item) !== undefined) {
+          out.push({ id: `spell.${item._id}.damage`, label: item.name, kind: 'damage' });
+        }
       }
       if (isPreparableSpell(item)) {
         out.push({
@@ -1629,9 +1634,15 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
     case 'attack':
       return { endpoint: 'use-item', itemId: intent.actionId.slice('item.'.length, -'.attack'.length) };
     case 'damage': {
-      const itemId = intent.actionId.slice('item.'.length, -'.damage'.length);
+      // Weapons (item.<id>.damage) and damage spells (spell.<id>.damage) both
+      // roll their damage as a bare display roll — the attack/cast already
+      // activated in Foundry. Weapons use the weapon formula (ability mod +
+      // weapon bonus); spells use the activity damage.parts formula.
+      const isSpell = intent.actionId.startsWith('spell.');
+      const prefix = isSpell ? 'spell.' : 'item.';
+      const itemId = intent.actionId.slice(prefix.length, -'.damage'.length);
       const item = (actor.items ?? []).find((i) => i._id === itemId);
-      const formula = item ? weaponDamageFormula(actor, item) : undefined;
+      const formula = item ? (isSpell ? itemDamageFormula(actor, item) : weaponDamageFormula(actor, item)) : undefined;
       if (!item || formula === undefined) {
         throw new IntentError(`no damage formula for "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
       }
@@ -1684,17 +1695,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       if (item && activityType(item) === 'heal') {
         return buildHealAction(actor, item, intent.actionId);
       }
-      // Damage spells (Fire Bolt, Sacred Flame, Guiding Bolt, …): the relay has
-      // no spell-damage endpoint, so — exactly like weapon/item damage — compute
-      // the display roll client-side while the use-spell activation runs first
-      // (slot/uses follow Foundry's own rules). A spell with no damage dice
-      // (pure buff/utility) falls through to a plain cast.
-      if (item && effectTypeOf(item) === 'damage') {
-        const formula = itemDamageFormula(actor, item);
-        if (formula !== undefined) {
-          return { endpoint: 'use-and-roll', use: 'use-spell', itemId, formula, flavor: `${item.name} — Damage` };
-        }
-      }
+      // Cast = the to-hit/activation (use-spell; the relay auto-rolls an attack
+      // activity). Damage is a SEPARATE `spell.<id>.damage` action, exactly like
+      // weapons (attack + Dmg) — see the 'damage' case and buildActions.
       return { endpoint: 'use-spell', itemId };
     }
     case 'equip': {
