@@ -1500,16 +1500,19 @@ function buildHealAction(
   actor: FoundryActorDoc,
   item: FoundryItemDoc,
   actionId: string,
-  opts?: { forceSelf?: boolean },
+  opts?: { forceSelf?: boolean; slotLevel?: number },
 ): RelayAction {
   assertUsesRemaining(item);
   const formula = healFormula(actor, item);
   if (formula === undefined) {
     throw new IntentError(`no heal formula for "${actionId}"`, 'UNKNOWN_RESOURCE');
   }
+  const baseLevel = numAt(item.system, 'level') ?? 0;
+  const upcast = opts?.slotLevel !== undefined && opts.slotLevel > baseLevel;
   const base = {
     endpoint: 'use-and-roll' as const,
-    use: useEndpointFor(actionId),
+    use: upcast ? ('cast-at-slot' as const) : useEndpointFor(actionId),
+    ...(upcast ? { slotKey: `spell${opts.slotLevel}` } : {}),
     itemId: item._id,
     formula,
     flavor: `${item.name} — Healing`,
@@ -1749,24 +1752,31 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
     }
     case 'cast': {
       const itemId = intent.actionId.slice('spell.'.length, -'.cast'.length);
-      const item = (actor.items ?? []).find((i) => i._id === itemId);
-      const level = item ? numAt(item.system, 'level') ?? 0 : 0;
-      // The bridge casts at base level only (no upcast yet — that's a later
-      // task); refuse when the spell's own base-level slot is empty, even if
-      // descriptor.slotLevels lists higher levels as payable — those feed the
-      // PWA picker, they don't make THIS (non-upcast) cast legal. So
-      // intent.slotLevel is intentionally ignored here too. Free-use/innate
-      // grants (own item uses, no slot concept) are never gated here, same
-      // as the buildActions descriptor rule.
-      if (item && freeUseMethod(item) === undefined && level > 0 && !canCastAtBase(actor, level)) {
+      if (descriptor.slotLevels !== undefined && descriptor.slotLevels.length === 0) {
         throw new IntentError(`no spell slot available for "${intent.actionId}"`, 'INVALID');
       }
+      const item = (actor.items ?? []).find((i) => i._id === itemId);
+      const baseLevel = numAt(item?.system, 'level') ?? 0;
+      // Resolve the paying slot: with a payable list, the intent's slotLevel
+      // (default: base) must be in it. Without a list (cantrip/free-use/
+      // pact) any slotLevel is ignored — today's behavior.
+      let chosen = baseLevel;
+      if (descriptor.slotLevels !== undefined) {
+        chosen = intent.slotLevel ?? baseLevel;
+        if (!descriptor.slotLevels.includes(chosen)) {
+          throw new IntentError(`no ${ordinal(chosen)}-level slot available for "${intent.actionId}"`, 'INVALID');
+        }
+      }
+      const upcast = descriptor.slotLevels !== undefined && chosen > baseLevel;
       if (item && activityType(item) === 'heal') {
-        return buildHealAction(actor, item, intent.actionId);
+        return buildHealAction(actor, item, intent.actionId, upcast ? { slotLevel: chosen } : undefined);
       }
       // Cast = the to-hit/activation (use-spell; the relay auto-rolls an attack
       // activity). Damage is a SEPARATE `spell.<id>.damage` action, exactly like
       // weapons (attack + Dmg) — see the 'damage' case and buildActions.
+      if (upcast) {
+        return { endpoint: 'cast-at-slot', itemId, slotKey: `spell${chosen}` };
+      }
       return { endpoint: 'use-spell', itemId };
     }
     case 'equip': {

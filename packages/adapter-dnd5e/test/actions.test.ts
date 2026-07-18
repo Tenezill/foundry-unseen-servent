@@ -399,8 +399,8 @@ describe('buildAction — attack / cast / use / equip', () => {
     });
   });
 
-  it('cast is the to-hit/activation: use-spell at base level (a requested slotLevel is ignored — no upcast)', () => {
-    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast', slotLevel: 2 })).toEqual({
+  it('cast is the to-hit/activation: use-spell at base level (an explicit base-level slotLevel is honored, not an upcast)', () => {
+    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast', slotLevel: 1 })).toEqual({
       endpoint: 'use-spell',
       itemId: 'pZMrJb3AXiRYO5E8',
     });
@@ -436,6 +436,48 @@ describe('buildAction — attack / cast / use / equip', () => {
       endpoint: 'equip-item',
       itemId: 'yz7DxhEVWUzdQKm7',
       equipped: true,
+    });
+  });
+});
+
+describe('buildAction — upcast (cast-at-slot)', () => {
+  it('base-level choice keeps the plain use-spell wire shape', () => {
+    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast', slotLevel: 1 })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'pZMrJb3AXiRYO5E8',
+    });
+  });
+
+  it('a higher slot maps to cast-at-slot with the spellN key (Guiding Bolt at 3rd)', () => {
+    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast', slotLevel: 3 })).toEqual({
+      endpoint: 'cast-at-slot',
+      itemId: 'pZMrJb3AXiRYO5E8',
+      slotKey: 'spell3',
+    });
+  });
+
+  it('a slotLevel not in the payable list is INVALID (no slot to pay with)', () => {
+    expectIntentError(
+      () => build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast', slotLevel: 5 }),
+      'INVALID',
+    );
+  });
+
+  it('omitted slotLevel defaults to base when base is payable', () => {
+    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'pZMrJb3AXiRYO5E8',
+    });
+  });
+
+  it('an upcast heal keeps the use-and-roll display shape but activates via cast-at-slot (Cure Wounds at 2nd)', () => {
+    const a = build(casterCaptured, { kind: 'cast', actionId: 'spell.LjT1wf4D38c9Ieuo.cast', slotLevel: 2 });
+    expect(a).toMatchObject({
+      endpoint: 'use-and-roll',
+      use: 'cast-at-slot',
+      itemId: 'LjT1wf4D38c9Ieuo',
+      slotKey: 'spell2',
+      flavor: 'Cure Wounds — Healing',
     });
   });
 });
