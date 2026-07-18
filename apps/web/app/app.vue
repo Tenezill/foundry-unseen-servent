@@ -11,5 +11,6 @@
 onMounted(() => {
   applyStoredTheme()
   applyStoredRollAnim()
+  initInstallPrompt()
 })
 </script>

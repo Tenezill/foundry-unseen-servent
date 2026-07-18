@@ -37,6 +37,8 @@
       </p>
     </div>
 
+    <InstallPrompt />
+
     <footer class="foot">
       <NuxtLink class="admin-link" to="/admin">Admin</NuxtLink>
     </footer>
