@@ -419,9 +419,11 @@ describe('buildAction — attack / cast / use / equip', () => {
     const all = actions(casterCaptured);
     expect(all.find((a) => a.id === 'spell.pZMrJb3AXiRYO5E8.damage')).toMatchObject({ kind: 'damage' });
     expect(formulaOf(casterCaptured, { kind: 'damage', actionId: 'spell.pZMrJb3AXiRYO5E8.damage' })).toBe('4d6');
+    // Akra is character level 5 -> cantrip tier 1 (Task 3: scaled display
+    // formulas) -> Sacred Flame's base 1d8 scales to 2d8, not the base dice.
     expect(build(casterCaptured, { kind: 'damage', actionId: 'spell.P97npemu7j70IZAQ.damage' })).toEqual({
       endpoint: 'roll',
-      formula: '1d8',
+      formula: '2d8',
       flavor: 'Sacred Flame — Damage',
     });
   });
@@ -1412,6 +1414,47 @@ describe('buildAction — critical damage (nat 20 doubles the dice)', () => {
         } as unknown as ActionIntent),
       'INVALID',
     );
+  });
+});
+
+describe('display formula scaling (upcast + cantrip tiers)', () => {
+  it('Guiding Bolt at 3rd rolls 6d6 (base 4d6, whole-mode +1 die/level)', () => {
+    expect(build(casterCaptured, { kind: 'damage', actionId: 'spell.pZMrJb3AXiRYO5E8.damage', slotLevel: 3 })).toEqual({
+      endpoint: 'roll',
+      formula: '6d6',
+      flavor: 'Guiding Bolt — Damage',
+    });
+  });
+
+  it('crit doubles the SCALED dice (Guiding Bolt at 3rd, crit: 12d6)', () => {
+    expect(
+      build(casterCaptured, { kind: 'damage', actionId: 'spell.pZMrJb3AXiRYO5E8.damage', slotLevel: 3, critical: true }),
+    ).toEqual({ endpoint: 'roll', formula: '12d6', flavor: 'Guiding Bolt — Critical Damage' });
+  });
+
+  it('cantrip damage scales with character level (Akra is level 5: Sacred Flame 2d8)', () => {
+    expect(build(casterCaptured, { kind: 'damage', actionId: 'spell.P97npemu7j70IZAQ.damage' })).toEqual({
+      endpoint: 'roll',
+      formula: '2d8',
+      flavor: 'Sacred Flame — Damage',
+    });
+  });
+
+  it('a slotLevel below base or out of range is INVALID', () => {
+    expectIntentError(
+      () => build(casterCaptured, { kind: 'damage', actionId: 'spell.pZMrJb3AXiRYO5E8.damage', slotLevel: 0 }),
+      'INVALID',
+    );
+  });
+
+  it('upcast heal formula scales (Cure Wounds at 2nd: 2d8 + 2)', () => {
+    const a = build(casterCaptured, { kind: 'cast', actionId: 'spell.LjT1wf4D38c9Ieuo.cast', slotLevel: 2 });
+    if (a.endpoint !== 'use-and-roll') throw new Error('expected use-and-roll');
+    expect(a.formula).toBe('2d8 + 2');
+  });
+
+  it('weapon damage is untouched by slotLevel (weapons have no cast level)', () => {
+    expect(formulaOf(martialCaptured, { kind: 'damage', actionId: 'item.gta26ORvqC323k3r.damage' })).toBe('1d8 + 3');
   });
 });
 

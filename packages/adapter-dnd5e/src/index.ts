@@ -1391,15 +1391,19 @@ function isSelfTargeted(item: FoundryItemDoc): boolean {
  *   "@classes.<id>.levels"  -> approximated with total character level
  *                              (ignores multiclass split — same caveat
  *                              already accepted for weapon ability lookups).
- * Undefined when the activity carries no healing dice.
+ * Undefined when the activity carries no healing dice. `castLevel` (an
+ * explicit upcast slot, or undefined to use the effective default — see
+ * scalingSteps) scales the dice count via the activity's own `scaling` data.
  */
-function healFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | undefined {
+function healFormula(actor: FoundryActorDoc, item: FoundryItemDoc, castLevel?: number): string | undefined {
   const healing = rec(getPath(healActivity(item), 'healing'));
   const number = typeof healing.number === 'number' && Number.isFinite(healing.number) ? healing.number : undefined;
   const denomination =
     typeof healing.denomination === 'number' && Number.isFinite(healing.denomination) ? healing.denomination : undefined;
   if (number === undefined || denomination === undefined || number <= 0 || denomination <= 0) return undefined;
-  const dice = `${number}d${denomination}`;
+  const steps = scalingSteps(actor, item, castLevel);
+  const scaled = scaledDiceNumber(number, healing.scaling, steps) ?? number;
+  const dice = `${scaled}d${denomination}`;
   const rawBonus = typeof healing.bonus === 'string' ? healing.bonus.trim() : '';
   let bonus: number;
   if (rawBonus === '@mod') {
@@ -1415,6 +1419,40 @@ function healFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | und
   return `${dice} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}`;
 }
 
+/** dnd5e 5.x part scaling ({ mode, number, formula }): extra dice per step
+ *  above base. 'whole' = every level, 'half' = every two levels. Returns
+ *  undefined when scaling data can't be applied (caller keeps base dice —
+ *  documented gap, same honesty as the formula builders). */
+function scaledDiceNumber(baseNumber: number, rawScaling: unknown, steps: number): number | undefined {
+  if (steps <= 0) return baseNumber;
+  const scaling = rec(rawScaling);
+  const per = typeof scaling.number === 'number' && Number.isFinite(scaling.number) ? scaling.number : 1;
+  if (scaling.mode === 'whole') return baseNumber + per * steps;
+  if (scaling.mode === 'half') return baseNumber + per * Math.floor(steps / 2);
+  return undefined;
+}
+
+/** Cantrip damage tier from total character level (dnd5e: 5/11/17). */
+function cantripSteps(actor: FoundryActorDoc): number {
+  const lvl = characterLevel(actor);
+  return lvl >= 17 ? 3 : lvl >= 11 ? 2 : lvl >= 5 ? 1 : 0;
+}
+
+/** Steps above base the display roll should scale by: explicit castLevel
+ *  wins; cantrips use the character-level tier; pact-method spells scale to
+ *  the pact slot level when known; everything else stays at base. */
+function scalingSteps(actor: FoundryActorDoc, item: FoundryItemDoc, castLevel?: number): number {
+  if (item.type !== 'spell') return 0;
+  const base = numAt(item.system, 'level') ?? 0;
+  if (base === 0) return cantripSteps(actor);
+  if (castLevel !== undefined) return Math.max(0, castLevel - base);
+  if (strAt(item.system, 'method') === 'pact') {
+    const pactLevel = numAt(actor.system, 'spells.pact.level');
+    if (pactLevel !== undefined) return Math.max(0, pactLevel - base);
+  }
+  return 0;
+}
+
 /**
  * Damage formula for an item's on-use damage effect (M16), checked in the
  * order these two real shapes were confirmed to exist:
@@ -1427,10 +1465,13 @@ function healFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | und
  *      (Bead of Force's real shape — its `"5d4"` is already a complete
  *      dice formula with no roll-data references to resolve, unlike a
  *      spell/feature's healing/damage dice).
- * Undefined when neither shape is present.
+ * Undefined when neither shape is present. `castLevel` (an explicit upcast
+ * slot, or undefined to use the effective default — see scalingSteps) scales
+ * each part's dice count via its own `scaling` data.
  */
-function itemDamageFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | undefined {
+function itemDamageFormula(actor: FoundryActorDoc, item: FoundryItemDoc, castLevel?: number): string | undefined {
   const activities = allActivities(item);
+  const steps = scalingSteps(actor, item, castLevel);
   for (const activity of activities) {
     const rawParts = getPath(activity, 'damage.parts');
     if (!Array.isArray(rawParts) || rawParts.length === 0) continue;
@@ -1441,7 +1482,8 @@ function itemDamageFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string
       const denomination =
         typeof part.denomination === 'number' && Number.isFinite(part.denomination) ? part.denomination : undefined;
       if (number === undefined || denomination === undefined || number <= 0 || denomination <= 0) continue;
-      const dice = `${number}d${denomination}`;
+      const scaled = scaledDiceNumber(number, part.scaling, steps) ?? number;
+      const dice = `${scaled}d${denomination}`;
       const rawBonus = typeof part.bonus === 'string' ? part.bonus.trim() : '';
       let bonus: number;
       if (rawBonus === '@mod') {
@@ -1503,7 +1545,7 @@ function buildHealAction(
   opts?: { forceSelf?: boolean; slotLevel?: number },
 ): RelayAction {
   assertUsesRemaining(item);
-  const formula = healFormula(actor, item);
+  const formula = healFormula(actor, item, opts?.slotLevel);
   if (formula === undefined) {
     throw new IntentError(`no heal formula for "${actionId}"`, 'UNKNOWN_RESOURCE');
   }
@@ -1702,11 +1744,27 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       if (intent.critical !== undefined && typeof intent.critical !== 'boolean') {
         throw new IntentError('damage requires a boolean "critical"', 'INVALID');
       }
+      if (
+        intent.slotLevel !== undefined &&
+        (!Number.isInteger(intent.slotLevel) || intent.slotLevel < 1 || intent.slotLevel > 9)
+      ) {
+        throw new IntentError('damage slotLevel must be an integer 1-9', 'INVALID');
+      }
       const isSpell = intent.actionId.startsWith('spell.');
       const prefix = isSpell ? 'spell.' : 'item.';
       const itemId = intent.actionId.slice(prefix.length, -'.damage'.length);
       const item = (actor.items ?? []).find((i) => i._id === itemId);
-      const formula = item ? (isSpell ? itemDamageFormula(actor, item) : weaponDamageFormula(actor, item)) : undefined;
+      if (isSpell && item && intent.slotLevel !== undefined) {
+        const baseLevel = numAt(item.system, 'level') ?? 0;
+        if (intent.slotLevel < baseLevel) {
+          throw new IntentError('damage slotLevel must be an integer 1-9', 'INVALID');
+        }
+      }
+      const formula = item
+        ? isSpell
+          ? itemDamageFormula(actor, item, intent.slotLevel)
+          : weaponDamageFormula(actor, item)
+        : undefined;
       if (!item || formula === undefined) {
         throw new IntentError(`no damage formula for "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
       }
