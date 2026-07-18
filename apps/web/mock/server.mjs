@@ -98,6 +98,7 @@ actors.set('a-sariel', {
     spells: [
       { id: 's-firebolt', label: 'Fire Bolt', sub: 'Cantrip · V,S', level: 0 },
       { id: 's-magearmor', label: 'Mage Armor', sub: '1st · V,S,M', tags: ['prepared'], level: 1 },
+      { id: 's-detect', label: 'Detect Magic', sub: '1st · V,S · 1/long rest', tags: ['free use', 'ritual', 'concentration'], level: 1 },
       { id: 's-mistystep', label: 'Misty Step', sub: '2nd · V', level: 2 },
       { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'], level: 3, detail: '<p>A bead of glowing amber streaks from your fingertip and blooms into roaring flame.</p><p><strong>The academy warns:</strong> mind your allies, and mind the drapes.</p>' },
     ],
@@ -308,12 +309,25 @@ function buildSheet(actor) {
     },
   )
   if (s.spells) {
-    sections.push({
-      kind: 'list',
-      id: 'spells',
-      label: 'Spells',
-      items: s.spells.map((sp) => listItem(sp, `spell.${sp.id}.cast`, undefined)),
-    })
+    // Per-level sections with headers, mirroring adapter-dnd5e (2026-07-18).
+    const byLevel = new Map()
+    for (const sp of s.spells) {
+      const lvl = sp.level ?? 0
+      if (!byLevel.has(lvl)) byLevel.set(lvl, [])
+      byLevel.get(lvl).push(sp)
+    }
+    const ord = (n) => (n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`)
+    for (const lvl of [...byLevel.keys()].sort((a, b) => a - b)) {
+      const group = byLevel.get(lvl)
+      const label = lvl === 0 ? 'Cantrips' : `${ord(lvl)} Level`
+      sections.push({
+        kind: 'list',
+        id: `spells.l${lvl}`,
+        label,
+        header: { id: `spells.l${lvl}.header`, label, sub: `${group.length} ${group.length === 1 ? 'spell' : 'spells'}` },
+        items: group.map((sp) => listItem(sp, `spell.${sp.id}.cast`, undefined)),
+      })
+    }
   }
   sections.push({
     kind: 'list',
@@ -333,6 +347,13 @@ function buildSheet(actor) {
     actions: buildActions(actor),
     conditions: (actor.conditions ?? []).map((c) => ({ ...c })),
     concentration: actor.concentration ? { label: actor.concentration.label } : null,
+    // Library collections, mirroring adapter-dnd5e (the real gateway serves
+    // these; without them no "Add …" button ever renders in the mock).
+    library: [
+      { id: 'spells', label: 'Learn spell' },
+      { id: 'feats', label: 'Add feat' },
+      { id: 'gear', label: 'Add item' },
+    ],
   }
 }
 

@@ -11,6 +11,13 @@
 	handle /healthz {
 		reverse_proxy gateway:8090
 	}
+	# Same-origin Foundry ASSET proxy (2026-07-18): portraits/effect icons.
+	# Image files only — everything else 404s so no Foundry UI is exposed.
+	handle_path /fvtt/* {
+		@img path_regexp \.(webp|png|jpe?g|gif|svg|avif)$
+		reverse_proxy @img foundry:30000
+		respond 404
+	}
 	handle {
 		root * /srv/app
 		try_files {path} /index.html

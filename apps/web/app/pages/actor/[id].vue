@@ -117,7 +117,20 @@
             Removing items is GM-side for now — ask your GM to delete a mis-created one.
           </p>
 
-          <template v-for="section in renderableSections" :key="section.id">
+          <div v-if="spellChips.length > 0" class="filter-chips spell-filters">
+            <button
+              v-for="chip in spellChips"
+              :key="chip.id"
+              type="button"
+              class="chip"
+              :class="{ active: chip.active }"
+              @click="chip.toggle()"
+            >
+              {{ chip.label }}
+            </button>
+          </div>
+
+          <template v-for="section in displaySections" :key="section.id">
             <SectionStats
               v-if="section.kind === 'stats'"
               :section="section"
@@ -370,7 +383,9 @@ function iconFor(tab: { id: string; label: string; hostsActions?: boolean }): st
 /** Which tab surfaces the "add" button for each library collection. */
 const COLLECTION_TAB: Record<string, TabId> = {
   spells: 'spells',
-  feats: 'overview',
+  // Feats are added once in a blue moon — parked on Vitals, off the front
+  // page (2026-07-18 request).
+  feats: 'resources',
   gear: 'inventory',
 }
 
@@ -685,6 +700,89 @@ const tabAddEntry = computed(() =>
 const renderableSections = computed(() =>
   activeSections.value.filter((s) => s.id !== 'deathsaves' && s.id !== 'currency'),
 )
+
+/* ---- spell filters (2026-07-18): level chips + ritual/concentration ------ */
+
+const SPELL_SECTION_RE = /^spells\.l(\d)$/
+
+const spellLevelFilter = ref<string | null>(null)
+const spellRitualOnly = ref(false)
+const spellConcOnly = ref(false)
+
+/** The per-level spell sections on the active tab (empty on non-spell tabs). */
+const spellSectionsOnTab = computed(() =>
+  renderableSections.value.filter((s) => s.kind === 'list' && SPELL_SECTION_RE.test(s.id)),
+)
+
+interface SpellChip {
+  id: string
+  label: string
+  active: boolean
+  toggle: () => void
+}
+
+const spellChips = computed<SpellChip[]>(() => {
+  if (spellSectionsOnTab.value.length === 0) return []
+  return [
+    {
+      id: 'all',
+      label: 'All',
+      active: spellLevelFilter.value === null && !spellRitualOnly.value && !spellConcOnly.value,
+      toggle: () => {
+        spellLevelFilter.value = null
+        spellRitualOnly.value = false
+        spellConcOnly.value = false
+      },
+    },
+    ...spellSectionsOnTab.value.map((s) => {
+      const lvl = SPELL_SECTION_RE.exec(s.id)?.[1] ?? '0'
+      return {
+        id: s.id,
+        label: lvl === '0' ? 'Cantrip' : `Lvl ${lvl}`,
+        active: spellLevelFilter.value === s.id,
+        toggle: () => {
+          spellLevelFilter.value = spellLevelFilter.value === s.id ? null : s.id
+        },
+      }
+    }),
+    {
+      id: 'ritual',
+      label: '📖 Ritual',
+      active: spellRitualOnly.value,
+      toggle: () => {
+        spellRitualOnly.value = !spellRitualOnly.value
+      },
+    },
+    {
+      id: 'conc',
+      label: '🧠 Conc.',
+      active: spellConcOnly.value,
+      toggle: () => {
+        spellConcOnly.value = !spellConcOnly.value
+      },
+    },
+  ]
+})
+
+/** renderableSections with the spell filters applied (level chip narrows to
+ *  one section; ritual/conc narrow rows by their tags; emptied sections
+ *  drop out). Pass-through everywhere but the Spells tab. */
+const displaySections = computed<SheetSection[]>(() => {
+  if (spellSectionsOnTab.value.length === 0) return renderableSections.value
+  const tagFiltered = spellRitualOnly.value || spellConcOnly.value
+  return renderableSections.value
+    .filter((s) => !SPELL_SECTION_RE.test(s.id) || spellLevelFilter.value === null || s.id === spellLevelFilter.value)
+    .map((s) => {
+      if (s.kind !== 'list' || !SPELL_SECTION_RE.test(s.id) || !tagFiltered) return s
+      const items = s.items.filter(
+        (i) =>
+          (!spellRitualOnly.value || (i.tags ?? []).includes('ritual')) &&
+          (!spellConcOnly.value || (i.tags ?? []).includes('concentration')),
+      )
+      return { ...s, items }
+    })
+    .filter((s) => s.kind !== 'list' || !SPELL_SECTION_RE.test(s.id) || s.items.length > 0)
+})
 
 const tabEmpty = computed(() => {
   if (activeTab.value === actionsTabId.value || activeTab.value === 'combat') return false
@@ -1655,6 +1753,31 @@ onBeforeUnmount(() => {
   color: var(--gold-bright);
   background: color-mix(in srgb, var(--gold) 10%, transparent);
   border: 1px dashed color-mix(in srgb, var(--gold) 40%, transparent);
+}
+
+/* Spell filter chips (2026-07-18) — same look as the Actions tab's. */
+.filter-chips {
+  display: flex;
+  gap: 8px;
+  padding: 10px 2px;
+  overflow-x: auto;
+}
+
+.chip {
+  flex: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink-dim);
+}
+
+.chip.active {
+  border-color: var(--gold-deep);
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  color: var(--accent-ink);
 }
 
 .lib-add svg {

@@ -28,12 +28,15 @@ export default defineNuxtConfig({
       /** Gateway base URL; '' = same-origin (prod default behind Caddy). */
       apiBase: '',
       /**
-       * Foundry origin (e.g. https://foundry.example). Actor/effect images are
-       * world-relative Foundry paths ('systems/dnd5e/…'); when set, the hero
-       * medallion and condition badges prefix relative paths with this origin.
-       * '' leaves paths as-is (same-origin/absolute), falling back to a glyph.
+       * Foundry asset base. Actor/effect images are world-relative Foundry
+       * paths ('systems/dnd5e/…', 'ddb-images/…'); relative paths are
+       * prefixed with this. Default '/fvtt' rides the quickstart Caddy
+       * same-origin image proxy (2026-07-18) — works on LAN and domain
+       * alike; where the proxy is absent the image 404s and the UI falls
+       * back to a glyph, same as before. May also be a full Foundry origin
+       * (e.g. https://foundry.example).
        */
-      foundryBase: '',
+      foundryBase: '/fvtt',
     },
   },
 
