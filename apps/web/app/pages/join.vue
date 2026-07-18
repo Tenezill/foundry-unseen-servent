@@ -1,10 +1,7 @@
 <template>
   <div class="page join">
     <div class="brand">
-      <svg class="mark" viewBox="0 0 48 48" aria-hidden="true">
-        <path d="M24 4 42 15v18L24 44 6 33V15Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round" />
-        <path d="M24 4v40M6 15l18 11 18-11M6 33l18-7 18 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" opacity="0.55" />
-      </svg>
+      <img class="mark" src="/icons/icon-192.png" alt="" aria-hidden="true" />
       <h1>Foundry&rsquo;s Unseen Servant</h1>
       <p class="tagline">Your character sheet, live from the table.</p>
     </div>
@@ -119,10 +116,10 @@ onBeforeUnmount(() => {
 }
 
 .mark {
-  width: 64px;
-  height: 64px;
-  color: var(--accent);
+  width: 96px;
+  height: 96px;
   margin-bottom: 12px;
+  filter: drop-shadow(0 6px 18px var(--shadow));
 }
 
 .brand h1 {
