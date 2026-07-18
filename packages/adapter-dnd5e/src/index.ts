@@ -1038,7 +1038,16 @@ function featureListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListIt
   };
 }
 
-function spellListItem(item: FoundryItemDoc): ListItem {
+/** Feat/racial spell grants (dnd5e 5.3.3 `system.method`, live-verified on
+ *  Morgrim): 'atwill' and 'innate' spells cast WITHOUT a slot, tracking their
+ *  own item uses (e.g. 1/long rest) instead. Everything else ('spell',
+ *  'ritual', absent) is slot-based. */
+function freeUseMethod(item: FoundryItemDoc): 'atwill' | 'innate' | undefined {
+  const method = strAt(item.system, 'method');
+  return method === 'atwill' || method === 'innate' ? method : undefined;
+}
+
+function spellListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListItem {
   const actionId = `spell.${item._id}.cast`;
   const level = numAt(item.system, 'level') ?? 0;
   const school = strAt(item.system, 'school');
@@ -1051,24 +1060,34 @@ function spellListItem(item: FoundryItemDoc): ListItem {
   const isPrepared = always || rawPrepared === 1 || rawPrepared === true;
   const rawProps = getPath(item.system, 'properties');
   const properties = Array.isArray(rawProps) ? rawProps : [];
+  const freeUse = freeUseMethod(item);
 
   const subParts: string[] = [level === 0 ? 'Cantrip' : `${ordinal(level)} level`];
   const schoolLabel = school !== undefined ? SPELL_SCHOOLS[school] : undefined;
   if (schoolLabel !== undefined) subParts.push(schoolLabel);
-  if (always) subParts.push('always prepared');
+  if (freeUse !== undefined) {
+    // "1/long rest" — so the two Healing Words are never confused again.
+    const uses = usesInfo(item);
+    const recovery = recoveryLabel(item);
+    if (uses !== undefined && recovery !== undefined) subParts.push(`${uses.max}/${recovery}`);
+    else subParts.push('no slot needed');
+  } else if (always) subParts.push('always prepared');
   else if (isPrepared) subParts.push('prepared');
 
   const tags: string[] = [];
-  if (isPrepared) tags.push('prepared');
+  if (freeUse !== undefined) tags.push(freeUse === 'atwill' ? 'free use' : 'innate');
+  if (freeUse === undefined && isPrepared) tags.push('prepared');
   if (properties.includes('concentration')) tags.push('concentration');
   if (properties.includes('ritual')) tags.push('ritual');
 
+  const usesId = `item.${item._id}.uses`;
   const detail = itemDetail(item);
   return {
     id: item._id,
     label: item.name,
     sub: subParts.join(' · '),
     ...(item.img !== undefined ? { img: item.img } : {}),
+    ...(freeUse !== undefined && resourceIds.has(usesId) ? { resourceId: usesId } : {}),
     ...(tags.length > 0 ? { tags } : {}),
     ...(detail !== undefined ? { detail } : {}),
     ...(isPreparableSpell(item) ? { toggleActionId: `spell.${item._id}.prepare` } : {}),
@@ -1078,12 +1097,13 @@ function spellListItem(item: FoundryItemDoc): ListItem {
   };
 }
 
-/** Leveled, not-always-prepared spells may be toggled; cantrips and
- * `prepared: 2` (always prepared, e.g. domain spells) may not. */
+/** Leveled, not-always-prepared spells may be toggled; cantrips,
+ * `prepared: 2` (always prepared, e.g. domain spells), and free-use grants
+ * (atwill/innate — no preparation concept) may not. */
 function isPreparableSpell(item: FoundryItemDoc): boolean {
   if (item.type !== 'spell') return false;
   const level = numAt(item.system, 'level') ?? 0;
-  return level > 0 && getPath(item.system, 'prepared') !== 2;
+  return level > 0 && getPath(item.system, 'prepared') !== 2 && freeUseMethod(item) === undefined;
 }
 
 /**
@@ -1495,7 +1515,9 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
   }
   out.push({ id: 'init.roll', label: 'Initiative', kind: 'check' });
   for (const item of actor.items ?? []) {
-    if (item.type === 'weapon') {
+    if (item.type === 'weapon' && getPath(item.system, 'equipped') === true) {
+      // Stowed weapons keep their row + equip toggle but offer no rolls —
+      // equipping brings Attack/Dmg back (2026-07-18 design).
       out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack' });
       if (weaponDamageFormula(actor, item) !== undefined) {
         out.push({ id: `item.${item._id}.damage`, label: item.name, kind: 'damage' });
@@ -1530,24 +1552,28 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       const rawPrepared = getPath(item.system, 'prepared');
       const alwaysPrepared = rawPrepared === 2;
       const isPrepared = alwaysPrepared || rawPrepared === 1 || rawPrepared === true;
+      const freeUse = freeUseMethod(item);
       // The Actions tab only offers spells that are actually ready to cast
       // right now: cantrips (no preparation concept), always-prepared spells
-      // (domain/ritual grants), and explicitly prepared leveled spells. An
+      // (domain/ritual grants), explicitly prepared leveled spells, and
+      // free-use grants (atwill/innate — always ready, own uses). An
       // unprepared leveled spell still appears on the Spells tab — with its
       // own Prepare toggle below — so the player can ready it; cluttering the
       // Actions tab with spells that Foundry would just refuse was confusing.
-      if (level === 0 || isPrepared) {
+      if (level === 0 || isPrepared || freeUse !== undefined) {
         // The bridge casts at base level only (no upcast), so a spell is either
         // castable now (single Cast) or not (disabled). We signal this with
         // slotLevels: absent = castable directly (cantrip or a base slot is
         // free); [] = no slot, render disabled. No per-level picker — the
-        // module cannot honour a chosen higher level.
+        // module cannot honour a chosen higher level. Free-use spells need no
+        // slot: never disabled, and the label says which twin this is so the
+        // player can't burn a slot by mistake.
         out.push({
           id: `spell.${item._id}.cast`,
-          label: item.name,
+          label: freeUse !== undefined ? `${item.name} (free use)` : item.name,
           kind: 'cast',
           effectType: effectTypeOf(item),
-          ...(level > 0 && !canCastAtBase(actor, level) ? { slotLevels: [] } : {}),
+          ...(freeUse === undefined && level > 0 && !canCastAtBase(actor, level) ? { slotLevels: [] } : {}),
         });
         // Damage spells get a companion damage-roll action, exactly like weapons
         // (attack + Dmg): cast is the to-hit/activation, this rolls the damage.
@@ -1841,11 +1867,17 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   ];
 
   const features: ListItem[] = [];
-  const spells: ListItem[] = [];
+  /** Spell rows grouped by level, insertion-ordered within a level. */
+  const spellsByLevel = new Map<number, ListItem[]>();
   const physicalIds = new Set((actor.items ?? []).filter((i) => PHYSICAL_ITEM_TYPES.has(i.type)).map((i) => i._id));
   for (const item of actor.items ?? []) {
     if (item.type === 'feat') features.push(featureListItem(item, resourceIds));
-    else if (item.type === 'spell') spells.push(spellListItem(item));
+    else if (item.type === 'spell') {
+      const level = Math.max(0, Math.min(9, numAt(item.system, 'level') ?? 0));
+      const list = spellsByLevel.get(level);
+      if (list) list.push(spellListItem(item, resourceIds));
+      else spellsByLevel.set(level, [spellListItem(item, resourceIds)]);
+    }
   }
 
   const vitalsIds = [
@@ -1918,8 +1950,19 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   }
   sections.push({ kind: 'stats', id: 'gearstats', label: 'Gear', stats: gearStats(actor) });
   sections.push({ kind: 'list', id: 'features', label: 'Features', items: features });
-  if (spells.length > 0) {
-    sections.push({ kind: 'list', id: 'spells', label: 'Spells', items: spells });
+  // One collapsible section per spell level (2026-07-18 design), same
+  // headline mechanism as inventory containers. Section ids keep the
+  // 'spells' stem so the PWA's tab heuristic still routes them.
+  for (const level of [...spellsByLevel.keys()].sort((a, b) => a - b)) {
+    const items = spellsByLevel.get(level) ?? [];
+    const label = level === 0 ? 'Cantrips' : `${ordinal(level)} Level`;
+    sections.push({
+      kind: 'list',
+      id: `spells.l${level}`,
+      label,
+      header: { id: `spells.l${level}.header`, label, sub: `${items.length} ${items.length === 1 ? 'spell' : 'spells'}` },
+      items,
+    });
   }
   // "Character" deliberately matches neither of the PWA's tab regexes
   // (spell/gear), so the section routes to Overview.

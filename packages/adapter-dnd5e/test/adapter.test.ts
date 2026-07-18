@@ -24,6 +24,14 @@ function section(actor: FoundryActorDoc, id: string): SheetSection {
   return s;
 }
 
+/** All spell rows across the per-level `spells.l<N>` sections (2026-07-18). */
+function spellRows(actor: FoundryActorDoc) {
+  return dnd5eAdapter
+    .toViewModel(actor)
+    .sections.filter((s): s is Extract<SheetSection, { kind: 'list' }> => s.kind === 'list' && s.id.startsWith('spells.l'))
+    .flatMap((s) => s.items);
+}
+
 // The workspace has no @types/node and this package's tsconfig lib is
 // ES2022, which doesn't declare the (Node 17+/browser) global structuredClone
 // used below to build a mutated copy of a fixture without touching the
@@ -205,8 +213,7 @@ describe('view model — caster (derived data preferred)', () => {
   });
 
   it('spells list: level, school, prepared state in sub; tags for prepared/concentration/ritual', () => {
-    const s = section(caster, 'spells');
-    if (s.kind !== 'list') throw new Error('spells must be a list section');
+    const s = { items: spellRows(caster) };
     expect(s.items).toHaveLength(6);
 
     const detect = s.items.find((i) => i.label === 'Detect Magic');
@@ -718,8 +725,7 @@ describe('captured fixtures — caster (Akra, Cleric 5)', () => {
   });
 
   it('spells section lists spells with level info and method/prepared-based tags', () => {
-    const s = section(casterCaptured, 'spells');
-    if (s.kind !== 'list') throw new Error('spells must be a list section');
+    const s = { items: spellRows(casterCaptured) };
     expect(s.items.length).toBe(18);
     for (const item of s.items) {
       expect(item.sub).toMatch(/^(Cantrip|1st level|2nd level|3rd level)/);
@@ -958,9 +964,9 @@ describe('item detail (system.description.value)', () => {
           : i,
       ),
     };
-    const s = dnd5eAdapter.toViewModel(withSpellDesc).sections.find((x) => x.id === 'spells');
-    if (s?.kind !== 'list') throw new Error('spells must be a list section');
-    expect(s.items.find((i) => i.label === 'Bless')?.detail).toBe('<p>You bless up to three creatures.</p>');
+    expect(spellRows(withSpellDesc).find((i) => i.label === 'Bless')?.detail).toBe(
+      '<p>You bless up to three creatures.</p>',
+    );
   });
 });
 

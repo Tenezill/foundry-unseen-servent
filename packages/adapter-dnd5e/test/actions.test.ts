@@ -48,6 +48,14 @@ function section(actor: FoundryActorDoc, id: string): SheetSection {
   return s;
 }
 
+/** All spell rows across the per-level `spells.l<N>` sections (2026-07-18). */
+function spellRows(actor: FoundryActorDoc) {
+  return dnd5eAdapter
+    .toViewModel(actor)
+    .sections.filter((s): s is Extract<SheetSection, { kind: 'list' }> => s.kind === 'list' && s.id.startsWith('spells.l'))
+    .flatMap((s) => s.items);
+}
+
 function expectIntentError(fn: () => unknown, code: IntentError['code']): void {
   let caught: unknown;
   try {
@@ -229,8 +237,7 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     });
     // The Spells tab still lists it — with its own actionId — so the player
     // can prepare it there.
-    const spells = section(casterCaptured, 'spells');
-    if (spells.kind !== 'list') throw new Error('spells must be a list section');
+    const spells = { items: spellRows(casterCaptured) };
     expect(spells.items.every((i) => i.actionId !== undefined)).toBe(true);
   });
 });
@@ -952,8 +959,7 @@ describe('view model wiring', () => {
   });
 
   it('spell rows carry cast actions', () => {
-    const spells = section(casterCaptured, 'spells');
-    if (spells.kind !== 'list') throw new Error('spells must be a list section');
+    const spells = { items: spellRows(casterCaptured) };
     expect(spells.items.find((i) => i.label === 'Guiding Bolt')?.actionId).toBe('spell.pZMrJb3AXiRYO5E8.cast');
     expect(spells.items.every((i) => i.actionId === `spell.${i.id}.cast`)).toBe(true);
   });
@@ -1087,8 +1093,7 @@ describe('spellbook management', () => {
   });
 
   it('spell rows carry toggleActionId and are removable from the spells collection; the sheet lists library collections', () => {
-    const spells = section(casterCaptured, 'spells');
-    if (spells.kind !== 'list') throw new Error('spells must be a list section');
+    const spells = { items: spellRows(casterCaptured) };
     const bolt = spellOf('Guiding Bolt');
     const row = spells.items.find((r) => r.id === bolt._id);
     expect(row?.toggleActionId).toBe(`spell.${bolt._id}.prepare`);
