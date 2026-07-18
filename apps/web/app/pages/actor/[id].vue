@@ -14,6 +14,19 @@
               <path d="M12 8v4l3 2M4 12a8 8 0 1 0 2-5.3M4 4v3h3" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </button>
+          <button
+            class="tool"
+            type="button"
+            :aria-label="rollAnimOn ? 'Turn off roll animation' : 'Turn on roll animation'"
+            :class="{ 'tool-off': !rollAnimOn }"
+            @click="rollAnimPref.toggle()"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 2 21 7v10l-9 5-9-5V7Z" stroke-linejoin="round" />
+              <path d="M12 2v20M3 7l9 5 9-5" stroke-linejoin="round" opacity="0.55" />
+              <path v-if="!rollAnimOn" d="M4 4l16 16" stroke-linecap="round" />
+            </svg>
+          </button>
           <button class="tool" type="button" :aria-label="isDark ? 'Switch to light theme' : 'Switch to dark theme'" @click="theme.toggle()">
             <svg v-if="isDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke-linecap="round" />
@@ -271,6 +284,7 @@
         @close="closeLibrary"
       />
       <RollLog v-if="showLog" :entries="rollHistory" @close="showLog = false" />
+      <RollAnimOverlay v-if="rollAnim" :label="rollAnim.label" :result="rollAnim.result" />
       <RollResultPill
         v-if="lastRoll"
         :result="lastRoll.result"
@@ -296,7 +310,14 @@
       </div>
     </div>
 
-    <DiceTray v-if="sheet" :actor-id="actorId" :readonly="conn === 'offline'" @roll="onDiceRoll" />
+    <DiceTray
+      v-if="sheet"
+      :actor-id="actorId"
+      :readonly="conn === 'offline'"
+      @rolling="startRollAnim('Dice roll')"
+      @roll="onDiceRoll"
+      @rollfail="cancelRollAnim"
+    />
   </div>
 </template>
 
@@ -1006,7 +1027,71 @@ function pushHistory(entry: Omit<RollLogEntry, 'id'>): void {
   }
 }
 
+/* ---- roll animation (2026-07-18): suspense overlay between tap & result --
+ * Dice are rolled server-side, so the overlay masks the round-trip: it spins
+ * from submit, holds a minimum so it never flashes, reveals the real total,
+ * then hands off to the existing pill/history/haptics presentation. Gated by
+ * the fc:rollAnim preference AND prefers-reduced-motion (useRollAnim). */
+
+const rollAnimPref = useRollAnim()
+const rollAnimOn = computed(() => rollAnimPref.on.value)
+/** Intent kinds that reliably return a client-side roll result. */
+const ROLL_ANIM_KINDS = new Set(['check', 'save', 'attack', 'damage'])
+const ROLL_ANIM_MIN_MS = 900
+const ROLL_ANIM_REVEAL_MS = 700
+const ROLL_ANIM_MAX_MS = 15_000
+
+const rollAnim = ref<{ label: string; result: ActionRollResult | null } | null>(null)
+let rollAnimStart = 0
+let rollAnimTimer: ReturnType<typeof setTimeout> | undefined
+
+function startRollAnim(label: string): void {
+  if (!rollAnimPref.enabled()) return
+  if (rollAnimTimer !== undefined) clearTimeout(rollAnimTimer)
+  rollAnim.value = { label, result: null }
+  rollAnimStart = Date.now()
+  // Safety net: a hung request must never leave the overlay spinning forever.
+  rollAnimTimer = setTimeout(cancelRollAnim, ROLL_ANIM_MAX_MS)
+}
+
+function cancelRollAnim(): void {
+  if (rollAnimTimer !== undefined) {
+    clearTimeout(rollAnimTimer)
+    rollAnimTimer = undefined
+  }
+  rollAnim.value = null
+}
+
+/** Reveal `result` in the active overlay, then run the presentation. With no
+ *  overlay active (animation off, or the action wasn't animated) the
+ *  presentation runs immediately — behavior identical to before. */
+function finishRollAnim(result: ActionRollResult, then: () => void): void {
+  if (!rollAnim.value) {
+    then()
+    return
+  }
+  if (rollAnimTimer !== undefined) clearTimeout(rollAnimTimer)
+  const wait = Math.max(0, ROLL_ANIM_MIN_MS - (Date.now() - rollAnimStart))
+  rollAnimTimer = setTimeout(() => {
+    if (!rollAnim.value) {
+      rollAnimTimer = undefined
+      then()
+      return
+    }
+    rollAnim.value = { ...rollAnim.value, result }
+    rollAnimTimer = setTimeout(() => {
+      rollAnim.value = null
+      rollAnimTimer = undefined
+      then()
+    }, ROLL_ANIM_REVEAL_MS)
+  }, wait)
+}
+
 function showRoll(result: ActionRollResult, label: string, effectType?: EffectType): void {
+  finishRollAnim(result, () => presentRoll(result, label, effectType))
+}
+
+function presentRoll(result: ActionRollResult, label: string, effectType?: EffectType): void {
   lastRoll.value = { result, label, display: effectDisplay(result, effectType) }
   pushHistory({
     label,
@@ -1022,9 +1107,12 @@ function showRoll(result: ActionRollResult, label: string, effectType?: EffectTy
 
 /** Dice-tray rolls carry no crit/fumble semantics; they still belong in the
  *  session's roll history. The tray shows its own inline result + toast, so we
- *  only record it here (no floating lastRoll card). */
+ *  only record it here (no floating lastRoll card) — after the overlay's
+ *  reveal, when the animation is on. */
 function onDiceRoll(entry: { formula: string; total: number }): void {
-  pushHistory({ label: 'Dice roll', total: entry.total, formula: entry.formula, isCritical: false, isFumble: false })
+  finishRollAnim({ formula: entry.formula, total: entry.total }, () =>
+    pushHistory({ label: 'Dice roll', total: entry.total, formula: entry.formula, isCritical: false, isFumble: false }),
+  )
 }
 
 function dismissRoll(): void {
@@ -1403,6 +1491,7 @@ async function onMove(targetId: string | null): Promise<void> {
 async function submitAction(intent: ActionIntent, label: string, effectType?: EffectType): Promise<void> {
   if (offline.value || actionBusy.value) return
   actionBusy.value = intent.actionId
+  if (ROLL_ANIM_KINDS.has(intent.kind)) startRollAnim(label)
   try {
     const res = await api<ActionResponse>(`/api/actors/${actorId.value}/actions`, {
       method: 'POST',
@@ -1428,6 +1517,7 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
       showRoll(res.result, label, effect)
       return
     }
+    cancelRollAnim() // animated kind but no client-side roll came back
     switch (intent.kind) {
       case 'equip':
         toast.show(`${label} ${intent.equipped ? 'equipped' : 'unequipped'}`)
@@ -1448,6 +1538,7 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
         toast.show(`${label} done — see Foundry chat`)
     }
   } catch (err) {
+    cancelRollAnim()
     const status = errorStatus(err)
     if (status === 401) {
       clearToken()
@@ -1653,6 +1744,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (rollTimer !== undefined) clearTimeout(rollTimer)
+  if (rollAnimTimer !== undefined) clearTimeout(rollAnimTimer)
   closeEvents()
   closeCombatEvents()
   window.removeEventListener('online', onOnline)
@@ -1695,6 +1787,12 @@ onBeforeUnmount(() => {
   color: var(--ink-dim);
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 70%, transparent);
+}
+
+/* Roll-animation toggle in its OFF state (slashed d20). */
+.tool-off {
+  color: var(--ink-faint);
+  opacity: 0.75;
 }
 
 .tool:active {

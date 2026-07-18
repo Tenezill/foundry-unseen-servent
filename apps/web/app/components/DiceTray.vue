@@ -50,7 +50,13 @@
 
 <script setup lang="ts">
 const props = defineProps<{ actorId: string; readonly?: boolean }>()
-const emit = defineEmits<{ (e: 'roll', entry: { formula: string; total: number }): void }>()
+const emit = defineEmits<{
+  (e: 'roll', entry: { formula: string; total: number }): void
+  /** Fired when a roll request leaves; lets the page start its suspense
+   *  animation. Always paired with either 'roll' or 'rollfail'. */
+  (e: 'rolling'): void
+  (e: 'rollfail'): void
+}>()
 
 const DICE = [20, 12, 100, 10, 8, 6, 4] as const
 const counts = reactive<Record<number, number>>({})
@@ -85,6 +91,7 @@ function clearPool(): void {
 async function roll(): Promise<void> {
   if (!hasDice.value || busy.value) return
   busy.value = true
+  emit('rolling')
   try {
     const res = await api<{ result: { formula: string; total: number } | null }>(
       `/api/actors/${props.actorId}/roll`,
@@ -95,9 +102,11 @@ async function roll(): Promise<void> {
       emit('roll', res.result)
       toast.show(`🎲 ${res.result.formula} = ${res.result.total}`)
     } else {
+      emit('rollfail')
       toast.show('Rolled — see Foundry')
     }
   } catch (err) {
+    emit('rollfail')
     if (errorStatus(err) === 401) {
       clearToken()
       await navigateTo('/join', { replace: true })
