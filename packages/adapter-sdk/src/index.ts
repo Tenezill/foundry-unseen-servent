@@ -260,6 +260,9 @@ export interface ActionDescriptor {
   group?: string;
   /** cast only: slot levels currently legal (empty/absent = at-will/cantrip). */
   slotLevels?: number[];
+  /** cast only: the spell's own level (0 = cantrip) — the PWA groups the
+   *  Actions-tab spell list under per-level headers with it (2026-07-18). */
+  level?: number;
   /** equip only: current state (the intent carries the desired state). */
   equipped?: boolean;
   /** prepare only: current state (the intent carries the desired state). */
@@ -278,7 +281,11 @@ export interface ActionDescriptor {
 
 export type ActionIntent =
   | { kind: 'check' | 'save'; actionId: string; mode?: 'advantage' | 'disadvantage' }
-  | { kind: 'attack' | 'use' | 'damage'; actionId: string }
+  | { kind: 'attack' | 'use'; actionId: string }
+  /** `critical` (5e nat 20): the damage roll doubles its dice, keeping
+   *  static bonuses — armed by the PWA when the preceding attack/cast
+   *  roll came back `isCritical`. */
+  | { kind: 'damage'; actionId: string; critical?: boolean }
   | { kind: 'cast'; actionId: string; slotLevel?: number }
   | { kind: 'equip'; actionId: string; equipped: boolean }
   | { kind: 'prepare'; actionId: string; prepared: boolean }

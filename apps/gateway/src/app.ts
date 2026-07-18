@@ -271,8 +271,11 @@ function parseActionIntent(
       return body.mode === undefined ? { kind, actionId } : { kind, actionId, mode: body.mode };
     case 'attack':
     case 'use':
-    case 'damage':
       return { kind, actionId };
+    case 'damage':
+      // Optional nat-20 flag: the adapter doubles the damage dice (5e crit).
+      if (body.critical !== undefined && typeof body.critical !== 'boolean') return null;
+      return body.critical === undefined ? { kind, actionId } : { kind, actionId, critical: body.critical };
     case 'cast':
       if (
         body.slotLevel !== undefined &&

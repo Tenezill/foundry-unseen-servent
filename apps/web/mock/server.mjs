@@ -96,11 +96,11 @@ actors.set('a-sariel', {
       { id: 'i-pouch', label: 'Component Pouch' },
     ],
     spells: [
-      { id: 's-firebolt', label: 'Fire Bolt', sub: 'Cantrip · V,S', level: 0 },
-      { id: 's-magearmor', label: 'Mage Armor', sub: '1st · V,S,M', tags: ['prepared'], level: 1 },
-      { id: 's-detect', label: 'Detect Magic', sub: '1st · V,S · 1/long rest', tags: ['free use', 'ritual', 'concentration'], level: 1 },
-      { id: 's-mistystep', label: 'Misty Step', sub: '2nd · V', level: 2 },
-      { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'], level: 3, detail: '<p>A bead of glowing amber streaks from your fingertip and blooms into roaring flame.</p><p><strong>The academy warns:</strong> mind your allies, and mind the drapes.</p>' },
+      { id: 's-firebolt', label: 'Fire Bolt', sub: 'Cantrip · V,S', level: 0, effectType: 'damage' },
+      { id: 's-magearmor', label: 'Mage Armor', sub: '1st · V,S,M', tags: ['prepared'], level: 1, effectType: 'utility' },
+      { id: 's-detect', label: 'Detect Magic', sub: '1st · V,S · 1/long rest', tags: ['free use', 'ritual', 'concentration'], level: 1, effectType: 'utility' },
+      { id: 's-mistystep', label: 'Misty Step', sub: '2nd · V', level: 2, effectType: 'utility' },
+      { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'], level: 3, effectType: 'damage', detail: '<p>A bead of glowing amber streaks from your fingertip and blooms into roaring flame.</p><p><strong>The academy warns:</strong> mind your allies, and mind the drapes.</p>' },
     ],
     features: [
       { id: 'f-recovery', label: 'Arcane Recovery', sub: 'Wizard 1', use: true },
@@ -193,13 +193,17 @@ function buildActions(actor) {
   for (const it of s.inventory) {
     if (it.attackMod !== undefined) {
       actions.push({ id: `item.${it.id}.attack`, label: it.label, kind: 'attack' })
+      // Companion damage roll, like the real dnd5e adapter (M14). Accepts
+      // the nat-20 `critical` flag (doubled dice).
+      actions.push({ id: `item.${it.id}.damage`, label: it.label, kind: 'damage' })
     }
     if (it.equip) {
       actions.push({ id: `item.${it.id}.equip`, label: it.label, kind: 'equip', equipped: it.equip.equipped })
     }
   }
   for (const sp of s.spells ?? []) {
-    const a = { id: `spell.${sp.id}.cast`, label: sp.label, kind: 'cast' }
+    const a = { id: `spell.${sp.id}.cast`, label: sp.label, kind: 'cast', level: sp.level }
+    if (sp.effectType) a.effectType = sp.effectType
     if (sp.level > 0) a.slotLevels = availableSlotLevels(actor, sp.level)
     actions.push(a)
   }
@@ -473,7 +477,7 @@ function mockRoll(mode, mod) {
   }
 }
 
-const ACTION_KINDS = ['check', 'save', 'attack', 'cast', 'use', 'equip', 'rest', 'deathsave', 'endconcentration']
+const ACTION_KINDS = ['check', 'save', 'attack', 'damage', 'cast', 'use', 'equip', 'rest', 'deathsave', 'endconcentration']
 
 /** Long rest fully recovers; short rest clears death saves (mock behavior). */
 function applyRest(actor, actionId) {
@@ -522,6 +526,13 @@ function handleAction(actor, intent, res) {
     const itemId = actionId.split('.')[1]
     const it = actor.staticSections.inventory.find((x) => x.id === itemId)
     result = mockRoll(undefined, it?.attackMod ?? 5)
+  } else if (kind === 'damage') {
+    // Mirrors the real gateway: optional boolean `critical` doubles the dice.
+    if (intent.critical !== undefined && typeof intent.critical !== 'boolean') {
+      return sendError(res, 422, 'INVALID_INTENT', 'critical must be a boolean')
+    }
+    const crit = intent.critical === true
+    result = { formula: `${crit ? '2d8' : '1d8'} + 3`, total: crit ? 14 : 8, isCritical: false, isFumble: false }
   } else if (kind === 'cast') {
     if (action.slotLevels !== undefined) {
       const lvl = intent.slotLevel

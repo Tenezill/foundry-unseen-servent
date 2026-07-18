@@ -349,6 +349,7 @@ describe('actions', () => {
       { kind: 'equip', actionId: 'item.i1.equip', equipped: 'yes' }, // non-boolean
       { kind: 'attune', actionId: 'item.i1.attune' }, // attuned missing
       { kind: 'attune', actionId: 'item.i1.attune', attuned: 'yes' }, // non-boolean
+      { kind: 'damage', actionId: 'item.i1.damage', critical: 'yes' }, // non-boolean crit flag
     ]) {
       const res = await post(app, 'a1', payload);
       expect(res.statusCode).toBe(422);
@@ -390,6 +391,22 @@ describe('actions', () => {
     const body = res.json();
     expect(body.result).toEqual({ total: 11, formula: '4d6', isCritical: false, isFumble: false });
     expect(body.sheet.actorId).toBe('a1');
+  });
+
+  it('damage with critical: true reaches the adapter and rolls the doubled formula', async () => {
+    const { app, relay } = setup();
+    relay.rollResult = { formula: '2d8 + 3', total: 14, isCritical: false, isFumble: false };
+    const res = await post(app, 'a1', { kind: 'damage', actionId: 'item.i1.damage', critical: true });
+    expect(res.statusCode).toBe(200);
+    expect(relay.rollCalls).toEqual([{ actorUuid: 'Actor.a1', formula: '2d8 + 3', flavor: 'Arrows' }]);
+  });
+
+  it('damage without the flag rolls the plain formula', async () => {
+    const { app, relay } = setup();
+    relay.rollResult = { formula: '1d8 + 3', total: 7, isCritical: false, isFumble: false };
+    const res = await post(app, 'a1', { kind: 'damage', actionId: 'item.i1.damage' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.rollCalls).toEqual([{ actorUuid: 'Actor.a1', formula: '1d8 + 3', flavor: 'Arrows' }]);
   });
 
   it('attack -> use-item without a slot level, null result when nothing rolled', async () => {

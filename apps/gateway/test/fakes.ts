@@ -434,6 +434,7 @@ function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
   return [
     { id: 'skill.ath', label: 'Athletics', kind: 'check' },
     { id: 'item.i1.attack', label: 'Arrows', kind: 'attack' },
+    { id: 'item.i1.damage', label: 'Arrows', kind: 'damage' },
     { id: 'spell.s1.cast', label: 'Zap', kind: 'cast', slotLevels: [1, 2] },
     { id: 'item.i1.equip', label: 'Arrows', kind: 'equip', equipped: false },
     { id: 'item.i1.attune', label: 'Arrows', kind: 'attune', attuned: false },
@@ -515,7 +516,12 @@ export const fakeAdapter: SystemAdapter = {
       case 'attack':
         return { endpoint: 'use-item', itemId: 'i1' };
       case 'damage':
-        return { endpoint: 'roll', formula: '1d8 + 3', flavor: desc.label };
+        // Mirrors the dnd5e crit rule shape: critical doubles the dice term.
+        return {
+          endpoint: 'roll',
+          formula: intent.critical === true ? '2d8 + 3' : '1d8 + 3',
+          flavor: desc.label,
+        };
       case 'use':
         return { endpoint: 'use-feature', itemId: 'f1' };
       case 'cast':

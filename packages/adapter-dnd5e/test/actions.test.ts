@@ -194,8 +194,16 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
       id: 'spell.pZMrJb3AXiRYO5E8.cast',
       label: 'Guiding Bolt',
       kind: 'cast',
+      level: 1,
       effectType: 'damage',
     });
+  });
+
+  it('cast descriptors carry the spell level for per-level grouping (cantrip = 0)', () => {
+    expect(action(casterCaptured, 'spell.P97npemu7j70IZAQ.cast').level).toBe(0); // Sacred Flame
+    for (const a of actions(casterCaptured)) {
+      if (a.kind === 'cast') expect(typeof a.level).toBe('number');
+    }
   });
 
   it('cantrips carry no slotLevels at all', () => {
@@ -1286,5 +1294,136 @@ describe('move', () => {
         containerId: 'T8BW5LfQIDdur78q',
       }),
     ).toThrow(IntentError);
+  });
+});
+
+describe('buildAction — critical damage (nat 20 doubles the dice)', () => {
+  it('weapon crit doubles the dice, not the static bonus (Longsword: 2d8 + 3)', () => {
+    expect(
+      build(martialCaptured, { kind: 'damage', actionId: 'item.gta26ORvqC323k3r.damage', critical: true }),
+    ).toEqual({ endpoint: 'roll', formula: '2d8 + 3', flavor: 'Longsword — Critical Damage' });
+  });
+
+  it('critical: false and an absent flag both roll the plain formula', () => {
+    for (const intent of [
+      { kind: 'damage', actionId: 'item.gta26ORvqC323k3r.damage', critical: false },
+      { kind: 'damage', actionId: 'item.gta26ORvqC323k3r.damage' },
+    ] as const) {
+      expect(build(martialCaptured, intent)).toEqual({
+        endpoint: 'roll',
+        formula: '1d8 + 3',
+        flavor: 'Longsword — Damage',
+      });
+    }
+  });
+
+  it('spell crit doubles every dice term (Guiding Bolt: 4d6 -> 8d6)', () => {
+    expect(
+      build(casterCaptured, { kind: 'damage', actionId: 'spell.pZMrJb3AXiRYO5E8.damage', critical: true }),
+    ).toEqual({ endpoint: 'roll', formula: '8d6', flavor: 'Guiding Bolt — Critical Damage' });
+  });
+
+  it('a non-boolean critical flag is rejected as INVALID', () => {
+    expectIntentError(
+      () =>
+        build(martialCaptured, {
+          kind: 'damage',
+          actionId: 'item.gta26ORvqC323k3r.damage',
+          critical: 'yes',
+        } as unknown as ActionIntent),
+      'INVALID',
+    );
+  });
+});
+
+describe('pact magic (warlock) — slots display and castability', () => {
+  /** Minimal warlock: one class item, one prepared 1st-level spell, one
+   *  prepared 4th-level spell, pact data as given. Mirrors what the relay
+   *  serializes for an imported warlock. */
+  const warlock = (pact: Record<string, unknown>): FoundryActorDoc => ({
+    _id: 'actorWarlock0001',
+    name: 'Pact Test',
+    type: 'character',
+    system: {
+      abilities: { cha: { value: 16 } },
+      attributes: { hp: { value: 20, max: 20 } },
+      spells: { pact },
+    },
+    items: [
+      {
+        _id: 'clsWarlock000001',
+        name: 'Warlock',
+        type: 'class',
+        system: { levels: 7, hd: { denomination: 'd8', spent: 0 } },
+      },
+      {
+        _id: 'spellHex00000001',
+        name: 'Hex',
+        type: 'spell',
+        system: { level: 1, school: 'enc', prepared: 1, method: 'spell', activities: {} },
+      },
+      {
+        _id: 'spellBanish00001',
+        name: 'Banishment',
+        type: 'spell',
+        system: { level: 4, school: 'abj', prepared: 1, method: 'spell', activities: {} },
+      },
+    ],
+  });
+
+  it('enriched pact slots (value/max/level) make base-level spells castable', () => {
+    const actor = warlock({ value: 2, max: 2, level: 4 });
+    expect(action(actor, 'spell.spellHex00000001.cast').slotLevels).toBeUndefined();
+    expect(action(actor, 'spell.spellBanish00001.cast').slotLevels).toBeUndefined();
+    expect(build(actor, { kind: 'cast', actionId: 'spell.spellHex00000001.cast' })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'spellHex00000001',
+    });
+  });
+
+  it('a spell above the pact-slot level is disabled', () => {
+    const actor = warlock({ value: 2, max: 2, level: 3 });
+    expect(action(actor, 'spell.spellHex00000001.cast').slotLevels).toBeUndefined();
+    expect(action(actor, 'spell.spellBanish00001.cast').slotLevels).toEqual([]);
+    expectIntentError(
+      () => build(actor, { kind: 'cast', actionId: 'spell.spellBanish00001.cast' }),
+      'INVALID',
+    );
+  });
+
+  it('source-only pact data (no derived level — enrich failed) stays castable and defers to Foundry', () => {
+    // The relay's plain /get serializes pact as {value, override} only. If
+    // enrich cannot supply the derived level, the sheet must not lock the
+    // warlock out of casting — Foundry owns the rules and refuses illegal
+    // casts itself.
+    const actor = warlock({ value: 1, override: null });
+    expect(action(actor, 'spell.spellHex00000001.cast').slotLevels).toBeUndefined();
+    expect(action(actor, 'spell.spellBanish00001.cast').slotLevels).toBeUndefined();
+  });
+
+  it('no pact slots remaining disables leveled spells', () => {
+    const actor = warlock({ value: 0, max: 2, level: 4 });
+    expect(action(actor, 'spell.spellHex00000001.cast').slotLevels).toEqual([]);
+  });
+
+  it('enrich merges pact value/max/level from the relay spells detail (imported-warlock regression)', async () => {
+    if (!dnd5eAdapter.enrich) throw new Error('adapter must expose enrich()');
+    // Source data: pact spent (value 0), no max, no level — exactly what the
+    // relay's plain /get serializes. The dnd5e detail endpoint returns the
+    // derived slots; after the merge the pact row exists AND casting works.
+    const source = warlock({ value: 0, override: null });
+    const enriched = await dnd5eAdapter.enrich(source, {
+      getSystemDetails: async () => ({
+        spellSlots: { pact: { value: 2, max: 2, level: 4 } },
+      }),
+    });
+    expect(dnd5eAdapter.resources(enriched).find((r) => r.id === 'slots.pact')).toMatchObject({
+      value: 2,
+      min: 0,
+      max: 2,
+      writable: true,
+    });
+    expect(action(enriched, 'spell.spellHex00000001.cast').slotLevels).toBeUndefined();
+    expect(action(enriched, 'spell.spellBanish00001.cast').slotLevels).toBeUndefined();
   });
 });

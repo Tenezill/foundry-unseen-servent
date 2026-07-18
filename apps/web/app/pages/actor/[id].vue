@@ -60,6 +60,7 @@
             :action-busy="actionBusy"
             :readonly="offline"
             :detail-ids="actionDetailIds"
+            :crit-ids="critArmed"
             @action="onCombatAction"
             @detail="onCombatDetail"
           />
@@ -1010,6 +1011,33 @@ function haptics(result: ActionRollResult): void {
 
 type EffectType = 'damage' | 'heal' | 'utility'
 
+/* ---- nat-20 crit memory (2026-07-18) ------------------------------------
+ * When an attack (weapon) or cast (attack spell) roll comes back
+ * `isCritical` — Foundry's own nat-20 detection on the captured attack
+ * roll — the paired `.damage` action is "armed": its Dmg button turns into
+ * a Crit button and the damage intent carries `critical: true`, which the
+ * adapter turns into doubled damage dice (standard 5e rule). The flag is
+ * consumed by that damage roll and overwritten by the next attack. */
+const critArmed = ref<Set<string>>(new Set())
+
+function updateCritArmed(intent: ActionIntent, result: ActionRollResult): void {
+  if (intent.kind === 'attack' || intent.kind === 'cast') {
+    const damageId = intent.actionId.replace(/\.(attack|cast)$/, '.damage')
+    // Only arm ids that really have a Dmg button — heal/utility casts also
+    // report rolls, and the relay's formula-roll crit flag is noisy for
+    // non-d20 dice.
+    if (!actionMap.value[damageId]) return
+    const next = new Set(critArmed.value)
+    if (result.isCritical === true) next.add(damageId)
+    else next.delete(damageId)
+    critArmed.value = next
+  } else if (intent.kind === 'damage' && critArmed.value.has(intent.actionId)) {
+    const next = new Set(critArmed.value)
+    next.delete(intent.actionId)
+    critArmed.value = next
+  }
+}
+
 /** M15: heal -> "+N HP", damage (weapon or spell) -> "N dmg", everything
  *  else keeps today's plain total. Only the displayed label changes —
  *  haptics/history/critical styling below are untouched. */
@@ -1136,9 +1164,14 @@ function onAction(actionId: string): void {
     case 'attack':
       void submitAction({ kind: 'attack', actionId }, action.label)
       break
-    case 'damage':
-      void submitAction({ kind: 'damage', actionId }, `${action.label} — Damage`)
+    case 'damage': {
+      const crit = critArmed.value.has(actionId)
+      void submitAction(
+        { kind: 'damage', actionId, ...(crit ? { critical: true } : {}) },
+        `${action.label} — ${crit ? 'Critical Damage' : 'Damage'}`,
+      )
       break
+    }
     case 'use':
       void submitAction({ kind: 'use', actionId }, action.label, action.effectType)
       break
@@ -1499,6 +1532,7 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
     })
     applySheet(res.sheet)
     if (res.result) {
+      updateCritArmed(intent, res.result)
       // Weapon damage rolls carry their effect via the intent kind itself
       // (no effectType on 'damage' descriptors — Attacks stays unfiltered).
       // 'heal' from a cast/use descriptor is always a genuine heal roll —

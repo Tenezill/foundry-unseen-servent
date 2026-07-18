@@ -14,7 +14,9 @@
       </button>
     </div>
     <div class="list card">
-      <div v-for="action in visibleActions(group)" :key="action.id" class="row">
+      <template v-for="bucket in bucketsOf(group)" :key="bucket.key">
+      <div v-if="bucket.label" class="lvl-head">{{ bucket.label }}</div>
+      <div v-for="action in bucket.actions" :key="action.id" class="row">
         <span class="ico" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path :d="group.icon" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </span>
@@ -42,11 +44,11 @@
           v-if="(group.id === 'attacks' || group.id === 'spells') && damageOf(action)"
           class="act-btn secondary"
           type="button"
-          :class="{ pending: actionBusy === damageOf(action)?.id }"
+          :class="{ pending: actionBusy === damageOf(action)?.id, crit: isCritArmed(action) }"
           :disabled="readonly || actionBusy !== null || noSlots(action)"
           @click="emit('action', damageOf(action)!.id)"
         >
-          Dmg
+          {{ isCritArmed(action) ? 'Crit ×2' : 'Dmg' }}
         </button>
         <button
           class="act-btn"
@@ -58,6 +60,7 @@
           {{ group.verb }}
         </button>
       </div>
+      </template>
     </div>
   </section>
 </template>
@@ -74,6 +77,9 @@ const props = defineProps<{
    *  page from the sheet's list sections, so this component stays
    *  lookup-agnostic. */
   detailIds: Set<string>
+  /** Damage-action ids armed by a nat-20 attack roll: the Dmg button becomes
+   *  a Crit button (doubled dice — the page sends `critical: true`). */
+  critIds: Set<string>
 }>()
 
 const emit = defineEmits<{
@@ -115,6 +121,46 @@ function visibleActions(group: (typeof groups.value)[number]): ActionDescriptor[
   return group.actions.filter((a) => a.effectType === spellFilter.value)
 }
 
+function ordinal(n: number): string {
+  if (n === 1) return '1st'
+  if (n === 2) return '2nd'
+  if (n === 3) return '3rd'
+  return `${n}th`
+}
+
+/** The Spells group splits into per-level buckets (Cantrips / 1st Level / …)
+ *  using the cast descriptors' `level` — same separation as the Spells tab
+ *  (2026-07-18). Other groups (and adapters that don't stamp a level) render
+ *  as a single unlabeled bucket, i.e. exactly the old flat list. */
+function bucketsOf(
+  group: (typeof groups.value)[number],
+): Array<{ key: string; label?: string; actions: ActionDescriptor[] }> {
+  const acts = visibleActions(group)
+  if (group.id !== 'spells') return [{ key: 'all', actions: acts }]
+  const byLevel = new Map<number, ActionDescriptor[]>()
+  const unleveled: ActionDescriptor[] = []
+  for (const a of acts) {
+    if (typeof a.level === 'number') {
+      const list = byLevel.get(a.level)
+      if (list) list.push(a)
+      else byLevel.set(a.level, [a])
+    } else {
+      unleveled.push(a)
+    }
+  }
+  if (byLevel.size === 0) return [{ key: 'all', actions: acts }]
+  const out: Array<{ key: string; label?: string; actions: ActionDescriptor[] }> = []
+  if (unleveled.length > 0) out.push({ key: 'other', actions: unleveled })
+  for (const lvl of [...byLevel.keys()].sort((a, b) => a - b)) {
+    out.push({
+      key: `l${lvl}`,
+      label: lvl === 0 ? 'Cantrips' : `${ordinal(lvl)} Level`,
+      actions: byLevel.get(lvl)!,
+    })
+  }
+  return out
+}
+
 /** 'damage' isn't its own group (see combatActions in [id].vue) — it rides
  *  along in `actions` so each attack row can find its companion roll. */
 const damageById = computed(() => {
@@ -126,6 +172,11 @@ const damageById = computed(() => {
 function damageOf(action: ActionDescriptor): ActionDescriptor | undefined {
   // Weapons pair item.<id>.attack -> .damage; spells pair spell.<id>.cast -> .damage.
   return damageById.value.get(action.id.replace(/\.(attack|cast)$/, '.damage'))
+}
+
+function isCritArmed(action: ActionDescriptor): boolean {
+  const dmg = damageOf(action)
+  return dmg !== undefined && props.critIds.has(dmg.id)
 }
 </script>
 
@@ -144,6 +195,22 @@ function damageOf(action: ActionDescriptor): ActionDescriptor | undefined {
 
 .row + .row {
   border-top: 1px solid var(--line);
+}
+
+/* Per-level divider inside the Spells list (Cantrips / 1st Level / …). */
+.lvl-head {
+  padding: 8px 14px 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--gold);
+  background: color-mix(in srgb, var(--panel-2) 60%, transparent);
+  border-top: 1px solid var(--line);
+}
+
+.lvl-head:first-child {
+  border-top: none;
 }
 
 .ico {
@@ -227,6 +294,14 @@ function damageOf(action: ActionDescriptor): ActionDescriptor | undefined {
   background: var(--panel-2);
   color: var(--ink-dim);
   box-shadow: none;
+}
+
+/* Nat-20: the pending damage roll doubles its dice — make the button shout. */
+.act-btn.secondary.crit {
+  border-color: var(--gold-deep);
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  color: var(--accent-ink);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--gold) 55%, transparent);
 }
 
 .filter-chips {

@@ -1219,13 +1219,19 @@ const LIBRARY: LibraryCollection[] = [
  * spell of level ≤ the pact slot level. Cantrips (level 0) are always at-will.
  * Needs the enriched document for accuracy but degrades gracefully (source
  * data still carries `value`).
+ *
+ * `pact.level` is derived-only (never in source data; enrich merges it from
+ * the relay's spells detail). When pact slots remain but the level is
+ * unknown — enrich failed or an old relay — do NOT lock the warlock out:
+ * offer the cast and let Foundry refuse an illegal one itself.
  */
 function canCastAtBase(actor: FoundryActorDoc, spellLevel: number): boolean {
   if (spellLevel <= 0) return true;
   if ((numAt(actor.system, `spells.spell${spellLevel}.value`) ?? 0) > 0) return true;
   const pactValue = numAt(actor.system, 'spells.pact.value') ?? 0;
-  const pactLevel = numAt(actor.system, 'spells.pact.level') ?? 0;
-  return pactValue > 0 && pactLevel >= spellLevel;
+  if (pactValue <= 0) return false;
+  const pactLevel = numAt(actor.system, 'spells.pact.level');
+  return pactLevel === undefined || pactLevel >= spellLevel;
 }
 
 /** This item's first activity, or an empty record if it has none. Foundry
@@ -1572,6 +1578,9 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
           id: `spell.${item._id}.cast`,
           label: freeUse !== undefined ? `${item.name} (free use)` : item.name,
           kind: 'cast',
+          // Grouping metadata: the Actions tab renders per-level headers
+          // (Cantrips / 1st Level / …), same split as the Spells tab.
+          level: Math.max(0, Math.min(9, level)),
           effectType: effectTypeOf(item),
           ...(freeUse === undefined && level > 0 && !canCastAtBase(actor, level) ? { slotLevels: [] } : {}),
         });
@@ -1606,6 +1615,14 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     out.push({ id: 'deathsave.roll', label: 'Death Save', kind: 'deathsave' });
   }
   return out;
+}
+
+/** Standard 5e critical hit: double the COUNT of every dice term, keep
+ *  static bonuses (2024/2014 core rule). Damage formulas here are always
+ *  built from `NdM`-shaped terms (weaponDamageFormula / itemDamageFormula),
+ *  so a plain term rewrite is exact. */
+function criticalFormula(formula: string): string {
+  return formula.replace(/(\d+)d(\d+)/g, (_m, count: string, faces: string) => `${Number(count) * 2}d${faces}`);
 }
 
 function d20Formula(bonus: number, mode: 'advantage' | 'disadvantage' | undefined): string {
@@ -1664,6 +1681,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       // roll their damage as a bare display roll — the attack/cast already
       // activated in Foundry. Weapons use the weapon formula (ability mod +
       // weapon bonus); spells use the activity damage.parts formula.
+      if (intent.critical !== undefined && typeof intent.critical !== 'boolean') {
+        throw new IntentError('damage requires a boolean "critical"', 'INVALID');
+      }
       const isSpell = intent.actionId.startsWith('spell.');
       const prefix = isSpell ? 'spell.' : 'item.';
       const itemId = intent.actionId.slice(prefix.length, -'.damage'.length);
@@ -1671,6 +1691,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       const formula = item ? (isSpell ? itemDamageFormula(actor, item) : weaponDamageFormula(actor, item)) : undefined;
       if (!item || formula === undefined) {
         throw new IntentError(`no damage formula for "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
+      }
+      if (intent.critical === true) {
+        return { endpoint: 'roll', formula: criticalFormula(formula), flavor: `${item.name} — Critical Damage` };
       }
       return { endpoint: 'roll', formula, flavor: `${item.name} — Damage` };
     }
@@ -2032,11 +2055,16 @@ async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryAct
       const derived = rec(slots[key]);
       const max = typeof derived.max === 'number' && Number.isFinite(derived.max) ? derived.max : undefined;
       const value = typeof derived.value === 'number' && Number.isFinite(derived.value) ? derived.value : undefined;
-      if (max === undefined && value === undefined) continue;
+      // Pact entries additionally carry the derived slot LEVEL (module
+      // 3.4.1: `spellSlots.pact = {value, max, level}`) — canCastAtBase
+      // needs it, and like max it never appears in source data.
+      const level = typeof derived.level === 'number' && Number.isFinite(derived.level) ? derived.level : undefined;
+      if (max === undefined && value === undefined && level === undefined) continue;
       spells[key] = {
         ...rec(spells[key]),
         ...(value !== undefined ? { value } : {}),
         ...(max !== undefined ? { max } : {}),
+        ...(level !== undefined ? { level } : {}),
       };
     }
     merged = { ...system, spells };
