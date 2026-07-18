@@ -13,9 +13,11 @@
 	# portraits/effect icons ('ddb-images/…', 'systems/…') via /fvtt/<path>.
 	# Image files only — everything else 404s so no Foundry UI is exposed.
 	handle_path /fvtt/* {
-		@img path_regexp \.(webp|png|jpe?g|gif|svg|avif)$
-		reverse_proxy @img foundry:30000
-		respond 404
+		# respond runs before reverse_proxy in Caddy's directive order, so
+		# the 404 must be matcher-scoped to NON-images; images fall through.
+		@notimg not path_regexp \.(webp|png|jpe?g|gif|svg|avif)$
+		respond @notimg 404
+		reverse_proxy foundry:30000
 	}
 	handle {
 		root * /srv/app
