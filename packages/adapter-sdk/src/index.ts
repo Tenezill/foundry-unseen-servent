@@ -284,8 +284,9 @@ export type ActionIntent =
   | { kind: 'attack' | 'use'; actionId: string }
   /** `critical` (5e nat 20): the damage roll doubles its dice, keeping
    *  static bonuses — armed by the PWA when the preceding attack/cast
-   *  roll came back `isCritical`. */
-  | { kind: 'damage'; actionId: string; critical?: boolean }
+   *  roll came back `isCritical`. `slotLevel` is the level the spell was
+   *  last cast at (upcasting) so the display roll scales its dice. */
+  | { kind: 'damage'; actionId: string; critical?: boolean; slotLevel?: number }
   | { kind: 'cast'; actionId: string; slotLevel?: number }
   | { kind: 'equip'; actionId: string; equipped: boolean }
   | { kind: 'prepare'; actionId: string; prepared: boolean }
@@ -307,6 +308,10 @@ export type ActionIntent =
 export type RelayAction =
   | { endpoint: 'roll'; formula: string; flavor: string }
   | { endpoint: 'use-item' | 'use-spell' | 'use-feature'; itemId: string; slotLevel?: number }
+  /** Upcast (dnd5e): cast the spell consuming a SPECIFIC higher-level slot.
+   *  Executed via the relay's execute-js with a fixed script template —
+   *  see foundry-client castAtSlot. slotKey matches ^spell[2-9]$. */
+  | { endpoint: 'cast-at-slot'; itemId: string; slotKey: string }
   | { endpoint: 'equip-item'; itemId: string; equipped: boolean }
   /** M12: the relay module's dedicated attune endpoint (validates params and
    *  carries a Foundry-v12 legacy fallback; it does NOT enforce the actor's
@@ -330,8 +335,10 @@ export type RelayAction =
    *  all three fields are adapter-resolved so this stays system-agnostic. */
   | {
       endpoint: 'use-and-roll';
-      use: 'use-item' | 'use-spell' | 'use-feature';
+      use: 'use-item' | 'use-spell' | 'use-feature' | 'cast-at-slot';
       itemId: string;
+      /** required when use === 'cast-at-slot' (upcast heals). */
+      slotKey?: string;
       formula: string;
       flavor: string;
       heal?: { path: string; current: number; max: number };

@@ -1234,6 +1234,18 @@ function canCastAtBase(actor: FoundryActorDoc, spellLevel: number): boolean {
   return pactLevel === undefined || pactLevel >= spellLevel;
 }
 
+/** Ascending spell-slot levels the actor can pay for RIGHT NOW for a spell
+ *  of `baseLevel`: every L in base..9 with `spells.spellL.value > 0`. Pact
+ *  slots are deliberately excluded — dnd5e consumes them automatically for
+ *  pact-method spells at pact level (no upcast concept). */
+function payableSlotLevels(actor: FoundryActorDoc, baseLevel: number): number[] {
+  const out: number[] = [];
+  for (let lvl = Math.max(1, baseLevel); lvl <= 9; lvl++) {
+    if ((numAt(actor.system, `spells.spell${lvl}.value`) ?? 0) > 0) out.push(lvl);
+  }
+  return out;
+}
+
 /** This item's first activity, or an empty record if it has none. Foundry
  *  stores activities as an object keyed by activity id; every dnd5e
  *  spell/feature/weapon relevant to actions has at most one. */
@@ -1567,13 +1579,6 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       // own Prepare toggle below — so the player can ready it; cluttering the
       // Actions tab with spells that Foundry would just refuse was confusing.
       if (level === 0 || isPrepared || freeUse !== undefined) {
-        // The bridge casts at base level only (no upcast), so a spell is either
-        // castable now (single Cast) or not (disabled). We signal this with
-        // slotLevels: absent = castable directly (cantrip or a base slot is
-        // free); [] = no slot, render disabled. No per-level picker — the
-        // module cannot honour a chosen higher level. Free-use spells need no
-        // slot: never disabled, and the label says which twin this is so the
-        // player can't burn a slot by mistake.
         out.push({
           id: `spell.${item._id}.cast`,
           label: freeUse !== undefined ? `${item.name} (free use)` : item.name,
@@ -1582,7 +1587,17 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
           // (Cantrips / 1st Level / …), same split as the Spells tab.
           level: Math.max(0, Math.min(9, level)),
           effectType: effectTypeOf(item),
-          ...(freeUse === undefined && level > 0 && !canCastAtBase(actor, level) ? { slotLevels: [] } : {}),
+          // slotLevels semantics (2026-07-19 spec): absent = direct cast, no
+          // picker (cantrips, free-use, pact-payable); otherwise the payable
+          // spellN levels — [] disables, length 1 direct-casts, >1 opens the
+          // PWA picker.
+          ...(freeUse === undefined && level > 0
+            ? (() => {
+                const payable = payableSlotLevels(actor, level);
+                if (payable.length > 0) return { slotLevels: payable };
+                return canCastAtBase(actor, level) ? {} : { slotLevels: [] };
+              })()
+            : {}),
         });
         // Damage spells get a companion damage-roll action, exactly like weapons
         // (attack + Dmg): cast is the to-hit/activation, this rolls the damage.
@@ -1734,13 +1749,16 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
     }
     case 'cast': {
       const itemId = intent.actionId.slice('spell.'.length, -'.cast'.length);
-      // slotLevels === [] means no slot is available at the spell's base
-      // level. The bridge casts at base only (no upcast), so intent.slotLevel
-      // is intentionally ignored — Foundry consumes the base-level slot.
-      if (descriptor.slotLevels !== undefined && descriptor.slotLevels.length === 0) {
+      const item = (actor.items ?? []).find((i) => i._id === itemId);
+      const level = item ? numAt(item.system, 'level') ?? 0 : 0;
+      // The bridge casts at base level only (no upcast yet — that's a later
+      // task); refuse when the spell's own base-level slot is empty, even if
+      // descriptor.slotLevels lists higher levels as payable — those feed the
+      // PWA picker, they don't make THIS (non-upcast) cast legal. So
+      // intent.slotLevel is intentionally ignored here too.
+      if (level > 0 && !canCastAtBase(actor, level)) {
         throw new IntentError(`no spell slot available for "${intent.actionId}"`, 'INVALID');
       }
-      const item = (actor.items ?? []).find((i) => i._id === itemId);
       if (item && activityType(item) === 'heal') {
         return buildHealAction(actor, item, intent.actionId);
       }

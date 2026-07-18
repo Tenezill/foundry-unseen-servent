@@ -56,6 +56,42 @@ function spellRows(actor: FoundryActorDoc) {
     .flatMap((s) => s.items);
 }
 
+/** Minimal warlock: one class item, one prepared 1st-level spell, one
+ *  prepared 4th-level spell, pact data as given. Mirrors what the relay
+ *  serializes for an imported warlock. */
+function warlock(pact: Record<string, unknown>): FoundryActorDoc {
+  return {
+    _id: 'actorWarlock0001',
+    name: 'Pact Test',
+    type: 'character',
+    system: {
+      abilities: { cha: { value: 16 } },
+      attributes: { hp: { value: 20, max: 20 } },
+      spells: { pact },
+    },
+    items: [
+      {
+        _id: 'clsWarlock000001',
+        name: 'Warlock',
+        type: 'class',
+        system: { levels: 7, hd: { denomination: 'd8', spent: 0 } },
+      },
+      {
+        _id: 'spellHex00000001',
+        name: 'Hex',
+        type: 'spell',
+        system: { level: 1, school: 'enc', prepared: 1, method: 'spell', activities: {} },
+      },
+      {
+        _id: 'spellBanish00001',
+        name: 'Banishment',
+        type: 'spell',
+        system: { level: 4, school: 'abj', prepared: 1, method: 'spell', activities: {} },
+      },
+    ],
+  };
+}
+
 function expectIntentError(fn: () => unknown, code: IntentError['code']): void {
   let caught: unknown;
   try {
@@ -188,14 +224,16 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     expect(all).toHaveLength(93);
   });
 
-  it('a leveled spell with a base-level slot is directly castable (no slotLevels — the bridge casts at base only)', () => {
-    // Guiding Bolt (level 1); raw capture has spell1.value > 0.
+  it('a leveled spell with payable slots lists them (picker feed)', () => {
+    // Guiding Bolt (level 1); raw capture has spell1.value=2, spell2.value=2,
+    // spell3.value=1 — all payable, base up.
     expect(action(casterCaptured, 'spell.pZMrJb3AXiRYO5E8.cast')).toEqual({
       id: 'spell.pZMrJb3AXiRYO5E8.cast',
       label: 'Guiding Bolt',
       kind: 'cast',
       level: 1,
       effectType: 'damage',
+      slotLevels: [1, 2, 3],
     });
   });
 
@@ -212,16 +250,15 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
     expect(flame.slotLevels).toBeUndefined();
   });
 
-  it('a leveled spell with no base-level slot is disabled (slotLevels: []) — upcast is not supported by the bridge', async () => {
+  it('a leveled spell with nothing payable at any level is disabled (slotLevels: []) — upcast is not supported by the bridge', async () => {
     if (!dnd5eAdapter.enrich) throw new Error('adapter must expose enrich()');
-    // Guiding Bolt is level 1; drain 1st-level slots but leave 2nd/3rd. Since
-    // the module casts at base level only, it is NOT castable.
+    // Guiding Bolt is level 1; drain every level 1-3 slot.
     const enriched = await dnd5eAdapter.enrich(casterCaptured, {
       getSystemDetails: async () => ({
         spellSlots: {
           spell1: { value: 0, max: 4 },
-          spell2: { value: 2, max: 3 },
-          spell3: { value: 1, max: 1 },
+          spell2: { value: 0, max: 3 },
+          spell3: { value: 0, max: 1 },
         },
       }),
     });
@@ -1337,40 +1374,6 @@ describe('buildAction — critical damage (nat 20 doubles the dice)', () => {
 });
 
 describe('pact magic (warlock) — slots display and castability', () => {
-  /** Minimal warlock: one class item, one prepared 1st-level spell, one
-   *  prepared 4th-level spell, pact data as given. Mirrors what the relay
-   *  serializes for an imported warlock. */
-  const warlock = (pact: Record<string, unknown>): FoundryActorDoc => ({
-    _id: 'actorWarlock0001',
-    name: 'Pact Test',
-    type: 'character',
-    system: {
-      abilities: { cha: { value: 16 } },
-      attributes: { hp: { value: 20, max: 20 } },
-      spells: { pact },
-    },
-    items: [
-      {
-        _id: 'clsWarlock000001',
-        name: 'Warlock',
-        type: 'class',
-        system: { levels: 7, hd: { denomination: 'd8', spent: 0 } },
-      },
-      {
-        _id: 'spellHex00000001',
-        name: 'Hex',
-        type: 'spell',
-        system: { level: 1, school: 'enc', prepared: 1, method: 'spell', activities: {} },
-      },
-      {
-        _id: 'spellBanish00001',
-        name: 'Banishment',
-        type: 'spell',
-        system: { level: 4, school: 'abj', prepared: 1, method: 'spell', activities: {} },
-      },
-    ],
-  });
-
   it('enriched pact slots (value/max/level) make base-level spells castable', () => {
     const actor = warlock({ value: 2, max: 2, level: 4 });
     expect(action(actor, 'spell.spellHex00000001.cast').slotLevels).toBeUndefined();
@@ -1425,5 +1428,36 @@ describe('pact magic (warlock) — slots display and castability', () => {
     });
     expect(action(enriched, 'spell.spellHex00000001.cast').slotLevels).toBeUndefined();
     expect(action(enriched, 'spell.spellBanish00001.cast').slotLevels).toBeUndefined();
+  });
+});
+
+describe('slotLevels — payable levels for the upcast picker', () => {
+  it('a leveled spell lists every payable level from base up (Guiding Bolt: slots at 1/2/3 all non-empty)', () => {
+    // caster-captured has spell1.value=2, spell2.value=2, spell3.value=1.
+    expect(action(casterCaptured, 'spell.pZMrJb3AXiRYO5E8.cast').slotLevels).toEqual([1, 2, 3]);
+  });
+
+  it('drained base level drops out of the list but higher levels remain', async () => {
+    if (!dnd5eAdapter.enrich) throw new Error('adapter must expose enrich()');
+    const drained = await dnd5eAdapter.enrich(casterCaptured, {
+      getSystemDetails: async () => ({
+        spellSlots: { spell1: { value: 0, max: 4 }, spell2: { value: 2, max: 3 }, spell3: { value: 1, max: 1 } },
+      }),
+    });
+    expect(action(drained, 'spell.pZMrJb3AXiRYO5E8.cast').slotLevels).toEqual([2, 3]);
+  });
+
+  it('cantrips still carry no slotLevels', () => {
+    expect(action(casterCaptured, 'spell.P97npemu7j70IZAQ.cast').slotLevels).toBeUndefined();
+  });
+
+  it('pact-only casting stays pickerless (slotLevels absent)', () => {
+    const actor = warlock({ value: 2, max: 2, level: 4 });
+    expect(action(actor, 'spell.spellHex00000001.cast').slotLevels).toBeUndefined();
+  });
+
+  it('nothing payable at all -> [] (disabled)', () => {
+    const actor = warlock({ value: 0, max: 2, level: 4 });
+    expect(action(actor, 'spell.spellHex00000001.cast').slotLevels).toEqual([]);
   });
 });
