@@ -1755,8 +1755,10 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       // task); refuse when the spell's own base-level slot is empty, even if
       // descriptor.slotLevels lists higher levels as payable — those feed the
       // PWA picker, they don't make THIS (non-upcast) cast legal. So
-      // intent.slotLevel is intentionally ignored here too.
-      if (level > 0 && !canCastAtBase(actor, level)) {
+      // intent.slotLevel is intentionally ignored here too. Free-use/innate
+      // grants (own item uses, no slot concept) are never gated here, same
+      // as the buildActions descriptor rule.
+      if (item && freeUseMethod(item) === undefined && level > 0 && !canCastAtBase(actor, level)) {
         throw new IntentError(`no spell slot available for "${intent.actionId}"`, 'INVALID');
       }
       if (item && activityType(item) === 'heal') {

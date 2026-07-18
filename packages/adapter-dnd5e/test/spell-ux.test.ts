@@ -113,6 +113,25 @@ describe('free-use / innate spells', () => {
     expect(cast?.slotLevels).toBeUndefined();
   });
 
+  it('buildAction never gates a free-use cast on slot availability (regression: base-slot check must skip free-use grants)', () => {
+    if (!dnd5eAdapter.buildAction) throw new Error('adapter must expose buildAction()');
+    const noSlots: FoundryActorDoc = {
+      ...casterCaptured,
+      system: {
+        ...casterCaptured.system,
+        spells: { spell1: { value: 0, override: null } },
+      },
+    };
+    const actor = withSpell(noSlots, freeUseSpell());
+    // Same premise as the descriptor test above (level-1 slots all empty),
+    // but exercised through buildAction — the leveled-spell base-slot refusal
+    // must not accidentally catch a free-use/innate grant, which tracks its
+    // own item uses instead of a spell slot.
+    expect(() =>
+      dnd5eAdapter.buildAction!(actor, { kind: 'cast', actionId: 'spell.FreeHealWord0001.cast' }),
+    ).not.toThrow();
+  });
+
   it('a normal slot spell is unchanged: no suffix, disabled without slots', () => {
     const noSlots: FoundryActorDoc = {
       ...casterCaptured,
