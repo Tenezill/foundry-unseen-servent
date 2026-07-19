@@ -1855,3 +1855,47 @@ describe('buildAction — self-buff spells apply their active effect', () => {
     });
   });
 });
+
+describe('app-applied effects are removable', () => {
+  function withAppliedShield(): FoundryActorDoc {
+    const actor = structuredClone(casterCaptured);
+    (actor as unknown as { effects: unknown[] }).effects = [
+      {
+        _id: 'aeApplied0000001',
+        name: 'Shield',
+        icon: 'icons/svg/shield.svg',
+        disabled: false,
+        flags: { 'unseen-servent': { appliedBy: 'app' } },
+      },
+    ];
+    return actor;
+  }
+
+  it('parseEffects marks the flagged effect with a removeActionId (still a badge)', () => {
+    const vm = dnd5eAdapter.toViewModel(withAppliedShield());
+    const shield = (vm.conditions ?? []).find((c) => c.label === 'Shield');
+    expect(shield?.removeActionId).toBe('effect.aeApplied0000001.remove');
+  });
+
+  it('a GM/system effect (no flag) is a plain badge with no removeActionId', () => {
+    const actor = structuredClone(casterCaptured);
+    (actor as unknown as { effects: unknown[] }).effects = [
+      { _id: 'aePoison00000001', name: 'Poisoned', disabled: false },
+    ];
+    const vm = dnd5eAdapter.toViewModel(actor);
+    expect((vm.conditions ?? []).find((c) => c.label === 'Poisoned')?.removeActionId).toBeUndefined();
+  });
+
+  it('buildActions emits an endeffect action for the applied effect', () => {
+    const actor = withAppliedShield();
+    const a = actions(actor).find((x) => x.id === 'effect.aeApplied0000001.remove');
+    expect(a).toEqual({ id: 'effect.aeApplied0000001.remove', kind: 'endeffect', label: 'End Shield' });
+  });
+
+  it('endeffect intent -> remove-effect with the effect id', () => {
+    expect(build(withAppliedShield(), { kind: 'endeffect', actionId: 'effect.aeApplied0000001.remove' })).toEqual({
+      endpoint: 'remove-effect',
+      effectId: 'aeApplied0000001',
+    });
+  });
+});

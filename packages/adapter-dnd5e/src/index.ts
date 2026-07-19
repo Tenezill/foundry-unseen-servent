@@ -991,10 +991,12 @@ function parseEffects(actor: FoundryActorDoc): EffectSummary {
       (typeof eff._id === 'string' && eff._id !== '' ? eff._id : undefined) ??
       (typeof eff.id === 'string' && eff.id !== '' ? eff.id : undefined) ??
       slug(name);
+    const appliedBy = getPath(eff, 'flags.unseen-servent.appliedBy');
     conditions.push({
       id,
       label: name,
       ...(typeof eff.icon === 'string' ? { icon: eff.icon } : {}),
+      ...(typeof appliedBy === 'string' && appliedBy !== '' ? { removeActionId: `effect.${id}.remove` } : {}),
     });
   }
   return { concentration, conditions };
@@ -1747,6 +1749,11 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
   if (parseEffects(actor).concentration) {
     out.push({ id: 'concentration.end', label: 'End Concentration', kind: 'endconcentration' });
   }
+  for (const cond of parseEffects(actor).conditions) {
+    if (cond.removeActionId !== undefined) {
+      out.push({ id: cond.removeActionId, kind: 'endeffect', label: `End ${cond.label}` });
+    }
+  }
   if ((numAt(actor.system, 'attributes.hp.value') ?? 0) <= 0) {
     out.push({ id: 'deathsave.roll', label: 'Death Save', kind: 'deathsave' });
   }
@@ -2002,6 +2009,11 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       return { endpoint: 'death-save' };
     case 'endconcentration':
       return { endpoint: 'break-concentration' };
+    case 'endeffect': {
+      const m = /^effect\.([A-Za-z0-9]{1,16})\.remove$/.exec(intent.actionId);
+      if (!m) throw new IntentError(`bad endeffect action "${intent.actionId}"`, 'INVALID');
+      return { endpoint: 'remove-effect', effectId: m[1] as string };
+    }
     default:
       throw new IntentError(`unknown intent kind "${String((intent as { kind: unknown }).kind)}"`, 'INVALID');
   }
