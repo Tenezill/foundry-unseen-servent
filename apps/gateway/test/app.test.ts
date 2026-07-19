@@ -413,6 +413,52 @@ describe('actions', () => {
     expect(res.json().error.message).toMatch(/Allow Execute JS/);
   });
 
+  it('MF-1: a generic execute-js failure (script error, not the disabled setting) -> 502, never the disabled toast', async () => {
+    const { app, relay } = setup();
+    const err = new Error('relay /execute-js -> 500: Error: item not found') as Error & { status: number };
+    err.name = 'RelayError';
+    err.status = 500;
+    relay.castAtSlotError = err;
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 2 });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error.message).not.toMatch(/Allow Execute JS/);
+  });
+
+  it('MF-4a: use-and-roll upcast heal -> 200, castAtSlot called, display roll fires, heal write applied', async () => {
+    const { app, relay } = setup();
+    relay.rollResult = { formula: '2d8 + 3', total: 14, isCritical: false, isFumble: false };
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.h1.cast', slotLevel: 2 });
+    expect(res.statusCode).toBe(200);
+    expect(relay.castAtSlotCalls).toEqual([
+      { actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.h1', slotKey: 'spell2' },
+    ]);
+    expect(relay.rollCalls).toEqual([{ actorUuid: 'Actor.a1', formula: '2d8 + 3', flavor: 'Heal' }]);
+    expect(res.json().result).toEqual({ total: 14, formula: '2d8 + 3', isCritical: false, isFumble: false });
+    expect(relay.updates).toEqual([{ uuid: 'Actor.a1', data: { 'system.attributes.hp.value': 20 } }]);
+  });
+
+  it('MF-4a/MF-1: a 408 on the cast-at-slot leg of use-and-roll still returns 200 with the display roll (slot-consumed desync)', async () => {
+    const { app, relay } = setup();
+    const err = new Error('relay /execute-js -> 408: request timed out') as Error & { status: number };
+    err.name = 'RelayError';
+    err.status = 408;
+    relay.castAtSlotError = err;
+    relay.rollResult = { formula: '2d8 + 3', total: 14, isCritical: false, isFumble: false };
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.h1.cast', slotLevel: 2 });
+    expect(res.statusCode).toBe(200);
+    expect(relay.rollCalls).toEqual([{ actorUuid: 'Actor.a1', formula: '2d8 + 3', flavor: 'Heal' }]);
+  });
+
+  it('MF-4a: the disabled-wording error on the cast-at-slot leg of use-and-roll -> 422 naming the setting', async () => {
+    const { app, relay } = setup();
+    const err = new Error('execute-js is disabled in REST API module settings. A GM must enable it…');
+    err.name = 'RelayError';
+    relay.castAtSlotError = err;
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.h1.cast', slotLevel: 2 });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.message).toMatch(/Allow Execute JS/);
+  });
+
   it('damage accepts an integer slotLevel and rejects junk', async () => {
     const { app } = setup();
     const bad = await post(app, 'a1', { kind: 'damage', actionId: 'item.i1.damage', slotLevel: 1.5 });
@@ -425,6 +471,14 @@ describe('actions', () => {
     const res = await post(app, 'a1', { kind: 'damage', actionId: 'item.i1.damage', critical: true });
     expect(res.statusCode).toBe(200);
     expect(relay.rollCalls).toEqual([{ actorUuid: 'Actor.a1', formula: '2d8 + 3', flavor: 'Arrows' }]);
+  });
+
+  it('MF-4b: damage forwards slotLevel to the adapter', async () => {
+    const { app, relay } = setup();
+    relay.rollResult = { formula: '3d8 + 3', total: 16, isCritical: false, isFumble: false };
+    const res = await post(app, 'a1', { kind: 'damage', actionId: 'item.i1.damage', slotLevel: 3 });
+    expect(res.statusCode).toBe(200);
+    expect(relay.rollCalls[0]?.formula).toBe('3d8 + 3');
   });
 
   it('damage without the flag rolls the plain formula', async () => {

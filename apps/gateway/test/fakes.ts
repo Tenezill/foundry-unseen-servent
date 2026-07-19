@@ -445,6 +445,11 @@ function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
     { id: 'item.i1.attack', label: 'Arrows', kind: 'attack' },
     { id: 'item.i1.damage', label: 'Arrows', kind: 'damage' },
     { id: 'spell.s1.cast', label: 'Zap', kind: 'cast', slotLevels: [1, 2] },
+    // Mirrors the real dnd5e adapter's self-heal use-and-roll shape (MF-4a):
+    // a self-targeted heal spell whose cast intent produces `use-and-roll`
+    // with `heal`, and — at a higher slotLevel — the upcast `cast-at-slot`
+    // sub-leg (packages/adapter-dnd5e/src/index.ts buildHealAction).
+    { id: 'spell.h1.cast', label: 'Heal', kind: 'cast', slotLevels: [1, 2] },
     { id: 'item.i1.equip', label: 'Arrows', kind: 'equip', equipped: false },
     { id: 'item.i1.attune', label: 'Arrows', kind: 'attune', attuned: false },
     { id: 'spell.s1.prepare', label: 'Zap', kind: 'prepare', prepared: false },
@@ -524,18 +529,39 @@ export const fakeAdapter: SystemAdapter = {
         return { endpoint: 'roll', formula: '1d20 + 6', flavor: desc.label };
       case 'attack':
         return { endpoint: 'use-item', itemId: 'i1' };
-      case 'damage':
-        // Mirrors the dnd5e crit rule shape: critical doubles the dice term.
+      case 'damage': {
+        // Mirrors the dnd5e crit rule shape: critical doubles the dice term;
+        // slotLevel (MF-4b) reflects the intent's requested slot into the
+        // dice count, same as the real adapter's scaled display formula,
+        // before the crit doubling applies.
+        const dice = intent.slotLevel ?? 1;
+        const base = `${dice}d8 + 3`;
         return {
           endpoint: 'roll',
-          formula: intent.critical === true ? '2d8 + 3' : '1d8 + 3',
+          formula: intent.critical === true ? `${dice * 2}d8 + 3` : base,
           flavor: desc.label,
         };
+      }
       case 'use':
         return { endpoint: 'use-feature', itemId: 'f1' };
       case 'cast':
         if (intent.slotLevel !== undefined && !(desc.slotLevels ?? []).includes(intent.slotLevel)) {
           throw new IntentError(`illegal slot level ${intent.slotLevel}`, 'INVALID');
+        }
+        if (intent.actionId === 'spell.h1.cast') {
+          // MF-4a: the real adapter's self-heal upcast shape — use-and-roll
+          // with the cast-at-slot sub-leg once the requested level exceeds
+          // the spell's base level (1).
+          const upcast = intent.slotLevel !== undefined && intent.slotLevel > 1;
+          return {
+            endpoint: 'use-and-roll',
+            use: upcast ? 'cast-at-slot' : 'use-spell',
+            ...(upcast ? { slotKey: `spell${intent.slotLevel}` } : {}),
+            itemId: 'h1',
+            formula: upcast ? '2d8 + 3' : '1d8 + 3',
+            flavor: 'Heal',
+            heal: { path: 'system.attributes.hp.value', current: 10, max: 20 },
+          };
         }
         if (intent.slotLevel !== undefined && intent.slotLevel > 1) {
           return { endpoint: 'cast-at-slot', itemId: 's1', slotKey: `spell${intent.slotLevel}` };

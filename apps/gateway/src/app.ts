@@ -375,10 +375,20 @@ function extractRoll(value: unknown): ActionRollResult | null {
 }
 
 /** RelayError from execute-js when the module setting or API-key scope is
- *  missing — surfaced as an actionable 422 instead of a generic 502. */
+ *  missing — surfaced as an actionable 422 instead of a generic 502.
+ *  Keys on the module's refusal WORDING, never the endpoint path (which
+ *  foundry-client embeds in every HTTP-failure message — see
+ *  packages/foundry-client/src/index.ts's request() `relay ${path} -> ...`
+ *  template), so a genuine script/5xx/timeout failure on /execute-js falls
+ *  through to the 502 handler instead of the "Allow Execute JS" toast. */
 function upcastUnavailable(err: unknown): string | null {
   if (!(err instanceof Error) || err.name !== 'RelayError') return null;
-  if (!/execute-js/i.test(err.message)) return null;
+  // A timeout is never a config problem (see the 408-tolerance handling in
+  // the use-and-roll catch below).
+  if ((err as { status?: unknown }).status === 408) return null;
+  // NOTE: these strings are pinned by the Task-11 live verification gate —
+  // adjust here (and there) if the observed relay wording differs.
+  if (!/execute-js is disabled|execute-js.*scope/i.test(err.message)) return null;
   return 'Upcasting is not enabled on the table: enable "Allow Execute JS" in the Foundry REST API module settings and grant the relay API key the execute-js scope.';
 }
 
@@ -1024,16 +1034,20 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
               await relay.useAbility(action.use, `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {});
             }
           } catch (err) {
-            const mapped = upcastUnavailable(err);
-            if (mapped) return sendError(reply, 422, 'INVALID_INTENT', mapped);
             // A relay 408 means Foundry's usage workflow is waiting on
             // optional UI (live-verified 2026-07-10: Bead of Force's
             // area-template prompt) — consumption has already completed by
-            // then, so the display roll must still fire. Anything else
+            // then, so the display roll must still fire. Checked FIRST so a
+            // timeout is never mistaken for a config problem. Anything else
             // (unknown item, permissions) stays fatal.
             const status = (err as { status?: unknown }).status;
-            if (!(err instanceof Error && err.name === 'RelayError' && status === 408)) throw err;
-            req.log.warn({ err }, 'use-and-roll: activation timed out on Foundry UI; continuing with the roll');
+            if (err instanceof Error && err.name === 'RelayError' && status === 408) {
+              req.log.warn({ err }, 'use-and-roll: activation timed out on Foundry UI; continuing with the roll');
+            } else {
+              const mapped = action.use === 'cast-at-slot' ? upcastUnavailable(err) : null;
+              if (mapped) return sendError(reply, 422, 'INVALID_INTENT', mapped);
+              throw err;
+            }
           }
           const rolled = extractRoll(await relay.rollFormula(`Actor.${id}`, action.formula, action.flavor));
           result = rolled;
