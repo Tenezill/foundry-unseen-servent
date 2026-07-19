@@ -898,6 +898,58 @@ function saveStats(actor: FoundryActorDoc): Stat[] {
   });
 }
 
+/** Item types whose descriptions may carry save-advantage prose (live-verified
+ * 2026-07-19: racial traits duplicate into race items, War Caster is a feat,
+ * Holy Symbol of Ravenkind is equipment). */
+const SAVE_NOTE_ITEM_TYPES = new Set(['feat', 'race', 'background', 'equipment', 'weapon']);
+
+/** One qualifying sentence: mentions (dis)advantage AND saving throw(s). */
+const SAVE_NOTE_SENTENCE = /[^.!?]*\b(?:dis)?advantage\b[^.!?]*\bsaving throws?\b[^.!?]*[.!?]/gi;
+
+/**
+ * D&D-Beyond-style situational save reminders (2026-07-19). The structured
+ * data does NOT exist in dnd5e/ddb-importer documents — the only source is
+ * the items' own description prose, so this extracts sentences that say the
+ * PLAYER has (dis)advantage on saving throws. Presentation of the user's own
+ * world content, exactly like item detail views.
+ */
+function saveNoteStats(actor: FoundryActorDoc): Stat[] {
+  const out: Stat[] = [];
+  const seen = new Set<string>();
+  for (const item of actor.items ?? []) {
+    if (!SAVE_NOTE_ITEM_TYPES.has(item.type)) continue;
+    const html = strAt(item.system, 'description.value') ?? '';
+    if (html === '') continue;
+    const text = html
+      // Enricher tokens keep their human label: @UUID[...]{Poisoned}, &Reference[...]{Charmed}.
+      .replace(/[@&][A-Za-z]+\[[^\]]*\]\{([^}]*)\}/g, '$1')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/\s+/g, ' ');
+    for (const match of text.matchAll(SAVE_NOTE_SENTENCE)) {
+      let sentence = match[0];
+      const advIndex = sentence.search(/\b(?:dis)?advantage\b/i);
+      // List preambles ("…the following benefits: You have advantage…") end
+      // at a colon — keep only the clause that carries the advantage.
+      const colon = sentence.lastIndexOf(':', advIndex);
+      if (colon !== -1) sentence = sentence.slice(colon + 1);
+      sentence = sentence.trim();
+      // Only the player's own saves: the (dis)advantage must be granted to
+      // "you" as its subject ("you have advantage", "…of you have advantage",
+      // "you also gain advantage"). A looser earlier-"you" test wrongly keeps
+      // "When you do so, undead have disadvantage…" (Holy Symbol of Ravenkind).
+      if (!/\byou(?:\s+\w+)?\s+(?:have|gain|get|make)s?\s+(?:dis)?advantage\b/i.test(sentence)) continue;
+      if (sentence.length > 200) sentence = `${sentence.slice(0, 199).trimEnd()}…`;
+      const key = sentence.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ id: `savenote.${out.length}`, label: item.name, value: sentence });
+    }
+  }
+  return out;
+}
+
 function skillStats(actor: FoundryActorDoc): Stat[] {
   return SKILLS.map((s) => {
     const { total, ability, profMult } = skillInfo(actor, s);
@@ -2147,6 +2199,10 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     { kind: 'stats', id: 'skills', label: 'Skills', stats: skillStats(actor) },
     { kind: 'stats', id: 'passives', label: 'Passive Senses', stats: passiveStats(actor) },
   ];
+  const saveNotes = saveNoteStats(actor);
+  if (saveNotes.length > 0) {
+    sections.splice(2, 0, { kind: 'stats', id: 'savenotes', label: 'Saving Throw Notes', stats: saveNotes });
+  }
   const traits = traitStats(actor);
   if (traits.length > 0) {
     sections.push({ kind: 'stats', id: 'traits', label: 'Proficiencies & Traits', stats: traits });

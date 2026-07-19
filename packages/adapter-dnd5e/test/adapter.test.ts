@@ -1579,3 +1579,94 @@ describe('Saving Throws section (2026-07-19)', () => {
     expect(saves.stats.find((s) => s.id === 'save.str')?.value).toBe('+9');
   });
 });
+
+describe('Saving Throw Notes section (2026-07-19)', () => {
+  /** An actor whose items carry the live-verified description shapes. */
+  function actorWithFeats(feats: Array<{ name: string; type?: string; desc: string }>): FoundryActorDoc {
+    return {
+      ...martial,
+      items: feats.map((f, i) => ({
+        _id: `note-feat-${i}`.padEnd(16, '0'),
+        name: f.name,
+        type: f.type ?? 'feat',
+        system: { description: { value: f.desc } },
+      })),
+    };
+  }
+
+  it('extracts "you have advantage" save sentences, attributed to the item', () => {
+    const actor = actorWithFeats([
+      {
+        name: 'Gnomish Magic Resistance',
+        desc: '<p>You have advantage on Intelligence, Wisdom, and Charisma saving throws against spells.</p>',
+      },
+    ]);
+    const section = dnd5eAdapter.toViewModel(actor).sections.find((s) => s.id === 'savenotes');
+    if (section?.kind !== 'stats') throw new Error('savenotes must be a stats section');
+    expect(section.label).toBe('Saving Throw Notes');
+    expect(section.stats).toEqual([
+      {
+        id: 'savenote.0',
+        label: 'Gnomish Magic Resistance',
+        value: 'You have advantage on Intelligence, Wisdom, and Charisma saving throws against spells.',
+      },
+    ]);
+  });
+
+  it('sits directly after the saves section', () => {
+    const actor = actorWithFeats([
+      { name: 'Danger Sense', desc: '<p>You have advantage on Dexterity saving throws against effects that you can see.</p>' },
+    ]);
+    const ids = dnd5eAdapter.toViewModel(actor).sections.map((s) => s.id);
+    expect(ids.indexOf('savenotes')).toBe(ids.indexOf('saves') + 1);
+  });
+
+  it('is omitted when no item text qualifies', () => {
+    const ids = dnd5eAdapter.toViewModel(martial).sections.map((s) => s.id);
+    expect(ids).not.toContain('savenotes');
+  });
+
+  it('drops sentences about other creatures (no "you" before the keyword)', () => {
+    const actor = actorWithFeats([
+      { name: 'Holy Symbol of Ravenkind', type: 'equipment', desc: '<p>When you do so, undead have disadvantage on their saving throws against the effect.</p>' },
+    ]);
+    const ids = dnd5eAdapter.toViewModel(actor).sections.map((s) => s.id);
+    expect(ids).not.toContain('savenotes');
+  });
+
+  it('trims list preambles at the last colon (Rage/War Caster shape)', () => {
+    const actor = actorWithFeats([
+      {
+        name: 'Rage',
+        desc: '<p>While raging, you gain the following benefits if you aren’t wearing heavy armor: You have advantage on Strength checks and Strength saving throws.</p>',
+      },
+    ]);
+    const section = dnd5eAdapter.toViewModel(actor).sections.find((s) => s.id === 'savenotes');
+    if (section?.kind !== 'stats') throw new Error('savenotes must be a stats section');
+    expect(section.stats[0]?.value).toBe('You have advantage on Strength checks and Strength saving throws.');
+  });
+
+  it('dedupes identical sentences from race + trait feat, keeping the first source', () => {
+    const actor = actorWithFeats([
+      { name: 'Mountain Dwarf', type: 'race', desc: '<p>Dwarven Resilience: You have advantage on saving throws against poison.</p>' },
+      { name: 'Dwarven Resilience', desc: '<p>You have advantage on saving throws against poison.</p>' },
+    ]);
+    const section = dnd5eAdapter.toViewModel(actor).sections.find((s) => s.id === 'savenotes');
+    if (section?.kind !== 'stats') throw new Error('savenotes must be a stats section');
+    expect(section.stats).toHaveLength(1);
+  });
+
+  it('resolves enricher tokens and caps runaway sentences at 200 chars', () => {
+    const longTail = 'that you can see, such as traps and spells, and also '.repeat(6);
+    const actor = actorWithFeats([
+      { name: 'Fey Ancestry', desc: '<p>You have advantage on saving throws against being &Reference[charmed]{Charmed}.</p>' },
+      { name: 'Windbag', desc: `<p>You have advantage on Dexterity saving throws against effects ${longTail}elsewhere.</p>` },
+    ]);
+    const section = dnd5eAdapter.toViewModel(actor).sections.find((s) => s.id === 'savenotes');
+    if (section?.kind !== 'stats') throw new Error('savenotes must be a stats section');
+    expect(section.stats[0]?.value).toBe('You have advantage on saving throws against being Charmed.');
+    const long = String(section.stats[1]?.value);
+    expect(long.length).toBeLessThanOrEqual(200);
+    expect(long.endsWith('…')).toBe(true);
+  });
+});
