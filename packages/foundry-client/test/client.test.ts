@@ -409,6 +409,67 @@ describe('FoundryRelayClient.deleteEntity()', () => {
   });
 });
 
+describe('FoundryRelayClient.castAtSlot()', () => {
+  let client: FoundryRelayClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new FoundryRelayClient({
+      baseUrl: 'http://relay:3010',
+      apiKey: 'test-api-key',
+      clientId: 'fvtt_test123',
+    });
+  });
+
+  it('rejects malformed uuids and slot keys before any network call', async () => {
+    await expect(client.castAtSlot('Actor.abc; drop', 'Actor.abc123.Item.def456', 'spell3')).rejects.toThrow(/actorUuid/);
+    await expect(client.castAtSlot('Actor.abc123', 'Actor.abc123.Item.x"y', 'spell3')).rejects.toThrow(/itemUuid/);
+    await expect(client.castAtSlot('Actor.abc123', 'Actor.abc123.Item.def456', 'pact')).rejects.toThrow(/slotKey/);
+    await expect(client.castAtSlot('Actor.abc123', 'Actor.abc123.Item.def456', 'spell1')).rejects.toThrow(/slotKey/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('POSTs /execute-js with a script containing the quoted item uuid and slot key, and returns the roll', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({
+        success: true,
+        result: { roll: { total: 18, formula: '1d20 + 7' } },
+      }),
+      text: vi.fn(),
+    });
+
+    const res = await client.castAtSlot('Actor.abc123', 'Actor.abc123.Item.def456', 'spell3');
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/execute-js');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['x-api-key']).toBe('test-api-key');
+    const body = JSON.parse(init.body as string) as { script: string };
+    expect(body.script).toContain(JSON.stringify('Actor.abc123.Item.def456'));
+    expect(body.script).toContain(JSON.stringify('spell3'));
+    // Every occurrence of the caller-controlled uuid is inside a quoted
+    // JSON.stringify literal — never spliced in raw/unquoted.
+    const rawUuidPattern = /(?<!")Actor\.abc123\.Item\.def456(?!")/g;
+    expect(body.script.match(rawUuidPattern)).toBeNull();
+    expect(res).toEqual({ roll: { total: 18, formula: '1d20 + 7' } });
+  });
+
+  it('returns body.result ?? body when result is not an object (defensive unwrap)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({ success: true }),
+      text: vi.fn(),
+    });
+
+    const res = await client.castAtSlot('Actor.abc123', 'Actor.abc123.Item.def456', 'spell3');
+    expect(res).toEqual({ success: true });
+  });
+});
+
 describe('FoundryRelayClient — provider-based credentials (turnkey)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -306,6 +306,50 @@ export class FoundryRelayClient {
     return body.data ?? {};
   }
 
+  /**
+   * POST /execute-js — cast a spell consuming a SPECIFIC slot (upcast).
+   * The relay module's use-spell cannot pass a slot to dnd5e (M6/2026-07-19
+   * finding), so this runs a CONSTANT script template through execute-js:
+   * dnd5e's own activity.use({ spell: { slot } }) — right slot consumed,
+   * card labeled with the cast level, concentration applied. Attack-type
+   * activities also capture the to-hit roll (same dnd5e.rollAttackV2 hook
+   * the module's use-spell uses) and return it as { roll } so the gateway's
+   * extractRoll keeps working. Requires the relay API key scope
+   * `execute-js` AND the module setting "Allow Execute JS".
+   * Only validated ids/slot keys are interpolated, via JSON.stringify —
+   * callers can never inject script text.
+   */
+  async castAtSlot(actorUuid: string, itemUuid: string, slotKey: string): Promise<Record<string, unknown>> {
+    if (!/^Actor\.[A-Za-z0-9]{1,32}$/.test(actorUuid)) throw new Error(`castAtSlot: invalid actorUuid "${actorUuid}"`);
+    if (!/^Actor\.[A-Za-z0-9]{1,32}\.Item\.[A-Za-z0-9]{1,32}$/.test(itemUuid)) {
+      throw new Error(`castAtSlot: invalid itemUuid "${itemUuid}"`);
+    }
+    if (!/^spell[2-9]$/.test(slotKey)) throw new Error(`castAtSlot: invalid slotKey "${slotKey}"`);
+    // Mirrors the module's own use-spell flow (v13 path) with the one
+    // addition it lacks: spell.slot. Shape live-verified per the plan's
+    // final task before any push.
+    const script = [
+      `const item = await fromUuid(${JSON.stringify(itemUuid)});`,
+      `if (!item) throw new Error('item not found');`,
+      `const activities = item.system?.activities;`,
+      `const activity = activities?.size > 0 ? [...activities.values()][0] : null;`,
+      `if (!activity) throw new Error('spell has no activity');`,
+      `let attackRoll = null;`,
+      `const hookId = Hooks.once('dnd5e.rollAttackV2', (rolls) => { if (rolls?.length) attackRoll = rolls[0]; });`,
+      `try {`,
+      `  const hasAttack = typeof activity.rollAttack === 'function';`,
+      `  const usage = { subsequentActions: false, consume: { spellSlot: true }, spell: { slot: ${JSON.stringify(slotKey)} } };`,
+      `  const useResult = await activity.use(usage, { configure: false }, {});`,
+      `  if (!useResult) throw new Error('cast could not be performed');`,
+      `  if (hasAttack) await activity.rollAttack({}, { configure: false }, {});`,
+      `} finally { Hooks.off('dnd5e.rollAttackV2', hookId); }`,
+      `return attackRoll ? { roll: { total: attackRoll.total, formula: attackRoll.formula, isCritical: attackRoll.isCritical ?? false, isFumble: attackRoll.isFumble ?? false } } : {};`,
+    ].join('\n');
+    const body = await this.request<Record<string, unknown>>('POST', '/execute-js', {}, { script });
+    const result = body.result;
+    return result !== null && typeof result === 'object' ? (result as Record<string, unknown>) : body;
+  }
+
   /** POST /dnd5e/equip-item — toggle an embedded item's equipped state. */
   async equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void> {
     await this.request('POST', '/dnd5e/equip-item', {}, { actorUuid, itemUuid, equipped });
