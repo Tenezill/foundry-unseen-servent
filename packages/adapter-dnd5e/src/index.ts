@@ -868,10 +868,31 @@ function biographyItems(actor: FoundryActorDoc): ListItem[] {
   return out;
 }
 
-/** Save bonus = ability mod + prof when save-proficient (`abilities.<id>.proficient` >= 1). */
+/** Save bonus: derived `abilities.<id>.save.value` when the relay provides
+ * it (active-effect bonuses included), else ability mod + prof when
+ * save-proficient (`abilities.<id>.proficient` >= 1). Single source of truth
+ * for the Saving Throws cards AND buildAbilityRoll — the sheet never shows a
+ * number it won't roll. */
 function saveBonus(actor: FoundryActorDoc, abilityId: string): number {
+  const derived = numAt(actor.system, `abilities.${abilityId}.save.value`);
+  if (derived !== undefined) return derived;
   const proficient = numAt(actor.system, `abilities.${abilityId}.proficient`) ?? 0;
   return abilityMod(actor.system, abilityId) + (proficient >= 1 ? proficiency(actor) : 0);
+}
+
+/** One card per ability save (2026-07-19), rendered by the PWA's stats-card
+ * grid like skills. Marker mirrors abilityStats' threshold (>= 1). */
+function saveStats(actor: FoundryActorDoc): Stat[] {
+  return ABILITIES.map((a) => {
+    const proficient = (numAt(actor.system, `abilities.${a.id}.proficient`) ?? 0) >= 1;
+    return {
+      id: `save.${a.id}`,
+      label: a.label,
+      value: signed(saveBonus(actor, a.id)),
+      ...(proficient ? { sub: '● proficient' } : {}),
+      actionId: `ability.${a.id}.save`,
+    };
+  });
 }
 
 function skillStats(actor: FoundryActorDoc): Stat[] {
@@ -2120,6 +2141,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
 
   const sections: SheetSection[] = [
     { kind: 'stats', id: 'abilities', label: 'Abilities', stats: abilityStats(actor) },
+    { kind: 'stats', id: 'saves', label: 'Saving Throws', stats: saveStats(actor) },
     { kind: 'stats', id: 'skills', label: 'Skills', stats: skillStats(actor) },
     { kind: 'stats', id: 'passives', label: 'Passive Senses', stats: passiveStats(actor) },
   ];

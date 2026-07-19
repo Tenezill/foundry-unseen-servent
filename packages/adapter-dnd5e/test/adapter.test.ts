@@ -1540,3 +1540,48 @@ describe('XP headline stat (M10)', () => {
     expect(byId2.get('xp')?.value).toBe(0);
   });
 });
+
+describe('Saving Throws section (2026-07-19)', () => {
+  it('emits a saves stats section directly after abilities', () => {
+    const vm = dnd5eAdapter.toViewModel(martial);
+    const ids = vm.sections.map((s) => s.id);
+    expect(ids.indexOf('saves')).toBe(ids.indexOf('abilities') + 1);
+    const saves = vm.sections.find((s) => s.id === 'saves');
+    expect(saves?.kind).toBe('stats');
+    if (saves?.kind !== 'stats') throw new Error('unreachable');
+    expect(saves.label).toBe('Saving Throws');
+    expect(saves.stats).toHaveLength(6);
+  });
+
+  it('save cards show the exact bonus the save roll uses, with proficiency marker', () => {
+    const vm = dnd5eAdapter.toViewModel(martial);
+    const saves = vm.sections.find((s) => s.id === 'saves');
+    if (saves?.kind !== 'stats') throw new Error('saves must be a stats section');
+    const str = saves.stats.find((s) => s.id === 'save.str')!;
+    // martial fixture: STR 16 (mod +3), proficient 1, prof +3 -> +6.
+    // IMPORTANT: verify the +3 prof against the fixture before trusting this
+    // constant (existing headline tests assert Proficiency '+3' for martial).
+    expect(str.value).toBe('+6');
+    expect(str.sub).toBe('● proficient');
+    expect(str.actionId).toBe('ability.str.save');
+    const dex = saves.stats.find((s) => s.id === 'save.dex')!;
+    // DEX 14 (mod +2), not proficient -> +2, no marker.
+    expect(dex.value).toBe('+2');
+    expect(dex.sub).toBeUndefined();
+  });
+
+  it('prefers derived abilities.<id>.save.value when the relay provides it', () => {
+    const system = martial.system as Record<string, unknown>;
+    const abilities = (system.abilities ?? {}) as Record<string, Record<string, unknown>>;
+    const withDerived: FoundryActorDoc = {
+      ...martial,
+      system: {
+        ...system,
+        abilities: { ...abilities, str: { ...abilities.str, save: { value: 9 } } },
+      },
+    };
+    const saves = dnd5eAdapter.toViewModel(withDerived).sections.find((s) => s.id === 'saves');
+    if (saves?.kind !== 'stats') throw new Error('saves must be a stats section');
+    expect(saves.stats.find((s) => s.id === 'save.str')?.value).toBe('+9');
+  });
+});
