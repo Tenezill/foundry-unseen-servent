@@ -1102,11 +1102,15 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           });
           break;
         }
-        case 'remove-effect':
+        case 'remove-effect': {
           // Delete the app-applied Active Effect off the actor (buff badge's
           // remove action) — the existing embedded-item delete path.
-          await relay.deleteEntity(`Actor.${id}.ActiveEffect.${action.effectId}`);
+          const ok = await relay.deleteEntity(`Actor.${id}.ActiveEffect.${action.effectId}`);
+          // 'UPSTREAM' (not a bespoke 'RELAY_ERROR') to match the ErrorCode
+          // union and the sibling library-remove route's 502 below.
+          if (!ok) return sendError(reply, 502, 'UPSTREAM', 'Failed to remove the effect.');
           break;
+        }
         case 'short-rest':
         case 'long-rest':
         case 'death-save':

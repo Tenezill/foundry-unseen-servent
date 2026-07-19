@@ -818,6 +818,21 @@ describe('actions', () => {
     expect(res.statusCode).toBe(200);
     expect(relay.deleteCalls).toContain('Actor.a1.ActiveEffect.aeFake0000000001');
   });
+
+  it('endeffect surfaces a failed removal as a 502, not a false-success toast', async () => {
+    const { app, relay } = setup();
+    relay.deleteEntityResult = false;
+    const res = await post(app, 'a1', { kind: 'endeffect', actionId: 'effect.aeFake0000000001.remove' });
+    expect(res.statusCode).toBe(502);
+  });
+
+  it('casting a self-buff tolerates a relay 408 on activation and still applies the effect (M16)', async () => {
+    const { app, relay } = setup();
+    relay.useAbilityTimeout = true;
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.b1.cast', slotLevel: 1 });
+    expect(res.statusCode).toBe(200);
+    expect(relay.applyEffectCalls).toHaveLength(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
