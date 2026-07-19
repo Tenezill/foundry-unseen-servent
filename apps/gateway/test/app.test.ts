@@ -797,6 +797,27 @@ describe('actions', () => {
     expect(relay.rollCalls).toEqual([]);
     expect(res.body).not.toContain(FAKE_API_KEY);
   });
+
+  it('casting a self-buff activates then applies a flagged effect', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.b1.cast', slotLevel: 1 });
+    expect(res.statusCode).toBe(200);
+    expect(relay.useAbilityCalls).toEqual([
+      { endpoint: 'use-spell', actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.b1', opts: {} },
+    ]);
+    expect(relay.applyEffectCalls).toHaveLength(1);
+    const eff = relay.applyEffectCalls[0]!.effect;
+    expect(eff.name).toBe('Shield');
+    expect(/^[A-Za-z0-9]{16}$/.test(String(eff._id))).toBe(true);
+    expect((eff.flags as Record<string, Record<string, unknown>>)['unseen-servent']!.appliedBy).toBe('app');
+  });
+
+  it('endeffect removes the active effect by uuid', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'endeffect', actionId: 'effect.aeFake0000000001.remove' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.deleteCalls).toContain('Actor.a1.ActiveEffect.aeFake0000000001');
+  });
 });
 
 // ---------------------------------------------------------------------------

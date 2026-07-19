@@ -84,6 +84,10 @@ export interface RelayPort {
   /** POST /give — copy an item (compendium uuid ok) onto a target actor;
    *  true on success (M23: never throws — see foundry-client). */
   giveItem(toUuid: string, itemUuid: string): Promise<boolean>;
+  /** PUT /update embedded-upsert — create/replace an Active Effect on an
+   *  actor (2026-07-19 buff effects: the headless use-flow never applies
+   *  self-effects, so cast-and-apply-effect applies it explicitly). */
+  applyEffect(actorUuid: string, effect: Record<string, unknown>): Promise<void>;
   /** DELETE /delete — delete an entity (embedded item uuid ok); true on
    *  success (M23: never throws — see foundry-client). Callers decide
    *  whether a `false` matters: the library "remove" route surfaces it as
@@ -318,6 +322,7 @@ function parseActionIntent(
     case 'rest':
     case 'deathsave':
     case 'endconcentration':
+    case 'endeffect':
       // Actor-scoped commands carry only {kind, actionId} — no extra fields.
       return { kind, actionId };
     case 'pool': {
@@ -390,6 +395,14 @@ function upcastUnavailable(err: unknown): string | null {
   // adjust here (and there) if the observed relay wording differs.
   if (!/execute-js is disabled|execute-js.*scope/i.test(err.message)) return null;
   return 'Upcasting is not enabled on the table: enable "Allow Execute JS" in the Foundry REST API module settings and grant the relay API key the execute-js scope.';
+}
+
+const AE_ID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+/** A Foundry-style 16-char document id for an app-applied effect. */
+function mintEffectId(): string {
+  let s = '';
+  for (let i = 0; i < 16; i++) s += AE_ID_ALPHABET[Math.floor(Math.random() * AE_ID_ALPHABET.length)];
+  return s;
 }
 
 /**
@@ -1061,6 +1074,39 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           }
           break;
         }
+        case 'cast-and-apply-effect': {
+          // Buff spell (dnd5e): activate the spell (consumes the slot/use —
+          // Foundry's job, same reasoning as use-and-roll above) THEN create
+          // the effect via the relay's embedded-upsert, since the headless
+          // use-flow never applies self-effects (see EffectPayload comment).
+          try {
+            if (action.use === 'cast-at-slot') {
+              await relay.castAtSlot(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.slotKey as string);
+            } else {
+              await relay.useAbility('use-spell', `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {});
+            }
+          } catch (err) {
+            const status = (err as { status?: unknown }).status;
+            if (err instanceof Error && err.name === 'RelayError' && status === 408) {
+              req.log.warn({ err }, 'cast-and-apply-effect: activation timed out; applying the effect anyway');
+            } else {
+              const mapped = action.use === 'cast-at-slot' ? upcastUnavailable(err) : null;
+              if (mapped) return sendError(reply, 422, 'INVALID_INTENT', mapped);
+              throw err;
+            }
+          }
+          await relay.applyEffect(`Actor.${id}`, {
+            _id: mintEffectId(),
+            ...action.effect,
+            flags: { 'unseen-servent': { appliedBy: 'app' } },
+          });
+          break;
+        }
+        case 'remove-effect':
+          // Delete the app-applied Active Effect off the actor (buff badge's
+          // remove action) — the existing embedded-item delete path.
+          await relay.deleteEntity(`Actor.${id}.ActiveEffect.${action.effectId}`);
+          break;
         case 'short-rest':
         case 'long-rest':
         case 'death-save':

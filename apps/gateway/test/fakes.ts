@@ -304,6 +304,12 @@ export class FakeRelay implements RelayPort {
     return true;
   }
 
+  readonly applyEffectCalls: Array<{ actorUuid: string; effect: Record<string, unknown> }> = [];
+
+  async applyEffect(actorUuid: string, effect: Record<string, unknown>): Promise<void> {
+    this.applyEffectCalls.push({ actorUuid, effect });
+  }
+
   readonly deleteCalls: string[] = [];
   /** M23: deleteEntity never throws (foundry-client swallow-and-log
    *  contract) — this flag makes the simulated deletion silently no-op
@@ -458,6 +464,11 @@ function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
     { id: 'rest.long', label: 'Long Rest', kind: 'rest' },
     { id: 'deathsave.roll', label: 'Death Save', kind: 'deathsave' },
     { id: 'concentration.end', label: 'End Concentration', kind: 'endconcentration' },
+    // 2026-07-19 buff effects: a self-buff cast (cast-and-apply-effect) and
+    // the badge's removal action (endeffect) — mirrors the real dnd5e
+    // adapter's Shield-shaped detection.
+    { id: 'spell.b1.cast', label: 'Shield', kind: 'cast', level: 1, slotLevels: [1, 2], effectType: 'utility' },
+    { id: 'effect.aeFake0000000001.remove', label: 'End Shield', kind: 'endeffect' },
   ];
 }
 
@@ -548,6 +559,23 @@ export const fakeAdapter: SystemAdapter = {
         if (intent.slotLevel !== undefined && !(desc.slotLevels ?? []).includes(intent.slotLevel)) {
           throw new IntentError(`illegal slot level ${intent.slotLevel}`, 'INVALID');
         }
+        if (intent.actionId === 'spell.b1.cast') {
+          // 2026-07-19 buff effects: a self-buff cast — activate then apply
+          // the spell's own Active Effect (mirrors the real dnd5e adapter's
+          // Shield detection).
+          const upcast = intent.slotLevel !== undefined && intent.slotLevel > 1;
+          return {
+            endpoint: 'cast-and-apply-effect',
+            use: upcast ? 'cast-at-slot' : 'use-spell',
+            itemId: 'b1',
+            ...(upcast ? { slotKey: `spell${intent.slotLevel}` } : {}),
+            effect: {
+              name: 'Shield',
+              changes: [{ key: 'system.attributes.ac.bonus', mode: 2, value: '+5' }],
+              origin: 'Actor.a1.Item.b1',
+            },
+          };
+        }
         if (intent.actionId === 'spell.h1.cast') {
           // MF-4a: the real adapter's self-heal upcast shape — use-and-roll
           // with the cast-at-slot sub-leg once the requested level exceeds
@@ -585,6 +613,8 @@ export const fakeAdapter: SystemAdapter = {
         return { endpoint: 'death-save' };
       case 'endconcentration':
         return { endpoint: 'break-concentration' };
+      case 'endeffect':
+        return { endpoint: 'remove-effect', effectId: 'aeFake0000000001' };
       default:
         // M23 kinds ('pool', 'rouse'): this fake never declares actions of
         // these kinds, so the branch is unreachable in tests today. INVALID
