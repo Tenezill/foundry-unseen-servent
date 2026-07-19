@@ -99,6 +99,7 @@ actors.set('a-sariel', {
       { id: 's-firebolt', label: 'Fire Bolt', sub: 'Cantrip · V,S', level: 0, effectType: 'damage' },
       { id: 's-magearmor', label: 'Mage Armor', sub: '1st · V,S,M', tags: ['prepared'], level: 1, effectType: 'utility' },
       { id: 's-detect', label: 'Detect Magic', sub: '1st · V,S · 1/long rest', tags: ['free use', 'ritual', 'concentration'], level: 1, effectType: 'utility' },
+      { id: 's-shield', label: 'Shield', sub: '1st · V,S', level: 1, effectType: 'utility', buff: { name: 'Shield', ac: 5 } },
       { id: 's-mistystep', label: 'Misty Step', sub: '2nd · V', level: 2, effectType: 'utility' },
       { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'], level: 3, effectType: 'damage', detail: '<p>A bead of glowing amber streaks from your fingertip and blooms into roaring flame.</p><p><strong>The academy warns:</strong> mind your allies, and mind the drapes.</p>' },
     ],
@@ -217,6 +218,13 @@ function buildActions(actor) {
   if (actor.concentration) {
     actions.push({ id: 'concentration.end', label: 'End Concentration', kind: 'endconcentration' })
   }
+  // M-buff: a flagged condition (pushed by a self-buff cast) carries its own
+  // removeActionId; surface an 'endeffect' action for it while it's active.
+  for (const c of actor.conditions ?? []) {
+    if (c.removeActionId) {
+      actions.push({ id: c.removeActionId, label: `End ${c.label}`, kind: 'endeffect' })
+    }
+  }
   return actions
 }
 
@@ -244,7 +252,7 @@ function buildSheet(actor) {
     (sum, it) => sum + (it.equip?.equipped ? it.equip.acBonus : 0),
     0,
   )
-  const headline = [{ id: 'ac', label: 'AC', value: actor.baseAc + acBonus }, ...actor.headline]
+  const headline = [{ id: 'ac', label: 'AC', value: actor.baseAc + acBonus + (actor.acBuff ?? 0) }, ...actor.headline]
 
   const sections = [
     {
@@ -477,7 +485,7 @@ function mockRoll(mode, mod) {
   }
 }
 
-const ACTION_KINDS = ['check', 'save', 'attack', 'damage', 'cast', 'use', 'equip', 'rest', 'deathsave', 'endconcentration']
+const ACTION_KINDS = ['check', 'save', 'attack', 'damage', 'cast', 'use', 'equip', 'rest', 'deathsave', 'endconcentration', 'endeffect']
 
 /** Long rest fully recovers; short rest clears death saves (mock behavior). */
 function applyRest(actor, actionId) {
@@ -554,6 +562,21 @@ function handleAction(actor, intent, res) {
     // any slotLevel is ignored, mirroring the real adapter (dnd5e/src/index.ts
     // buildAction 'cast': "Without a list ... any slotLevel is ignored").
     result = mockRoll(undefined, 7)
+    // M-buff: a self-buff spell (internal `buff` marker) pushes a flagged,
+    // removable condition and bumps the mock AC modifier. Dedupe re-casts.
+    const spellId = actionId.split('.')[1]
+    const spell = actor.staticSections.spells?.find((sp) => sp.id === spellId)
+    if (spell?.buff) {
+      const condId = `ae-${spellId.slice(2)}`
+      const alreadyActive = (actor.conditions ?? []).some((c) => c.id === condId)
+      if (!alreadyActive) {
+        actor.conditions = [
+          ...(actor.conditions ?? []),
+          { id: condId, label: spell.buff.name, removeActionId: `effect.${condId}.remove` },
+        ]
+        actor.acBuff = (actor.acBuff ?? 0) + (spell.buff.ac ?? 0)
+      }
+    }
   } else if (kind === 'use') {
     result = mockRoll(undefined, 3)
   } else if (kind === 'equip') {
@@ -573,6 +596,16 @@ function handleAction(actor, intent, res) {
     if (success) success.value = clamp(success.value + 1, success.min, success.max)
   } else if (kind === 'endconcentration') {
     actor.concentration = null
+  } else if (kind === 'endeffect') {
+    // Reverse of the cast-time push above: find the condition this action
+    // removes, revert whatever AC bump its source buff spell applied, drop it.
+    const cond = (actor.conditions ?? []).find((c) => c.removeActionId === actionId)
+    if (cond) {
+      const spellId = `s-${cond.id.slice(3)}`
+      const spell = actor.staticSections.spells?.find((sp) => sp.id === spellId)
+      if (spell?.buff?.ac) actor.acBuff = (actor.acBuff ?? 0) - spell.buff.ac
+      actor.conditions = actor.conditions.filter((c) => c.id !== cond.id)
+    }
   }
 
   sendJson(res, 200, { result, sheet: buildSheet(actor) })
