@@ -1687,4 +1687,48 @@ describe('Saving Throw Notes section (2026-07-19)', () => {
     expect(long.length).toBeLessThanOrEqual(200);
     expect(long.endsWith('…')).toBe(true);
   });
+
+  it('keeps player-disadvantage notes, not just advantage', () => {
+    const actor = actorWithFeats([
+      {
+        name: 'Frightened Fool',
+        desc: '<p>You have disadvantage on Strength saving throws while you can see the source of your fear.</p>',
+      },
+    ]);
+    const section = dnd5eAdapter.toViewModel(actor).sections.find((s) => s.id === 'savenotes');
+    if (section?.kind !== 'stats') throw new Error('savenotes must be a stats section');
+    expect(section.stats).toEqual([
+      {
+        id: 'savenote.0',
+        label: 'Frightened Fool',
+        value: 'You have disadvantage on Strength saving throws while you can see the source of your fear.',
+      },
+    ]);
+  });
+
+  it('decodes ddb-importer entities (e.g. &rsquo;) in the extracted sentence', () => {
+    const actor = actorWithFeats([
+      {
+        name: 'Stone&rsquo;s Endurance',
+        desc: '<p>You have advantage on Constitution saving throws when you use this trait, and you can&rsquo;t be knocked prone.</p>',
+      },
+    ]);
+    const section = dnd5eAdapter.toViewModel(actor).sections.find((s) => s.id === 'savenotes');
+    if (section?.kind !== 'stats') throw new Error('savenotes must be a stats section');
+    expect(section.stats).toHaveLength(1);
+    expect(section.stats[0]?.value).toBe(
+      'You have advantage on Constitution saving throws when you use this trait, and you can’t be knocked prone.',
+    );
+  });
+
+  it('keeps stats ids contiguous when a duplicate is dropped mid-list', () => {
+    const actor = actorWithFeats([
+      { name: 'Danger Sense', desc: '<p>You have advantage on Dexterity saving throws against effects that you can see.</p>' },
+      { name: 'Gnomish Magic Resistance', desc: '<p>You have advantage on Intelligence, Wisdom, and Charisma saving throws against spells.</p>' },
+      { name: 'Danger Sense (dup)', desc: '<p>You have advantage on Dexterity saving throws against effects that you can see.</p>' },
+    ]);
+    const section = dnd5eAdapter.toViewModel(actor).sections.find((s) => s.id === 'savenotes');
+    if (section?.kind !== 'stats') throw new Error('savenotes must be a stats section');
+    expect(section.stats.map((s) => s.id)).toEqual(['savenote.0', 'savenote.1']);
+  });
 });

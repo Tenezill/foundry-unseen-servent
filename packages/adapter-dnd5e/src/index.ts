@@ -913,6 +913,21 @@ const SAVE_NOTE_SENTENCE = /[^.!?]*\b(?:dis)?advantage\b[^.!?]*\bsaving throws?\
  * defeat matching against the clean standalone trait feat's sentence. */
 const SAVE_NOTE_SUBJECT_GATE = /\byou(?:\s+\w+)?\s+(?:have|gain|get|make)s?\s+(?:dis)?advantage\b/i;
 
+/** Common ddb-importer/Foundry HTML entities seen in item description prose,
+ * decoded after tag-strip and before whitespace collapse. Numeric character
+ * references (&#8217; etc.) are handled separately via String.fromCodePoint. */
+const SAVE_NOTE_ENTITY_MAP: Record<string, string> = {
+  rsquo: '’',
+  lsquo: '‘',
+  rdquo: '”',
+  ldquo: '“',
+  ndash: '–',
+  mdash: '—',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
 /**
  * D&D-Beyond-style situational save reminders (2026-07-19). The structured
  * data does NOT exist in dnd5e/ddb-importer documents — the only source is
@@ -929,12 +944,28 @@ function saveNoteStats(actor: FoundryActorDoc): Stat[] {
     if (!SAVE_NOTE_ITEM_TYPES.has(item.type)) continue;
     const html = strAt(item.system, 'description.value') ?? '';
     if (html === '') continue;
+    // Cheap presence guard on the RAW html, before any normalization: skip
+    // items that can't possibly qualify. Deliberately loose single-word
+    // tests (not the full "saving throw(s)" phrase) — markup can split the
+    // phrase across tags ("saving <em>throws</em>"), which a phrase test
+    // would wrongly skip. This also keeps the expensive sentence regex away
+    // from its worst-case input: long punctuation-free text containing
+    // "advantage" but no "saving", which is the input shape that maximizes
+    // backtracking below.
+    if (!/advantage/i.test(html) || !/saving/i.test(html)) continue;
     const text = html
       // Enricher tokens keep their human label: @UUID[...]{Poisoned}, &Reference[...]{Charmed}.
       .replace(/[@&][A-Za-z]+\[[^\]]*\]\{([^}]*)\}/g, '$1')
       .replace(/<[^>]*>/g, ' ')
+      // Broader entity decoding (2026-07-20): ddb-importer descriptions carry
+      // curly quotes/dashes as named entities, plus occasional numeric
+      // character references. &amp; is decoded LAST, after this pass, so a
+      // doubly-escaped "&amp;rsquo;" decodes to "&rsquo;" first and is left
+      // alone rather than being corrupted into a stray "&" + "rsquo;".
+      .replace(/&(rsquo|lsquo|rdquo|ldquo|ndash|mdash|quot|apos|nbsp);|&#(\d+);/g, (m, name, code) =>
+        code !== undefined ? String.fromCodePoint(Number(code)) : (SAVE_NOTE_ENTITY_MAP[name] ?? m),
+      )
       .replace(/&amp;/g, '&')
-      .replace(/&nbsp;/g, ' ')
       .replace(/\s+/g, ' ');
     for (const match of text.matchAll(SAVE_NOTE_SENTENCE)) {
       let sentence = match[0];
