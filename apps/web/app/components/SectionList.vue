@@ -68,49 +68,51 @@
           </span>
         </div>
 
-        <ResourceStepper
-          v-if="item.resourceId && resources[item.resourceId]"
-          :resource="resources[item.resourceId]!"
-          :disabled="readonly || !resources[item.resourceId]!.writable"
-          :busy="busy === item.resourceId"
-          compact
-          @step="(id, dir) => emit('step', id, dir)"
-        />
-        <!-- Outlined toggles (Prepared / Equipped / Attune) tuck inward so the
-             yellow primary button stays flush-right, consistent with the
-             Actions tab. -->
-        <button
-          v-if="toggleOf(item)"
-          class="equip-btn"
-          type="button"
-          :class="{ on: toggleOn(toggleOf(item)!), pending: actionBusy === item.toggleActionId }"
-          :aria-pressed="toggleOn(toggleOf(item)!)"
-          :disabled="readonly || actionBusy !== null"
-          @click="item.toggleActionId && emit('action', item.toggleActionId)"
-        >
-          {{ toggleLabel(toggleOf(item)!) }}
-        </button>
-        <button
-          v-if="attuneOf(item)"
-          class="equip-btn"
-          type="button"
-          :class="{ on: attuneOf(item)!.attuned === true, pending: actionBusy === item.attuneActionId }"
-          :aria-pressed="attuneOf(item)!.attuned === true"
-          :disabled="readonly || actionBusy !== null"
-          @click="item.attuneActionId && emit('action', item.attuneActionId)"
-        >
-          {{ attuneOf(item)!.attuned ? 'Attuned' : 'Attune' }}
-        </button>
-        <button
-          v-if="verbOf(item)"
-          class="act-btn"
-          type="button"
-          :class="{ pending: actionBusy === item.actionId }"
-          :disabled="readonly || actionBusy !== null"
-          @click="tap(item)"
-        >
-          {{ verbOf(item) }}
-        </button>
+        <div class="row-controls">
+          <ResourceStepper
+            v-if="item.resourceId && resources[item.resourceId]"
+            :resource="resources[item.resourceId]!"
+            :disabled="readonly || !resources[item.resourceId]!.writable"
+            :busy="busy === item.resourceId"
+            compact
+            @step="(id, dir) => emit('step', id, dir)"
+          />
+          <!-- Outlined toggles (Prepared / Equipped / Attune) tuck inward so the
+               yellow primary button stays flush-right, consistent with the
+               Actions tab. -->
+          <button
+            v-if="toggleOf(item)"
+            class="equip-btn"
+            type="button"
+            :class="{ on: toggleOn(toggleOf(item)!), pending: actionBusy === item.toggleActionId }"
+            :aria-pressed="toggleOn(toggleOf(item)!)"
+            :disabled="readonly || actionBusy !== null"
+            @click="item.toggleActionId && emit('action', item.toggleActionId)"
+          >
+            {{ toggleLabel(toggleOf(item)!) }}
+          </button>
+          <button
+            v-if="attuneOf(item)"
+            class="equip-btn"
+            type="button"
+            :class="{ on: attuneOf(item)!.attuned === true, pending: actionBusy === item.attuneActionId }"
+            :aria-pressed="attuneOf(item)!.attuned === true"
+            :disabled="readonly || actionBusy !== null"
+            @click="item.attuneActionId && emit('action', item.attuneActionId)"
+          >
+            {{ attuneOf(item)!.attuned ? 'Attuned' : 'Attune' }}
+          </button>
+          <button
+            v-if="verbOf(item)"
+            class="act-btn"
+            type="button"
+            :class="{ pending: actionBusy === item.actionId }"
+            :disabled="readonly || actionBusy !== null"
+            @click="tap(item)"
+          >
+            {{ verbOf(item) }}
+          </button>
+        </div>
       </div>
       <p v-if="rows.length === 0" class="empty-hint">Empty</p>
     </div>
@@ -270,6 +272,7 @@ function tap(item: ListItem): void {
 
 .row {
   display: flex;
+  flex-wrap: wrap; /* controls wrap below the name instead of crushing it */
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
@@ -308,12 +311,27 @@ function tap(item: ListItem): void {
 }
 
 .row-main {
-  flex: 1;
+  flex: 1 1 160px; /* name keeps a readable minimum before controls wrap */
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
   align-items: flex-start;
+}
+
+.row-controls {
+  flex: none;
+  max-width: 100%;
+  margin-left: auto; /* stays flush-right, on either line */
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.row-controls:empty {
+  display: none; /* rows without controls keep their old spacing */
 }
 
 .row-label,

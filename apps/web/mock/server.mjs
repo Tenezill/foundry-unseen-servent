@@ -62,6 +62,7 @@ actors.set('a-sariel', {
     r('currency.sp', 'Silver', 30, { group: 'currency' }),
     r('item.i-potion.qty', 'Potion of Healing', 2, { max: 99, group: 'items' }),
     r('item.i-wand.uses', 'Wand of Magic Missiles', 5, { max: 7, group: 'items' }),
+    r('item.i-eisenseele.qty', 'Eisenseele', 1, { max: 9, group: 'items' }),
   ],
   headline: [
     { id: 'class', label: 'Class', value: 'Wizard 5' },
@@ -94,6 +95,9 @@ actors.set('a-sariel', {
       { id: 'i-wand', label: 'Wand of Magic Missiles', sub: 'charges', resourceId: 'item.i-wand.uses', tags: ['attuned'], detail: '<p>A slender rod of pale ash, ringed with silver.</p><ul><li>Hums faintly when charges remain.</li><li>Grows cold and dull when spent.</li></ul>' },
       { id: 'i-book', label: 'Spellbook' },
       { id: 'i-pouch', label: 'Component Pouch' },
+      // Gear-row overlap repro (2026-07-19): qty stepper + Equip + Attune
+      // pills together outgrow a phone-width row — see SectionList.vue.
+      { id: 'i-eisenseele', label: 'Eisenseele, Blade of the Iron Soul', sub: '1d8 slashing · 3 lb', attackMod: 7, resourceId: 'item.i-eisenseele.qty', equip: { equipped: true, acBonus: 0 }, attune: { attuned: true } },
     ],
     spells: [
       { id: 's-firebolt', label: 'Fire Bolt', sub: 'Cantrip · V,S', level: 0, effectType: 'damage' },
@@ -205,6 +209,9 @@ function buildActions(actor) {
     if (it.equip) {
       actions.push({ id: `item.${it.id}.equip`, label: it.label, kind: 'equip', equipped: it.equip.equipped })
     }
+    if (it.attune) {
+      actions.push({ id: `item.${it.id}.attune`, label: it.label, kind: 'attune', attuned: it.attune.attuned })
+    }
   }
   for (const sp of s.spells ?? []) {
     const a = { id: `spell.${sp.id}.cast`, label: sp.label, kind: 'cast', level: sp.level }
@@ -245,9 +252,11 @@ function listItem(def, actionId, toggleActionId) {
   if (def.detail) item.detail = def.detail
   const tags = [...(def.tags ?? [])]
   if (def.equip?.equipped) tags.push('equipped')
+  if (def.attune?.attuned) tags.push('attuned')
   if (tags.length > 0) item.tags = tags
   if (actionId) item.actionId = actionId
   if (toggleActionId) item.toggleActionId = toggleActionId
+  if (def.attune) item.attuneActionId = `item.${def.id}.attune`
   return item
 }
 
@@ -490,7 +499,7 @@ function mockRoll(mode, mod) {
   }
 }
 
-const ACTION_KINDS = ['check', 'save', 'attack', 'damage', 'cast', 'use', 'equip', 'rest', 'deathsave', 'endconcentration', 'endeffect']
+const ACTION_KINDS = ['check', 'save', 'attack', 'damage', 'cast', 'use', 'equip', 'attune', 'rest', 'deathsave', 'endconcentration', 'endeffect']
 
 /** Long rest fully recovers; short rest clears death saves (mock behavior). */
 function applyRest(actor, actionId) {
@@ -600,6 +609,13 @@ function handleAction(actor, intent, res) {
     const itemId = actionId.split('.')[1]
     const it = actor.staticSections.inventory.find((x) => x.id === itemId)
     it.equip.equipped = intent.equipped
+  } else if (kind === 'attune') {
+    if (typeof intent.attuned !== 'boolean') {
+      return sendError(res, 422, 'INVALID_INTENT', 'attuned must be a boolean')
+    }
+    const itemId = actionId.split('.')[1]
+    const it = actor.staticSections.inventory.find((x) => x.id === itemId)
+    it.attune.attuned = intent.attuned
   } else if (kind === 'rest') {
     applyRest(actor, actionId)
     // result stays null — the real command posts its own chat card.
