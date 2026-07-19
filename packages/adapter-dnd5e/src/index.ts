@@ -2111,7 +2111,6 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     { id: 'speed', label: 'Speed', value: speedLine(actor) },
     { id: 'prof', label: 'Proficiency', value: signed(proficiency(actor)) },
     { id: 'init', label: 'Initiative', value: signed(initiative(actor)), actionId: 'init.roll' },
-    { id: 'xp', label: 'XP', value: numAt(actor.system, 'details.xp.value') ?? 0 },
   ];
 
   const features: ListItem[] = [];

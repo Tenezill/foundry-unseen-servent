@@ -323,9 +323,9 @@ const cluster = computed<Stat[]>(() => props.sheet.headline.filter((s) => s.id !
 }
 
 /* ---- vitals cluster ---- */
-/* Flex-wrap instead of a fixed 4-column grid: the headline yields 5 cluster
- * stats (AC, Speed, Prof, Init, XP); wrapped tiles grow to fill their row so
- * a wide value (6-digit XP) never sits cramped in a quarter-width orphan. */
+/* Flex-wrap instead of a fixed 4-column grid: wrapped tiles grow to fill
+ * their row so the cluster stays balanced however many headline stats an
+ * adapter emits (XP is hidden for now — milestone leveling, 2026-07-19). */
 .cluster {
   display: flex;
   flex-wrap: wrap;

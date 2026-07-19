@@ -1526,18 +1526,12 @@ describe('inventory location sections', () => {
   });
 });
 
-describe('XP headline stat (M10)', () => {
-  it('appends details.xp.value to the headline', () => {
-    const headline = dnd5eAdapter.toViewModel(martial).headline;
-    expect(headline[headline.length - 1]).toEqual({ id: 'xp', label: 'XP', value: 6500 });
-  });
-
-  it('missing xp defaults to 0 (captured fixture has 0)', () => {
-    const byId = new Map(dnd5eAdapter.toViewModel(martialCaptured).headline.map((s) => [s.id, s]));
-    expect(byId.get('xp')?.value).toBe(0);
-    const noXp: FoundryActorDoc = { ...martial, system: { ...martial.system, details: {} } };
-    const byId2 = new Map(dnd5eAdapter.toViewModel(noXp).headline.map((s) => [s.id, s]));
-    expect(byId2.get('xp')?.value).toBe(0);
+describe('XP hidden from headline (2026-07-19)', () => {
+  it('emits no xp headline stat — most tables level by milestone', () => {
+    for (const actor of [martial, martialCaptured]) {
+      const ids = dnd5eAdapter.toViewModel(actor).headline.map((s) => s.id);
+      expect(ids).not.toContain('xp');
+    }
   });
 });
 
