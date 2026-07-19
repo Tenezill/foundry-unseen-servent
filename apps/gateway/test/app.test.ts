@@ -833,6 +833,33 @@ describe('actions', () => {
     expect(res.statusCode).toBe(200);
     expect(relay.applyEffectCalls).toHaveLength(1);
   });
+
+  it('a bare base-slot cast tolerates a relay 408 on useAbility and returns 200 with a null result (2026-07-19 fix)', async () => {
+    // Live-confirmed: the cast DID execute in Foundry, but the relay's
+    // response was slow — this must not surface as a 502 (which would
+    // invite a double-cast retry). No roll pill to show, but the re-fetched
+    // sheet reflects the new state.
+    const { app, relay } = setup();
+    relay.useAbilityTimeout = true;
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 1 });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.result).toBeNull();
+    expect(body.sheet.actorId).toBe('a1');
+  });
+
+  it('cast-at-slot tolerates a relay 408 and returns 200 with a null result (2026-07-19 fix)', async () => {
+    const { app, relay } = setup();
+    const err = new Error('relay /execute-js -> 408: request timed out') as Error & { status: number };
+    err.name = 'RelayError';
+    err.status = 408;
+    relay.castAtSlotError = err;
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 2 });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.result).toBeNull();
+    expect(body.sheet.actorId).toBe('a1');
+  });
 });
 
 // ---------------------------------------------------------------------------

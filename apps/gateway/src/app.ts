@@ -379,6 +379,16 @@ function extractRoll(value: unknown): ActionRollResult | null {
   return 'roll' in obj ? extractRoll(obj.roll) : null;
 }
 
+/** True when `err` is a RelayError carrying HTTP 408 — the relay's usage
+ *  workflow completed (or started) in Foundry but the response itself was
+ *  slow, never a config/permissions problem. Shared by every cast/use path
+ *  below (use-and-roll, the bare use-item/use-spell/use-feature case, and
+ *  cast-at-slot) so the timeout-tolerance rule lives in exactly one place. */
+function isRelayTimeout(err: unknown): boolean {
+  const status = (err as { status?: unknown }).status;
+  return err instanceof Error && err.name === 'RelayError' && status === 408;
+}
+
 /** RelayError from execute-js when the module setting or API-key scope is
  *  missing — surfaced as an actionable 422 instead of a generic 502.
  *  Keys on the module's refusal WORDING, never the endpoint path (which
@@ -1001,14 +1011,29 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
         case 'use-item':
         case 'use-spell':
         case 'use-feature':
-          result = extractRoll(
-            await relay.useAbility(
-              action.endpoint,
-              `Actor.${id}`,
-              `Actor.${id}.Item.${action.itemId}`,
-              action.slotLevel !== undefined ? { slotLevel: action.slotLevel } : {},
-            ),
-          );
+          try {
+            result = extractRoll(
+              await relay.useAbility(
+                action.endpoint,
+                `Actor.${id}`,
+                `Actor.${id}.Item.${action.itemId}`,
+                action.slotLevel !== undefined ? { slotLevel: action.slotLevel } : {},
+              ),
+            );
+          } catch (err) {
+            // A relay 408 here means the cast/use DID execute in Foundry —
+            // just like use-and-roll below, only the response was slow.
+            // Surfacing this as a 502 would show "the table didn't respond"
+            // for a cast that already happened, inviting a double-cast
+            // retry. There's no roll pill to show, but the fresh-sheet fetch
+            // below still reflects the new state.
+            if (isRelayTimeout(err)) {
+              req.log.warn({ err }, 'use-ability: activation timed out on Foundry UI; returning the fresh sheet');
+              result = null;
+            } else {
+              throw err;
+            }
+          }
           break;
         case 'cast-at-slot':
           try {
@@ -1016,9 +1041,17 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
               await relay.castAtSlot(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.slotKey),
             );
           } catch (err) {
-            const mapped = upcastUnavailable(err);
-            if (mapped) return sendError(reply, 422, 'INVALID_INTENT', mapped);
-            throw err;
+            // 408-tolerate first (mirrors use-and-roll's ordering below) so a
+            // timeout is never mistaken for the execute-js-disabled config
+            // problem that upcastUnavailable maps to a 422.
+            if (isRelayTimeout(err)) {
+              req.log.warn({ err }, 'cast-at-slot: activation timed out on Foundry UI; returning the fresh sheet');
+              result = null;
+            } else {
+              const mapped = upcastUnavailable(err);
+              if (mapped) return sendError(reply, 422, 'INVALID_INTENT', mapped);
+              throw err;
+            }
           }
           break;
         case 'equip-item':
@@ -1053,8 +1086,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
             // then, so the display roll must still fire. Checked FIRST so a
             // timeout is never mistaken for a config problem. Anything else
             // (unknown item, permissions) stays fatal.
-            const status = (err as { status?: unknown }).status;
-            if (err instanceof Error && err.name === 'RelayError' && status === 408) {
+            if (isRelayTimeout(err)) {
               req.log.warn({ err }, 'use-and-roll: activation timed out on Foundry UI; continuing with the roll');
             } else {
               const mapped = action.use === 'cast-at-slot' ? upcastUnavailable(err) : null;
