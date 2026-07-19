@@ -61,6 +61,7 @@
             :readonly="offline"
             :detail-ids="actionDetailIds"
             :crit-ids="critArmed"
+            :slot-resources="slotResources"
             @action="onCombatAction"
             @detail="onCombatDetail"
           />
@@ -174,6 +175,7 @@
               :readonly="offline"
               :collapsible="section.kind === 'list' && !!section.header"
               :storage-key="section.kind === 'list' && section.header ? `fc:collapse:${actorId}:${section.id}` : undefined"
+              :pips="pipsForSection(section)"
               @step="stepResource"
               @action="onAction"
               @detail="onDetail"
@@ -1055,6 +1057,36 @@ const slotsLeft = computed<Record<number, number>>(() => {
   }
   return out
 })
+
+/** `slots.*` resources (2026-07-19), feeding SlotPips on the Actions tab —
+ *  SectionActions consumes this prop directly (component-local pipsFor, per
+ *  task-7 brief); the Spells tab instead gets ready-made pips per section
+ *  from pipsForLevel below, so the derivation rule lives in exactly two
+ *  places, not three. */
+const slotResources = computed<ResourceDescriptor[]>(() =>
+  (sheet.value?.resources ?? []).filter((r) => r.id.startsWith('slots.')),
+)
+
+/** Slot pips for one spell level (own pool + pact, when the pact pool casts
+ *  at this level or higher) — the Spells tab's per-level SectionList headers. */
+function pipsForLevel(lvl: number): Array<{ value: number; max: number; pact?: boolean }> {
+  if (lvl === 0) return []
+  const out: Array<{ value: number; max: number; pact?: boolean }> = []
+  const own = slotResources.value.find((r) => r.id === `slots.${lvl}`)
+  if (own && own.max !== undefined) out.push({ value: own.value, max: own.max })
+  const pact = slotResources.value.find((r) => r.id === 'slots.pact')
+  if (pact && pact.max !== undefined && pact.level !== undefined && pact.level >= lvl) {
+    out.push({ value: pact.value, max: pact.max, pact: true })
+  }
+  return out
+}
+
+/** Pips for a rendered section, when it's one of the per-level `spells.l<N>`
+ *  sections (see SPELL_SECTION_RE below); undefined elsewhere. */
+function pipsForSection(section: SheetSection): Array<{ value: number; max: number; pact?: boolean }> | undefined {
+  const m = SPELL_SECTION_RE.exec(section.id)
+  return m ? pipsForLevel(Number(m[1])) : undefined
+}
 
 /** Upcast memory (2026-07-19): the level each spell was last cast at, keyed
  *  by its damage-action id — the companion Dmg roll sends it so the display

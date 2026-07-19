@@ -316,6 +316,19 @@ describe('resource descriptors — bounds', () => {
     const update = dnd5eAdapter.buildUpdate(warlockish, { kind: 'set', resourceId: 'slots.pact', value: 0 });
     expect(update).toEqual({ data: { 'system.spells.pact.value': 0 } });
   });
+
+  it('slot resources carry their spell level for the pips UI', () => {
+    expect(resource(caster, 'slots.1').level).toBe(1);
+    expect(resource(caster, 'slots.3').level).toBe(3);
+    const warlockish: FoundryActorDoc = {
+      _id: 'actorPact0000002',
+      name: 'Pact Pips',
+      type: 'character',
+      system: { spells: { pact: { value: 1, max: 2, level: 3 } } },
+      items: [],
+    };
+    expect(resource(warlockish, 'slots.pact').level).toBe(3);
+  });
 });
 
 describe('buildUpdate — clamping and paths', () => {

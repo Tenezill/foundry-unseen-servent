@@ -49,6 +49,8 @@ export interface ResourceDescriptor {
   writable: boolean;
   /** Optional grouping hint for the UI, e.g. "hp", "slots", "currency". */
   group?: string;
+  /** spell-slot pools only: the spell level this pool casts at (pips UI). */
+  level?: number;
 }
 
 /** App-level write intents. `expected` is the optimistic-lock token: the

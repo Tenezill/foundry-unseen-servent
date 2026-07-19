@@ -353,6 +353,9 @@ interface SlotInfo {
   label: string;
   value: number;
   max: number;
+  /** spell level this pool casts at (pips UI); pact omits it when the actor
+   *  document carries no `spells.pact.level` (enrich merges it in). */
+  castsAt?: number;
 }
 
 /** Present slot levels (max or current > 0) plus pact slots. */
@@ -368,7 +371,13 @@ function spellSlots(actor: FoundryActorDoc): SlotInfo[] {
       (typeof slot.override === 'number' && Number.isFinite(slot.override) ? slot.override : undefined) ??
       value;
     if (max > 0 || value > 0) {
-      out.push({ id: `slots.${lvl}`, label: `${ordinal(lvl)}-Level Slots`, value, max: Math.max(max, value) });
+      out.push({
+        id: `slots.${lvl}`,
+        label: `${ordinal(lvl)}-Level Slots`,
+        value,
+        max: Math.max(max, value),
+        castsAt: lvl,
+      });
     }
   }
   const pact = rec(getPath(actor.system, 'spells.pact'));
@@ -378,7 +387,14 @@ function spellSlots(actor: FoundryActorDoc): SlotInfo[] {
     (typeof pact.override === 'number' && Number.isFinite(pact.override) ? pact.override : undefined) ??
     pactValue;
   if (pactMax > 0 || pactValue > 0) {
-    out.push({ id: 'slots.pact', label: 'Pact Slots', value: pactValue, max: Math.max(pactMax, pactValue) });
+    const pactLevel = numAt(actor.system, 'spells.pact.level');
+    out.push({
+      id: 'slots.pact',
+      label: 'Pact Slots',
+      value: pactValue,
+      max: Math.max(pactMax, pactValue),
+      ...(pactLevel !== undefined ? { castsAt: pactLevel } : {}),
+    });
   }
   return out;
 }
@@ -464,7 +480,16 @@ function buildResources(actor: FoundryActorDoc): ResourceDescriptor[] {
   });
 
   for (const slot of spellSlots(actor)) {
-    out.push({ id: slot.id, label: slot.label, value: slot.value, min: 0, max: slot.max, writable: true, group: 'slots' });
+    out.push({
+      id: slot.id,
+      label: slot.label,
+      value: slot.value,
+      min: 0,
+      max: slot.max,
+      writable: true,
+      group: 'slots',
+      ...(slot.castsAt !== undefined ? { level: slot.castsAt } : {}),
+    });
   }
 
   for (const item of actor.items ?? []) {

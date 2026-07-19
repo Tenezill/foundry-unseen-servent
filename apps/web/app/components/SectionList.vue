@@ -24,6 +24,7 @@
         <span class="section-title">{{ section.header.label }}</span>
         <span v-if="section.header.sub" class="row-sub">{{ section.header.sub }}</span>
       </button>
+      <span v-if="pips?.length" class="lvl-pips"><SlotPips v-for="(p, i) in pips" :key="i" v-bind="p" /></span>
     </div>
     <div v-show="!sectionCollapsed" class="list card">
       <div
@@ -128,6 +129,10 @@ const props = defineProps<{
   readonly: boolean
   collapsible?: boolean
   storageKey?: string
+  /** Slot pips (2026-07-19) for this section's level header, when the page
+   *  identifies it as a per-level spell section — see pipsForLevel in
+   *  [id].vue. */
+  pips?: Array<{ value: number; max: number; pact?: boolean }>
 }>()
 
 const emit = defineEmits<{
@@ -437,6 +442,12 @@ function tap(item: ListItem): void {
    has room to expand, matching every other section heading. */
 .head-name .section-title {
   flex: 1;
+}
+
+.lvl-pips {
+  flex: none;
+  display: inline-flex;
+  gap: 8px;
 }
 
 .empty-hint {

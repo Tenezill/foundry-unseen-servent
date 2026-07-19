@@ -15,7 +15,10 @@
     </div>
     <div class="list card">
       <template v-for="bucket in bucketsOf(group)" :key="bucket.key">
-      <div v-if="bucket.label" class="lvl-head">{{ bucket.label }}</div>
+      <div v-if="bucket.label" class="lvl-head">
+        <span>{{ bucket.label }}</span>
+        <span class="lvl-pips"><SlotPips v-for="(p, i) in pipsFor(bucket)" :key="i" v-bind="p" /></span>
+      </div>
       <div v-for="action in bucket.actions" :key="action.id" class="row">
         <span class="ico" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path :d="group.icon" stroke-linecap="round" stroke-linejoin="round" /></svg>
@@ -66,7 +69,7 @@
 </template>
 
 <script setup lang="ts">
-import type { ActionDescriptor } from '@companion/adapter-sdk'
+import type { ActionDescriptor, ResourceDescriptor } from '@companion/adapter-sdk'
 
 const props = defineProps<{
   /** Pre-filtered attack/cast/use actions, in sheet order. */
@@ -80,6 +83,9 @@ const props = defineProps<{
   /** Damage-action ids armed by a nat-20 attack roll: the Dmg button becomes
    *  a Crit button (doubled dice — the page sends `critical: true`). */
   critIds: Set<string>
+  /** `slots.*` resources (2026-07-19), for the per-level pips on the Spells
+   *  bucket headers — see pipsFor below. */
+  slotResources: ResourceDescriptor[]
 }>()
 
 const emit = defineEmits<{
@@ -161,6 +167,24 @@ function bucketsOf(
   return out
 }
 
+/** Slot pips (2026-07-19) for one level bucket: the level's own slot pool
+ *  plus pact slots when the pact pool casts at this level or higher (pact
+ *  slots always cast at the highest level the actor's pact grants). */
+function pipsFor(bucket: { key: string; label?: string }): Array<{ value: number; max: number; pact?: boolean }> {
+  const m = /^l([0-9])$/.exec(bucket.key)
+  if (!m) return []
+  const lvl = Number(m[1])
+  if (lvl === 0) return []
+  const out: Array<{ value: number; max: number; pact?: boolean }> = []
+  const own = props.slotResources.find((r) => r.id === `slots.${lvl}`)
+  if (own && own.max !== undefined) out.push({ value: own.value, max: own.max })
+  const pact = props.slotResources.find((r) => r.id === 'slots.pact')
+  if (pact && pact.max !== undefined && pact.level !== undefined && pact.level >= lvl) {
+    out.push({ value: pact.value, max: pact.max, pact: true })
+  }
+  return out
+}
+
 /** 'damage' isn't its own group (see combatActions in [id].vue) — it rides
  *  along in `actions` so each attack row can find its companion roll. */
 const damageById = computed(() => {
@@ -199,6 +223,10 @@ function isCritArmed(action: ActionDescriptor): boolean {
 
 /* Per-level divider inside the Spells list (Cantrips / 1st Level / …). */
 .lvl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 8px 14px 4px;
   font-size: 0.7rem;
   font-weight: 700;
@@ -211,6 +239,11 @@ function isCritArmed(action: ActionDescriptor): boolean {
 
 .lvl-head:first-child {
   border-top: none;
+}
+
+.lvl-pips {
+  display: inline-flex;
+  gap: 8px;
 }
 
 .ico {
