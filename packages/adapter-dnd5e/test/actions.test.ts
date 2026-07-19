@@ -1473,6 +1473,142 @@ describe('display formula scaling (upcast + cantrip tiers)', () => {
   it('weapon damage is untouched by slotLevel (weapons have no cast level)', () => {
     expect(formulaOf(martialCaptured, { kind: 'damage', actionId: 'item.gta26ORvqC323k3r.damage' })).toBe('1d8 + 3');
   });
+
+  it("SHOULD-FIX 1: a scaling part with no explicit `number` adds no dice per step (dnd5e's own `?? 0` fallback)", () => {
+    const actor = warlock({ value: 0 }, [
+      {
+        _id: 'spellNoScaleNum1',
+        name: 'Test Bolt',
+        type: 'spell',
+        system: {
+          level: 1,
+          school: 'evo',
+          prepared: 1,
+          method: 'spell',
+          activities: {
+            a1: {
+              _id: 'a1',
+              type: 'attack',
+              damage: {
+                parts: [{ number: 4, denomination: 6, bonus: '', types: ['fire'], scaling: { mode: 'whole' } }],
+              },
+            },
+          },
+        },
+      },
+    ]);
+    expect(build(actor, { kind: 'damage', actionId: 'spell.spellNoScaleNum1.damage', slotLevel: 2 })).toEqual({
+      endpoint: 'roll',
+      formula: '4d6',
+      flavor: 'Test Bolt — Damage',
+    });
+  });
+
+  it('SHOULD-FIX 2a: mode "half" scaling floors the extra dice (Math.floor) at +2 and +3 levels', () => {
+    const actor = warlock({ value: 0 }, [
+      {
+        _id: 'spellHalfScale01',
+        name: 'Half Scaler',
+        type: 'spell',
+        system: {
+          level: 1,
+          school: 'evo',
+          prepared: 1,
+          method: 'spell',
+          activities: {
+            a1: {
+              _id: 'a1',
+              type: 'attack',
+              damage: {
+                parts: [{ number: 4, denomination: 6, bonus: '', types: ['fire'], scaling: { mode: 'half', number: 1 } }],
+              },
+            },
+          },
+        },
+      },
+    ]);
+    // +2 levels -> floor(2/2)=1 extra die; +3 levels -> floor(3/2)=1 extra die.
+    expect(build(actor, { kind: 'damage', actionId: 'spell.spellHalfScale01.damage', slotLevel: 3 })).toEqual({
+      endpoint: 'roll',
+      formula: '5d6',
+      flavor: 'Half Scaler — Damage',
+    });
+    expect(build(actor, { kind: 'damage', actionId: 'spell.spellHalfScale01.damage', slotLevel: 4 })).toEqual({
+      endpoint: 'roll',
+      formula: '5d6',
+      flavor: 'Half Scaler — Damage',
+    });
+  });
+
+  it('SHOULD-FIX 2b: an unknown scaling mode keeps the base dice count', () => {
+    const actor = warlock({ value: 0 }, [
+      {
+        _id: 'spellUnknownScale',
+        name: 'Odd Scaler',
+        type: 'spell',
+        system: {
+          level: 1,
+          school: 'evo',
+          prepared: 1,
+          method: 'spell',
+          activities: {
+            a1: {
+              _id: 'a1',
+              type: 'attack',
+              damage: {
+                parts: [{ number: 4, denomination: 6, bonus: '', types: ['fire'], scaling: { mode: 'other', number: 1 } }],
+              },
+            },
+          },
+        },
+      },
+    ]);
+    expect(build(actor, { kind: 'damage', actionId: 'spell.spellUnknownScale.damage', slotLevel: 3 })).toEqual({
+      endpoint: 'roll',
+      formula: '4d6',
+      flavor: 'Odd Scaler — Damage',
+    });
+  });
+
+  it('SHOULD-FIX 2c: cantrip damage tiers step at character level 4 (base), 11 (+2 steps: 3 dice), 17 (+3 steps: 4 dice)', () => {
+    const cantripActor = (level: number): FoundryActorDoc => {
+      const actor = warlock({ value: 0 }, [
+        {
+          _id: 'spellCantrip0001',
+          name: 'Test Cantrip',
+          type: 'spell',
+          system: {
+            level: 0,
+            school: 'evo',
+            prepared: 1,
+            method: 'spell',
+            activities: {
+              a1: {
+                _id: 'a1',
+                type: 'attack',
+                damage: {
+                  parts: [{ number: 1, denomination: 8, bonus: '', types: ['fire'], scaling: { mode: 'whole', number: 1 } }],
+                },
+              },
+            },
+          },
+        },
+      ]);
+      // `details.level` (when present) wins over summing class items —
+      // set it directly so the tier boundaries below are exact.
+      (actor.system as Record<string, unknown>).details = { level };
+      return actor;
+    };
+    expect(
+      build(cantripActor(4), { kind: 'damage', actionId: 'spell.spellCantrip0001.damage' }),
+    ).toEqual({ endpoint: 'roll', formula: '1d8', flavor: 'Test Cantrip — Damage' });
+    expect(
+      build(cantripActor(11), { kind: 'damage', actionId: 'spell.spellCantrip0001.damage' }),
+    ).toEqual({ endpoint: 'roll', formula: '3d8', flavor: 'Test Cantrip — Damage' });
+    expect(
+      build(cantripActor(17), { kind: 'damage', actionId: 'spell.spellCantrip0001.damage' }),
+    ).toEqual({ endpoint: 'roll', formula: '4d8', flavor: 'Test Cantrip — Damage' });
+  });
 });
 
 describe('pact magic (warlock) — slots display and castability', () => {
@@ -1588,6 +1724,26 @@ describe('slotLevels — payable levels for the upcast picker', () => {
     expect(action(casterCaptured, 'spell.P97npemu7j70IZAQ.cast').slotLevels).toBeUndefined();
   });
 
+  it('SHOULD-FIX 3: draining one step further (spell2 -> 0 too) leaves a length-1 [3] list (PWA direct-cast contract)', async () => {
+    if (!dnd5eAdapter.enrich) throw new Error('adapter must expose enrich()');
+    const drained = await dnd5eAdapter.enrich(casterCaptured, {
+      getSystemDetails: async () => ({
+        spellSlots: { spell1: { value: 0, max: 4 }, spell2: { value: 0, max: 3 }, spell3: { value: 1, max: 1 } },
+      }),
+    });
+    expect(action(drained, 'spell.pZMrJb3AXiRYO5E8.cast').slotLevels).toEqual([3]);
+  });
+
+  it('SHOULD-FIX 4: an omitted slotLevel on the drained fixture ([2,3]) is INVALID, not a silent default', async () => {
+    if (!dnd5eAdapter.enrich) throw new Error('adapter must expose enrich()');
+    const drained = await dnd5eAdapter.enrich(casterCaptured, {
+      getSystemDetails: async () => ({
+        spellSlots: { spell1: { value: 0, max: 4 }, spell2: { value: 2, max: 3 }, spell3: { value: 1, max: 1 } },
+      }),
+    });
+    expectIntentError(() => build(drained, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' }), 'INVALID');
+  });
+
   it('pact-only casting stays pickerless (slotLevels absent)', () => {
     const actor = warlock({ value: 2, max: 2, level: 4 });
     expect(action(actor, 'spell.spellHex00000001.cast').slotLevels).toBeUndefined();
@@ -1596,5 +1752,35 @@ describe('slotLevels — payable levels for the upcast picker', () => {
   it('nothing payable at all -> [] (disabled)', () => {
     const actor = warlock({ value: 0, max: 2, level: 4 });
     expect(action(actor, 'spell.spellHex00000001.cast').slotLevels).toEqual([]);
+  });
+});
+
+describe('MF-3: multiclass warlock — a true method:"pact" spell stays pickerless', () => {
+  // A genuine pact-method spell (unlike Hex/Banishment above, which are
+  // method:'spell' items only reachable via the pact fallback in
+  // canCastAtBase) — dnd5e auto-casts these at pact level; spellN pools
+  // must never pay for them or open the upcast picker (spec 2026-07-19,
+  // design.md:36-45).
+  const pactSpell = {
+    _id: 'spellPactCast0001',
+    name: 'Eldritch Blast',
+    type: 'spell',
+    system: { level: 1, school: 'evo', prepared: 1, method: 'pact', activities: {} },
+  } as const;
+
+  it('has slotLevels undefined (pickerless) even with payable spellN pools (pact-base-payable + higher-real-slot corner)', () => {
+    const actor = warlock({ value: 2, max: 2, level: 4 }, [pactSpell]);
+    // Multiclass wizard-side slots at the pact spell's own base level (1)
+    // AND one level up — under the pre-fix code these made payableSlotLevels
+    // non-empty and wrongly opened the picker for a pact-only spell.
+    const spells = (actor.system as Record<string, unknown>).spells as Record<string, unknown>;
+    spells.spell1 = { value: 2, max: 2 };
+    spells.spell2 = { value: 1, max: 1 };
+    expect(action(actor, 'spell.spellPactCast0001.cast').slotLevels).toBeUndefined();
+  });
+
+  it('with pact drained (pact.value = 0) gets slotLevels: [] (disabled), never the spellN picker', () => {
+    const actor = warlock({ value: 0, max: 2, level: 4 }, [pactSpell]);
+    expect(action(actor, 'spell.spellPactCast0001.cast').slotLevels).toEqual([]);
   });
 });

@@ -89,8 +89,9 @@ no upcast concept. Pure warlocks keep the pickerless direct cast.
   display rolls only — Foundry's own card already scales): a new optional
   `castLevel` scales each part by dnd5e 5.x part scaling data
   (`damage.parts[].scaling` / `healing.scaling`: `{ mode, number,
-  formula }`): mode `'whole'` adds `number ?? part dice count` dice per
-  level above base; mode `'half'` the same per two levels; unknown modes
+  formula }`): mode `'whole'` adds `number ?? 0` (dnd5e's own scaledFormula
+  fallback) dice per level above base; mode `'half'` the same per two
+  levels; unknown modes
   fall back to the unscaled base formula (documented gap, same honesty as
   the existing formula helpers). Crit doubling composes **after** scaling.
 - **Cantrip character-level scaling** (pre-existing gap, fixed here since

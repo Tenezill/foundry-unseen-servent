@@ -1451,7 +1451,11 @@ function healFormula(actor: FoundryActorDoc, item: FoundryItemDoc, castLevel?: n
 function scaledDiceNumber(baseNumber: number, rawScaling: unknown, steps: number): number | undefined {
   if (steps <= 0) return baseNumber;
   const scaling = rec(rawScaling);
-  const per = typeof scaling.number === 'number' && Number.isFinite(scaling.number) ? scaling.number : 1;
+  // dnd5e 5.3.3 ground truth: DamageData#scaledFormula computes
+  // `(this.scaling.number ?? 0) * increase` — a missing `number` adds no
+  // extra dice per step, not one (SHOULD-FIX 1, spec design.md:92 amended
+  // to match).
+  const per = typeof scaling.number === 'number' && Number.isFinite(scaling.number) ? scaling.number : 0;
   if (scaling.mode === 'whole') return baseNumber + per * steps;
   if (scaling.mode === 'half') return baseNumber + per * Math.floor(steps / 2);
   return undefined;
@@ -1663,6 +1667,11 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
           // PWA picker.
           ...(freeUse === undefined && level > 0
             ? (() => {
+                // Spec 2026-07-19: pact-method spells stay pickerless — dnd5e
+                // auto-casts them at pact level; spellN pools never pay for them.
+                if (strAt(item.system, 'method') === 'pact') {
+                  return canCastAtBase(actor, level) ? {} : { slotLevels: [] };
+                }
                 const payable = payableSlotLevels(actor, level);
                 if (payable.length > 0) return { slotLevels: payable };
                 return canCastAtBase(actor, level) ? {} : { slotLevels: [] };
