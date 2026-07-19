@@ -881,7 +881,10 @@ function saveBonus(actor: FoundryActorDoc, abilityId: string): number {
 }
 
 /** One card per ability save (2026-07-19), rendered by the PWA's stats-card
- * grid like skills. Marker mirrors abilityStats' threshold (>= 1). */
+ * grid like skills. Marker mirrors abilityStats' threshold (>= 1) and tracks
+ * the SOURCE `proficient` flag, not the derived total — an active effect that
+ * grants proficiency only inside derived `save.value` shows the higher bonus
+ * without the marker, by design (marker = declared proficiency). */
 function saveStats(actor: FoundryActorDoc): Stat[] {
   return ABILITIES.map((a) => {
     const proficient = (numAt(actor.system, `abilities.${a.id}.proficient`) ?? 0) >= 1;
