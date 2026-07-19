@@ -1932,7 +1932,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
           itemId,
           ...(upcast ? { slotKey: `spell${chosen}` } : {}),
           effect: buff,
-          ...(intent.targetActorId !== undefined ? { targetActorId: intent.targetActorId } : {}),
+          ...(intent.targetActorId !== undefined && item !== undefined && !buffTargetIsSelf(item)
+            ? { targetActorId: intent.targetActorId }
+            : {}),
         };
       }
       if (item && activityType(item) === 'heal') {

@@ -1975,6 +1975,12 @@ describe('target buffs — targetable flag + targetActorId', () => {
     if (a.endpoint !== 'cast-and-apply-effect') throw new Error('expected cast-and-apply-effect');
     expect(a.targetActorId).toBeUndefined();
   });
+
+  it('a self-only buff ignores a crafted targetActorId (server enforcement)', () => {
+    const a = build(withShieldSelf(), { kind: 'cast', actionId: 'spell.spellShieldS0001.cast', slotLevel: 1, targetActorId: 'TARGETACTOR00001' });
+    if (a.endpoint !== 'cast-and-apply-effect') throw new Error('expected cast-and-apply-effect');
+    expect(a.targetActorId).toBeUndefined();
+  });
 });
 
 describe('app-applied effects are removable', () => {
