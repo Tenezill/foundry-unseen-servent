@@ -52,9 +52,9 @@ actors.set('a-sariel', {
     r('currency.pp', 'Platinum', 4, { group: 'currency' }),
     r('hp', 'Hit Points', 24, { max: 31, group: 'hp' }),
     r('hp.temp', 'Temp HP', 0, { group: 'hp' }),
-    r('slots.1', '1st Level', 3, { max: 4, group: 'slots' }),
-    r('slots.2', '2nd Level', 2, { max: 3, group: 'slots' }),
-    r('slots.3', '3rd Level', 1, { max: 2, group: 'slots' }),
+    r('slots.1', '1st Level', 3, { max: 4, group: 'slots', level: 1 }),
+    r('slots.2', '2nd Level', 2, { max: 3, group: 'slots', level: 2 }),
+    r('slots.3', '3rd Level', 1, { max: 2, group: 'slots', level: 3 }),
     r('hitdice.d6', 'Hit Dice (d6)', 4, { max: 5, group: 'hitdice' }),
     r('deathsaves.success', 'Successes', 0, { max: 3, group: 'deathsaves' }),
     r('deathsaves.failure', 'Failures', 0, { max: 3, group: 'deathsaves' }),
@@ -527,15 +527,23 @@ function handleAction(actor, intent, res) {
     const it = actor.staticSections.inventory.find((x) => x.id === itemId)
     result = mockRoll(undefined, it?.attackMod ?? 5)
   } else if (kind === 'damage') {
-    // Mirrors the real gateway: optional boolean `critical` doubles the dice.
+    // Mirrors the real gateway: optional boolean `critical` doubles the dice,
+    // optional integer `slotLevel` (>=1) scales dice count for upcast damage.
     if (intent.critical !== undefined && typeof intent.critical !== 'boolean') {
       return sendError(res, 422, 'INVALID_INTENT', 'critical must be a boolean')
     }
+    if (intent.slotLevel !== undefined && (!Number.isInteger(intent.slotLevel) || intent.slotLevel < 1)) {
+      return sendError(res, 422, 'INVALID_INTENT', 'slotLevel must be a positive integer')
+    }
     const crit = intent.critical === true
-    result = { formula: `${crit ? '2d8' : '1d8'} + 3`, total: crit ? 14 : 8, isCritical: false, isFumble: false }
+    const dice = 1 + Math.max(0, (intent.slotLevel ?? 1) - 1)
+    const shown = crit ? dice * 2 : dice
+    result = { formula: `${shown}d8 + 3`, total: 4 * shown + 3, isCritical: false, isFumble: false }
   } else if (kind === 'cast') {
     if (action.slotLevels !== undefined) {
-      const lvl = intent.slotLevel
+      // Mirrors the real adapter: a missing slotLevel defaults to the spell's
+      // base level; it must still resolve to a payable slot, else 422.
+      const lvl = intent.slotLevel ?? action.level
       if (typeof lvl !== 'number' || !action.slotLevels.includes(lvl)) {
         return sendError(res, 422, 'INVALID_INTENT', `illegal slotLevel: ${String(intent.slotLevel)}`)
       }
