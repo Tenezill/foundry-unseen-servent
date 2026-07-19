@@ -962,9 +962,12 @@ function saveNoteStats(actor: FoundryActorDoc): Stat[] {
       // character references. &amp; is decoded LAST, after this pass, so a
       // doubly-escaped "&amp;rsquo;" decodes to "&rsquo;" first and is left
       // alone rather than being corrupted into a stray "&" + "rsquo;".
-      .replace(/&(rsquo|lsquo|rdquo|ldquo|ndash|mdash|quot|apos|nbsp);|&#(\d+);/g, (m, name, code) =>
-        code !== undefined ? String.fromCodePoint(Number(code)) : (SAVE_NOTE_ENTITY_MAP[name] ?? m),
-      )
+      .replace(/&(rsquo|lsquo|rdquo|ldquo|ndash|mdash|quot|apos|nbsp);|&#(\d+);/g, (m, name, code) => {
+        // Malformed oversized refs (&#9999999999;) must not throw on the
+        // sheet-build hot path — leave them verbatim instead.
+        if (code !== undefined) return Number(code) <= 0x10ffff ? String.fromCodePoint(Number(code)) : m;
+        return SAVE_NOTE_ENTITY_MAP[name] ?? m;
+      })
       .replace(/&amp;/g, '&')
       .replace(/\s+/g, ' ');
     for (const match of text.matchAll(SAVE_NOTE_SENTENCE)) {
