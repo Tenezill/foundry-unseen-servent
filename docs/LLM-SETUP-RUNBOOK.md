@@ -207,6 +207,18 @@ agent is driving the GM's browser with permission.
      sign in with the Phase-4 account, **Approve Pairing**.
    - The status in Foundry flips to paired; the token persists in that
      browser, reconnecting automatically on reload.
+7. **Upcasting (cast at a higher spell level):** rides the relay's
+   `execute-js` endpoint, which is exactly the "Allow Execute JavaScript"
+   module setting step 2 above says to leave off. If the human wants
+   upcasting, override that default — two switches, both required:
+   - Foundry → Configure Settings → REST API module → enable **"Allow
+     Execute JS"**.
+   - Relay web UI → the gateway's API key → grant the **`execute-js`** scope.
+
+   Without them, base-level casting still works normally and upcast attempts
+   return a clear error naming this section. The gateway only ever sends a
+   fixed script template (cast this spell consuming that slot) — phone
+   clients cannot inject script text.
 
 **Verify (after Phase 4's key exists):**
 

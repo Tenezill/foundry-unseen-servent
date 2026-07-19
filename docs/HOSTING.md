@@ -684,3 +684,13 @@ and `GET <relay>/clients` (with the key) → world `isOnline: true`.
 - **Spell upcasting:** the relay casts at a spell's base level only — the app
   offers a single Cast and disables it when no base-level slot remains. Not a
   bug; a documented bridge limitation.
+- **Upcasting (casting at a higher spell level):** rides the relay's
+  `execute-js` endpoint and is **off** until two switches are flipped:
+  1. Foundry → Configure Settings → REST API module → enable
+     **"Allow Execute JS"**.
+  2. Relay web UI → the gateway's API key → grant the **`execute-js`** scope.
+
+  Without them, base-level casting still works normally and upcast attempts
+  return a clear error naming this section. The gateway only ever sends a
+  fixed script template (cast this spell consuming that slot) — phone
+  clients cannot inject script text.
