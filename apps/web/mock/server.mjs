@@ -549,9 +549,10 @@ function handleAction(actor, intent, res) {
       }
       const slot = actor.resources.find((x) => x.id === `slots.${lvl}`)
       slot.value = clamp(slot.value - 1, slot.min, slot.max)
-    } else if (intent.slotLevel !== undefined) {
-      return sendError(res, 422, 'INVALID_INTENT', 'cantrips take no slotLevel')
     }
+    // SHOULD-FIX 5: no slotLevels descriptor (cantrip/free-use/pact) means
+    // any slotLevel is ignored, mirroring the real adapter (dnd5e/src/index.ts
+    // buildAction 'cast': "Without a list ... any slotLevel is ignored").
     result = mockRoll(undefined, 7)
   } else if (kind === 'use') {
     result = mockRoll(undefined, 3)

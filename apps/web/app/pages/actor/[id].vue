@@ -1648,7 +1648,7 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
       // pretending the cached sheet works.
       showNotLinked()
     } else if (status === 403 || status === 422) {
-      const msg = errorData<{ error?: { message?: string } }>(err)?.error?.message
+      const msg = errorData<ApiErrorBody>(err)?.error?.message
       if (msg && /Allow Execute JS/i.test(msg)) toast.show(msg)
       else toast.show('That action isn’t available right now.')
       void fetchSheet()
