@@ -100,6 +100,10 @@ actors.set('a-sariel', {
       { id: 's-magearmor', label: 'Mage Armor', sub: '1st · V,S,M', tags: ['prepared'], level: 1, effectType: 'utility' },
       { id: 's-detect', label: 'Detect Magic', sub: '1st · V,S · 1/long rest', tags: ['free use', 'ritual', 'concentration'], level: 1, effectType: 'utility' },
       { id: 's-shield', label: 'Shield', sub: '1st · V,S', level: 1, effectType: 'utility', buff: { name: 'Shield', ac: 5 } },
+      // M-targetbuff: a targetable buff (unlike self-only s-shield above) —
+      // the cast descriptor carries `targetable: true` so the client offers
+      // the target picker (self or another party member).
+      { id: 's-bless', label: 'Bless', sub: '1st · V,S,M', level: 1, effectType: 'utility', buff: { name: 'Bless', ac: 0 }, targetable: true },
       { id: 's-mistystep', label: 'Misty Step', sub: '2nd · V', level: 2, effectType: 'utility' },
       { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'], level: 3, effectType: 'damage', detail: '<p>A bead of glowing amber streaks from your fingertip and blooms into roaring flame.</p><p><strong>The academy warns:</strong> mind your allies, and mind the drapes.</p>' },
     ],
@@ -206,6 +210,7 @@ function buildActions(actor) {
     const a = { id: `spell.${sp.id}.cast`, label: sp.label, kind: 'cast', level: sp.level }
     if (sp.effectType) a.effectType = sp.effectType
     if (sp.level > 0) a.slotLevels = availableSlotLevels(actor, sp.level)
+    if (sp.targetable) a.targetable = true
     actions.push(a)
   }
   for (const f of s.features) {
@@ -564,17 +569,26 @@ function handleAction(actor, intent, res) {
     result = mockRoll(undefined, 7)
     // M-buff: a self-buff spell (internal `buff` marker) pushes a flagged,
     // removable condition and bumps the mock AC modifier. Dedupe re-casts.
+    // M-targetbuff: an optional `targetActorId` on the intent picks which
+    // party member receives it; omitted or === the current actor means
+    // self-target (existing behavior). The mock only renders one actor's
+    // sheet at a time, so a cast aimed at the OTHER party member just
+    // acknowledges (200) without mutating anything.
     const spellId = actionId.split('.')[1]
     const spell = actor.staticSections.spells?.find((sp) => sp.id === spellId)
     if (spell?.buff) {
-      const condId = `ae-${spellId.slice(2)}`
-      const alreadyActive = (actor.conditions ?? []).some((c) => c.id === condId)
-      if (!alreadyActive) {
-        actor.conditions = [
-          ...(actor.conditions ?? []),
-          { id: condId, label: spell.buff.name, removeActionId: `effect.${condId}.remove` },
-        ]
-        actor.acBuff = (actor.acBuff ?? 0) + (spell.buff.ac ?? 0)
+      const targetActorId = intent.targetActorId
+      const targetsSelf = targetActorId === undefined || targetActorId === actor.id
+      if (targetsSelf) {
+        const condId = `ae-${spellId.slice(2)}`
+        const alreadyActive = (actor.conditions ?? []).some((c) => c.id === condId)
+        if (!alreadyActive) {
+          actor.conditions = [
+            ...(actor.conditions ?? []),
+            { id: condId, label: spell.buff.name, removeActionId: `effect.${condId}.remove` },
+          ]
+          actor.acBuff = (actor.acBuff ?? 0) + (spell.buff.ac ?? 0)
+        }
       }
     }
   } else if (kind === 'use') {
@@ -639,6 +653,15 @@ const server = createServer(async (req, res) => {
 
   if (req.method === 'GET' && path === '/api/me') {
     return sendJson(res, 200, { player: { name: PLAYER.name, actorIds: PLAYER.actorIds } })
+  }
+
+  if (req.method === 'GET' && path === '/api/party') {
+    return sendJson(res, 200, {
+      actors: [
+        { id: 'a-sariel', name: 'Sariel Dawnwhisper' },
+        { id: 'a-brakk', name: 'Brakk Ironhide' },
+      ],
+    })
   }
 
   if (req.method === 'GET' && path === '/api/actors') {
