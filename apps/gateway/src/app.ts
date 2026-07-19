@@ -1118,8 +1118,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
               await relay.useAbility('use-spell', `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {});
             }
           } catch (err) {
-            const status = (err as { status?: unknown }).status;
-            if (err instanceof Error && err.name === 'RelayError' && status === 408) {
+            if (isRelayTimeout(err)) {
               req.log.warn({ err }, 'cast-and-apply-effect: activation timed out; applying the effect anyway');
             } else {
               const mapped = action.use === 'cast-at-slot' ? upcastUnavailable(err) : null;
