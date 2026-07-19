@@ -1385,6 +1385,14 @@ function selfBuffEffect(actor: FoundryActorDoc, item: FoundryItemDoc): EffectPay
   return undefined;
 }
 
+/** True when a self-buff spell targets only the caster (activity target
+ *  `affects.type === 'self'`, e.g. Shield). Such buffs auto-apply to the
+ *  caster and are NOT offered a target picker. Buffs that can affect a
+ *  chosen creature (Bless, Aid, Mage Armor) return false. */
+function buffTargetIsSelf(item: FoundryItemDoc): boolean {
+  return getPath(firstActivity(item), 'target.affects.type') === 'self';
+}
+
 /**
  * The ability modifier dnd5e would add to this weapon's attack/damage roll.
  * An explicit activity `attack.ability` override wins; otherwise a finesse
@@ -1710,6 +1718,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
           // (Cantrips / 1st Level / …), same split as the Spells tab.
           level: Math.max(0, Math.min(9, level)),
           effectType: effectTypeOf(item),
+          ...(selfBuffEffect(actor, item) !== undefined && !buffTargetIsSelf(item) ? { targetable: true } : {}),
           // slotLevels semantics (2026-07-19 spec): absent = direct cast, no
           // picker (cantrips, free-use, pact-payable); otherwise the payable
           // spellN levels — [] disables, length 1 direct-casts, >1 opens the
@@ -1923,6 +1932,7 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
           itemId,
           ...(upcast ? { slotKey: `spell${chosen}` } : {}),
           effect: buff,
+          ...(intent.targetActorId !== undefined ? { targetActorId: intent.targetActorId } : {}),
         };
       }
       if (item && activityType(item) === 'heal') {

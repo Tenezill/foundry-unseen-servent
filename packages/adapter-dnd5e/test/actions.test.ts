@@ -1913,6 +1913,70 @@ describe('buildAction — self-buff spells apply their active effect', () => {
   });
 });
 
+describe('target buffs — targetable flag + targetActorId', () => {
+  // Bless-shaped: utility activity, effect applied on use (transfer:false),
+  // NO target.affects.type:'self' → creature-targetable.
+  function withBless(base = casterCaptured): FoundryActorDoc {
+    const actor = structuredClone(base);
+    (actor.items as FoundryItemDoc[]).push({
+      _id: 'spellBless000001', name: 'Bless', type: 'spell',
+      system: {
+        level: 1, school: 'enc', prepared: 1, method: 'spell',
+        activities: { a1: { type: 'utility', target: { affects: {} } } },
+      },
+      effects: [{ _id: 'aeBless000000001', name: 'Bless', transfer: false, disabled: false,
+        changes: [{ key: 'system.bonuses.abilities.save', mode: 2, value: '+1d4' }] }],
+    } as unknown as FoundryItemDoc);
+    return actor;
+  }
+  // Shield-shaped: activity target.affects.type:'self' → self-only, NOT targetable.
+  function withShieldSelf(base = casterCaptured): FoundryActorDoc {
+    const actor = structuredClone(base);
+    (actor.items as FoundryItemDoc[]).push({
+      _id: 'spellShieldS0001', name: 'Shield', type: 'spell',
+      system: {
+        level: 1, school: 'abj', prepared: 1, method: 'spell',
+        activities: { a1: { type: 'utility', target: { affects: { type: 'self' } } } },
+      },
+      effects: [{ _id: 'aeShieldS0000001', name: 'Shield', transfer: false, disabled: false,
+        changes: [{ key: 'system.attributes.ac.bonus', mode: 2, value: '+5' }] }],
+    } as unknown as FoundryItemDoc);
+    return actor;
+  }
+
+  it('a creature-targetable buff cast descriptor is flagged targetable', () => {
+    expect(action(withBless(), 'spell.spellBless000001.cast').targetable).toBe(true);
+  });
+
+  it('a self-only buff (Shield) is NOT targetable', () => {
+    expect(action(withShieldSelf(), 'spell.spellShieldS0001.cast').targetable).toBeUndefined();
+  });
+
+  it('a non-buff spell is NOT targetable (Guiding Bolt)', () => {
+    expect(action(casterCaptured, 'spell.pZMrJb3AXiRYO5E8.cast').targetable).toBeUndefined();
+  });
+
+  it('cast with targetActorId threads it into cast-and-apply-effect', () => {
+    expect(build(withBless(), { kind: 'cast', actionId: 'spell.spellBless000001.cast', slotLevel: 1, targetActorId: 'TARGETACTOR00001' })).toEqual({
+      endpoint: 'cast-and-apply-effect',
+      use: 'use-spell',
+      itemId: 'spellBless000001',
+      effect: {
+        name: 'Bless',
+        changes: [{ key: 'system.bonuses.abilities.save', mode: 2, value: '+1d4' }],
+        origin: 'Actor.pTvtx5dm2AuYqeX2.Item.spellBless000001',
+      },
+      targetActorId: 'TARGETACTOR00001',
+    });
+  });
+
+  it('cast without targetActorId omits it (self-apply, unchanged)', () => {
+    const a = build(withBless(), { kind: 'cast', actionId: 'spell.spellBless000001.cast', slotLevel: 1 });
+    if (a.endpoint !== 'cast-and-apply-effect') throw new Error('expected cast-and-apply-effect');
+    expect(a.targetActorId).toBeUndefined();
+  });
+});
+
 describe('app-applied effects are removable', () => {
   function withAppliedShield(): FoundryActorDoc {
     const actor = structuredClone(casterCaptured);
