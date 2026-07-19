@@ -380,6 +380,18 @@ describe('actions', () => {
     expect(body.sheet.actorId).toBe('a1');
   });
 
+  it('cast at base slotLevel -> use-spell wire shape, no cast-at-slot call', async () => {
+    const { app, relay } = setup();
+    relay.useAbilityResult = { roll: { total: 11, formula: '4d6', isCritical: false, isFumble: false } };
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 1 });
+    expect(res.statusCode).toBe(200);
+    expect(relay.useAbilityCalls).toEqual([
+      { endpoint: 'use-spell', actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.s1', opts: {} },
+    ]);
+    expect(relay.castAtSlotCalls).toEqual([]);
+    expect(res.json().result).toEqual({ total: 11, formula: '4d6', isCritical: false, isFumble: false });
+  });
+
   it('cast with a higher slotLevel routes through cast-at-slot', async () => {
     const { app, relay } = setup();
     relay.castAtSlotResult = { roll: { total: 18, formula: '1d20 + 7', isCritical: false, isFumble: false } };
