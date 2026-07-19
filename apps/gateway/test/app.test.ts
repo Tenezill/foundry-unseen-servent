@@ -94,6 +94,28 @@ describe('auth', () => {
   });
 });
 
+describe('GET /api/party', () => {
+  it('returns the deduped union of all players actorIds with resolved names', async () => {
+    const { app } = setup();
+    const res = await app.inject({ method: 'GET', url: '/api/party', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    const actors = res.json().actors as Array<{ id: string; name?: string; img?: string }>;
+    // union of Anna's ['a1', 'a2', 'ghost'] and Bob's ['b1'], deduped
+    expect(actors.map((a) => a.id).sort()).toEqual(['a1', 'a2', 'b1', 'ghost']);
+    expect(actors.find((a) => a.id === 'a1')).toMatchObject({ name: 'Sariel', img: 'icons/a1.webp' });
+    expect(actors.find((a) => a.id === 'a2')).toMatchObject({ name: 'Borin', img: 'icons/a2.webp' });
+    expect(actors.find((a) => a.id === 'b1')).toMatchObject({ name: 'Mysterious Stranger', img: 'icons/b1.webp' });
+    // 'ghost' has no backing relay entity -> bare id, no name/img
+    expect(actors.find((a) => a.id === 'ghost')).toEqual({ id: 'ghost' });
+  });
+
+  it('401 without a token', async () => {
+    const { app } = setup();
+    const res = await app.inject({ method: 'GET', url: '/api/party' });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 describe('actor scoping', () => {
   it('lists only the player’s own actors and tolerates missing ones', async () => {
     const { app } = setup();

@@ -617,6 +617,35 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
     });
   });
 
+  // Out-of-combat target picker's roster: every player's actorIds, deduped,
+  // with best-effort name/img resolved via the relay (bounded, mirrors the
+  // /api/admin/players lookup below) — a bare id on miss.
+  app.get('/api/party', { preHandler: auth(false) }, async (_req, reply) => {
+    const ids = [...new Set(players.list().flatMap((p) => p.actorIds))];
+    const meta = new Map<string, { name?: string; img?: string }>();
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const doc = await Promise.race([
+            relay.getEntity(`Actor.${id}`),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), adminNameTimeoutMs)),
+          ]);
+          if (doc !== null) {
+            const entry: { name?: string; img?: string } = {};
+            if (typeof doc.name === 'string') entry.name = doc.name;
+            if (typeof doc.img === 'string') entry.img = doc.img;
+            meta.set(id, entry);
+          }
+        } catch {
+          /* best-effort: unresolved ids render bare */
+        }
+      }),
+    );
+    return reply.code(200).send({
+      actors: ids.map((id) => ({ id, ...(meta.get(id) ?? {}) })),
+    });
+  });
+
   app.get('/api/admin/players', { preHandler: requireAdmin }, async (_req, reply) => {
     const entries = (adminStore as AdminStorePort).list();
     const ids = [...new Set(entries.flatMap((p) => p.actorIds))];
