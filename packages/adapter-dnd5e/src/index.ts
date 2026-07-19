@@ -949,15 +949,16 @@ function saveNoteStats(actor: FoundryActorDoc): Stat[] {
       // you do so, undead have disadvantage…" (Holy Symbol of Ravenkind).
       const gateMatch = SAVE_NOTE_SUBJECT_GATE.exec(sentence);
       if (!gateMatch) continue;
-      if (sentence.length > 200) sentence = `${sentence.slice(0, 199).trimEnd()}…`;
       // Dedupe key starts at the subject-gate match ("you have advantage…"
       // onward), not the full sentence: race items embed the trait name
       // INSIDE the sentence with no colon separator ("Dwarven Resilience You
       // have advantage on saving throws against poison…"), which otherwise
       // defeats matching against the clean standalone trait feat's identical
       // tail (live-verified 2026-07-19: 4/9 party PCs doubled every racial
-      // note).
+      // note). Sliced BEFORE the display truncation so the gate index always
+      // addresses the string it was matched against.
       const key = sentence.slice(gateMatch.index).toLowerCase();
+      if (sentence.length > 200) sentence = `${sentence.slice(0, 199).trimEnd()}…`;
       const existingIndex = seen.get(key);
       if (existingIndex === undefined) {
         seen.set(key, out.length);
