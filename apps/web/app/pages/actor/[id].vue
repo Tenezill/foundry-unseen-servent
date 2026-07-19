@@ -149,7 +149,7 @@
             <SectionStats
               v-if="section.kind === 'stats'"
               :section="section"
-              :variant="section.id === 'abilities' ? 'gems' : section.id === 'traits' ? 'rows' : 'cards'"
+              :variant="section.id === 'abilities' ? 'gems' : section.id === 'traits' || section.id === 'savenotes' ? 'rows' : 'cards'"
               :readonly="offline"
               :busy="actionBusy"
               @action="onAction"

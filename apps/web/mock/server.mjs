@@ -89,6 +89,10 @@ actors.set('a-sariel', {
       { id: 'wis', label: 'WIS Save', value: '+4' },
       { id: 'dex', label: 'DEX Save', value: '+2' },
     ],
+    savenotes: [
+      { id: 'savenote.0', label: 'Gnomish Magic Resistance', value: 'You have advantage on Intelligence, Wisdom, and Charisma saving throws against spells.' },
+      { id: 'savenote.1', label: 'War Caster', value: 'You have advantage on Constitution saving throws that you make to maintain your concentration on a spell when you take damage.' },
+    ],
     inventory: [
       { id: 'i-staff', label: 'Quarterstaff', sub: '1d6 bludgeoning', attackMod: 2, equip: { equipped: false, acBonus: 0 } },
       { id: 'i-potion', label: 'Potion of Healing', sub: 'consumable', resourceId: 'item.i-potion.qty', detail: '<p>A swirling crimson draught, warm to the touch. <strong>Drink</strong> it and feel your wounds knit closed as ruby light spreads through your veins.</p><p><em>Half a flask remains after each sip.</em></p>' },
@@ -283,6 +287,9 @@ function buildSheet(actor) {
       label: 'Saving Throws',
       stats: s.saves.map((a) => ({ ...a, id: `save-${a.id}`, actionId: `ability.${a.id}.save` })),
     })
+  }
+  if (s.savenotes) {
+    sections.push({ kind: 'stats', id: 'savenotes', label: 'Saving Throw Notes', stats: s.savenotes })
   }
   if (s.skills) {
     sections.push({
