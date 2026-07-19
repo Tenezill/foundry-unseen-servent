@@ -270,6 +270,10 @@ export interface ActionDescriptor {
   /** cast only: the spell's own level (0 = cantrip) — the PWA groups the
    *  Actions-tab spell list under per-level headers with it (2026-07-18). */
   level?: number;
+  /** cast only: this buff can target another creature — the PWA opens a
+   *  target picker before casting (2026-07-19 target buffs). Absent =
+   *  self-only or non-buff, cast applies to the caster. */
+  targetable?: boolean;
   /** equip only: current state (the intent carries the desired state). */
   equipped?: boolean;
   /** prepare only: current state (the intent carries the desired state). */
@@ -294,7 +298,7 @@ export type ActionIntent =
    *  roll came back `isCritical`. `slotLevel` is the level the spell was
    *  last cast at (upcasting) so the display roll scales its dice. */
   | { kind: 'damage'; actionId: string; critical?: boolean; slotLevel?: number }
-  | { kind: 'cast'; actionId: string; slotLevel?: number }
+  | { kind: 'cast'; actionId: string; slotLevel?: number; targetActorId?: string }
   | { kind: 'equip'; actionId: string; equipped: boolean }
   | { kind: 'prepare'; actionId: string; prepared: boolean }
   | { kind: 'attune'; actionId: string; attuned: boolean }
@@ -367,7 +371,7 @@ export type RelayAction =
    *  on the caster via the relay's PUT /update embedded-upsert — because the
    *  headless use-flow never applies self-effects (see M-buff-effects-findings).
    *  The gateway mints the effect `_id` and sets the unseen-servent flag. */
-  | { endpoint: 'cast-and-apply-effect'; use: 'use-spell' | 'cast-at-slot'; itemId: string; slotKey?: string; effect: EffectPayload }
+  | { endpoint: 'cast-and-apply-effect'; use: 'use-spell' | 'cast-at-slot'; itemId: string; slotKey?: string; effect: EffectPayload; targetActorId?: string }
   /** Delete an app-applied active effect off the actor (buff removal); the
    *  gateway resolves `Actor.<id>.ActiveEffect.<effectId>` via deleteEntity. */
   | { endpoint: 'remove-effect'; effectId: string }
