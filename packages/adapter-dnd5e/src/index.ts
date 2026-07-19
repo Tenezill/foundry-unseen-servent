@@ -1351,12 +1351,17 @@ function effectTypeOf(item: FoundryItemDoc): 'damage' | 'heal' | 'utility' {
 function selfBuffEffect(actor: FoundryActorDoc, item: FoundryItemDoc): EffectPayload | undefined {
   if (item.type !== 'spell') return undefined;
   if (effectTypeOf(item) !== 'utility') return undefined; // heals/damage handled elsewhere
+  // Save-gated activities (Bane, etc.) apply their effect to targets that fail
+  // the save, never to the caster — exclude them or a debuff would land on self.
+  if (allActivities(item).some((a) => a.type === 'save')) return undefined;
   const rawEffects = getPath(item, 'effects');
   const effects = Array.isArray(rawEffects) ? rawEffects : [];
   for (const raw of effects) {
     const eff = rec(raw);
     if (eff.transfer === true) continue; // passive/always-on, not a cast-applied buff
-    if (eff.disabled === true) continue;
+    // Real dnd5e 5.3.3 activity-applied item effects are stored disabled:true
+    // on the source spell (enabled only when copied onto a target); the copy
+    // we build below (EffectPayload) is created enabled regardless.
     const changes = Array.isArray(eff.changes)
       ? eff.changes
           .map(rec)
@@ -1746,10 +1751,11 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
   // concentration/death-save appear only when the actor's state calls for them.
   out.push({ id: 'rest.short', label: 'Short Rest', kind: 'rest' });
   out.push({ id: 'rest.long', label: 'Long Rest', kind: 'rest' });
-  if (parseEffects(actor).concentration) {
+  const effects = parseEffects(actor);
+  if (effects.concentration) {
     out.push({ id: 'concentration.end', label: 'End Concentration', kind: 'endconcentration' });
   }
-  for (const cond of parseEffects(actor).conditions) {
+  for (const cond of effects.conditions) {
     if (cond.removeActionId !== undefined) {
       out.push({ id: cond.removeActionId, kind: 'endeffect', label: `End ${cond.label}` });
     }

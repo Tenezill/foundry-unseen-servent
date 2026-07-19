@@ -1807,7 +1807,10 @@ describe('buildAction — self-buff spells apply their active effect', () => {
           name: 'Shield',
           img: 'icons/svg/shield.svg',
           transfer: false,
-          disabled: false,
+          // Matches real dnd5e 5.3.3 data: activity-applied source effects
+          // are stored disabled:true on the spell itself (MF-1) — the copy
+          // selfBuffEffect builds is created enabled regardless.
+          disabled: true,
           duration: { seconds: 6 },
           changes: [{ key: 'system.attributes.ac.bonus', mode: 2, value: '+5' }],
         },
@@ -1852,6 +1855,60 @@ describe('buildAction — self-buff spells apply their active effect', () => {
     expect(build(actor, { kind: 'cast', actionId: 'spell.spellShield0001.cast', slotLevel: 1 })).toEqual({
       endpoint: 'use-spell',
       itemId: 'spellShield0001',
+    });
+  });
+
+  it('MF-1: a real disabled:true source effect (Shield of Faith, live-captured) still applies as a buff', () => {
+    // Shield of Faith is unprepared (prepared:0) in the capture — prepare it
+    // in a clone to reach the cast path (same technique as the Bane
+    // effectType test above). Real _id verified against the fixture:
+    // d56v9vczAXEgMhCY (NOT hQ1zxREvUlaNKQpz, which is Sanctuary's id —
+    // the fixlist's item id was wrong).
+    const prepared: FoundryActorDoc = {
+      ...casterCaptured,
+      items: (casterCaptured.items ?? []).map((i) =>
+        i._id === 'd56v9vczAXEgMhCY'
+          ? { ...i, system: { ...(i.system as Record<string, unknown>), prepared: 1 } }
+          : i,
+      ),
+    };
+    expect(build(prepared, { kind: 'cast', actionId: 'spell.d56v9vczAXEgMhCY.cast' })).toMatchObject({
+      endpoint: 'cast-and-apply-effect',
+      use: 'use-spell',
+      itemId: 'd56v9vczAXEgMhCY',
+      effect: {
+        name: 'Shield of Faith',
+        changes: [{ key: 'system.attributes.ac.bonus', mode: 2, value: '2' }],
+        origin: 'Actor.pTvtx5dm2AuYqeX2.Item.d56v9vczAXEgMhCY',
+      },
+    });
+  });
+
+  it('MF-2: a save-gated activity (synthetic) never qualifies as a self-buff', () => {
+    const actor = withShield();
+    const shield = (actor.items as FoundryItemDoc[]).find((i) => i._id === 'spellShield0001')!;
+    (shield.system as Record<string, unknown>).activities = {
+      a1: { type: 'utility' },
+      a2: { type: 'save' },
+    };
+    expect(build(actor, { kind: 'cast', actionId: 'spell.spellShield0001.cast', slotLevel: 1 })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'spellShield0001',
+    });
+  });
+
+  it('MF-2: Bane (real save-gated debuff, live-captured) never applies its penalties to the caster', () => {
+    const prepared: FoundryActorDoc = {
+      ...casterCaptured,
+      items: (casterCaptured.items ?? []).map((i) =>
+        i._id === '9FrgmKwWCYPhlZ5w'
+          ? { ...i, system: { ...(i.system as Record<string, unknown>), prepared: 1 } }
+          : i,
+      ),
+    };
+    expect(build(prepared, { kind: 'cast', actionId: 'spell.9FrgmKwWCYPhlZ5w.cast' })).toEqual({
+      endpoint: 'use-spell',
+      itemId: '9FrgmKwWCYPhlZ5w',
     });
   });
 });
