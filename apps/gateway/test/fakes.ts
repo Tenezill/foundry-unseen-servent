@@ -225,6 +225,15 @@ export class FakeRelay implements RelayPort {
     return structuredClone(this.useAbilityResult);
   }
 
+  castAtSlotCalls: Array<{ actorUuid: string; itemUuid: string; slotKey: string }> = [];
+  castAtSlotResult: Record<string, unknown> = {};
+  castAtSlotError: Error | null = null;
+  async castAtSlot(actorUuid: string, itemUuid: string, slotKey: string): Promise<Record<string, unknown>> {
+    if (this.castAtSlotError) throw this.castAtSlotError;
+    this.castAtSlotCalls.push({ actorUuid, itemUuid, slotKey });
+    return this.castAtSlotResult;
+  }
+
   async equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void> {
     this.equipCalls.push({ actorUuid, itemUuid, equipped });
     if (this.actionError) this.throwActionError('dnd5e/equip-item');
@@ -528,11 +537,10 @@ export const fakeAdapter: SystemAdapter = {
         if (intent.slotLevel !== undefined && !(desc.slotLevels ?? []).includes(intent.slotLevel)) {
           throw new IntentError(`illegal slot level ${intent.slotLevel}`, 'INVALID');
         }
-        return {
-          endpoint: 'use-spell',
-          itemId: 's1',
-          ...(intent.slotLevel !== undefined ? { slotLevel: intent.slotLevel } : {}),
-        };
+        if (intent.slotLevel !== undefined && intent.slotLevel > 1) {
+          return { endpoint: 'cast-at-slot', itemId: 's1', slotKey: `spell${intent.slotLevel}` };
+        }
+        return { endpoint: 'use-spell', itemId: 's1' };
       case 'equip':
         return { endpoint: 'equip-item', itemId: 'i1', equipped: intent.equipped };
       case 'attune':

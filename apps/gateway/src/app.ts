@@ -71,6 +71,8 @@ export interface RelayPort {
     itemUuid: string,
     opts?: { slotLevel?: number },
   ): Promise<Record<string, unknown>>;
+  /** POST /execute-js via foundry-client castAtSlot — upcast only. */
+  castAtSlot(actorUuid: string, itemUuid: string, slotKey: string): Promise<Record<string, unknown>>;
   /** POST /dnd5e/equip-item — toggle an item's equipped state (M6). */
   equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void>;
   /** POST /dnd5e/attune-item — set an item's attuned state (M12). */
@@ -275,7 +277,20 @@ function parseActionIntent(
     case 'damage':
       // Optional nat-20 flag: the adapter doubles the damage dice (5e crit).
       if (body.critical !== undefined && typeof body.critical !== 'boolean') return null;
-      return body.critical === undefined ? { kind, actionId } : { kind, actionId, critical: body.critical };
+      // Optional upcast level (deep bounds live in the adapter): scales the
+      // display formula's dice for the slot the spell was actually cast at.
+      if (
+        body.slotLevel !== undefined &&
+        (typeof body.slotLevel !== 'number' || !Number.isInteger(body.slotLevel) || body.slotLevel < 1)
+      ) {
+        return null;
+      }
+      return {
+        kind,
+        actionId,
+        ...(body.critical !== undefined ? { critical: body.critical } : {}),
+        ...(body.slotLevel !== undefined ? { slotLevel: body.slotLevel } : {}),
+      };
     case 'cast':
       if (
         body.slotLevel !== undefined &&
@@ -357,6 +372,14 @@ function extractRoll(value: unknown): ActionRollResult | null {
     };
   }
   return 'roll' in obj ? extractRoll(obj.roll) : null;
+}
+
+/** RelayError from execute-js when the module setting or API-key scope is
+ *  missing — surfaced as an actionable 422 instead of a generic 502. */
+function upcastUnavailable(err: unknown): string | null {
+  if (!(err instanceof Error) || err.name !== 'RelayError') return null;
+  if (!/execute-js/i.test(err.message)) return null;
+  return 'Upcasting is not enabled on the table: enable "Allow Execute JS" in the Foundry REST API module settings and grant the relay API key the execute-js scope.';
 }
 
 /**
@@ -964,6 +987,17 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
             ),
           );
           break;
+        case 'cast-at-slot':
+          try {
+            result = extractRoll(
+              await relay.castAtSlot(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.slotKey),
+            );
+          } catch (err) {
+            const mapped = upcastUnavailable(err);
+            if (mapped) return sendError(reply, 422, 'INVALID_INTENT', mapped);
+            throw err;
+          }
+          break;
         case 'equip-item':
           await relay.equipItem(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.equipped);
           break;
@@ -984,8 +1018,14 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           // self-heal write. All field paths are adapter-supplied so this
           // stays system-agnostic.
           try {
-            await relay.useAbility(action.use, `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {});
+            if (action.use === 'cast-at-slot') {
+              await relay.castAtSlot(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.slotKey as string);
+            } else {
+              await relay.useAbility(action.use, `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {});
+            }
           } catch (err) {
+            const mapped = upcastUnavailable(err);
+            if (mapped) return sendError(reply, 422, 'INVALID_INTENT', mapped);
             // A relay 408 means Foundry's usage workflow is waiting on
             // optional UI (live-verified 2026-07-10: Bead of Force's
             // area-template prompt) — consumption has already completed by

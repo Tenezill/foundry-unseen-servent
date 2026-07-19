@@ -380,17 +380,31 @@ describe('actions', () => {
     expect(body.sheet.actorId).toBe('a1');
   });
 
-  it('cast with slotLevel 2 -> use-spell on the item uuid with the slot level', async () => {
+  it('cast with a higher slotLevel routes through cast-at-slot', async () => {
     const { app, relay } = setup();
-    relay.useAbilityResult = { roll: { total: 11, formula: '4d6', isCritical: false, isFumble: false } };
+    relay.castAtSlotResult = { roll: { total: 18, formula: '1d20 + 7', isCritical: false, isFumble: false } };
     const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 2 });
     expect(res.statusCode).toBe(200);
-    expect(relay.useAbilityCalls).toEqual([
-      { endpoint: 'use-spell', actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.s1', opts: { slotLevel: 2 } },
+    expect(relay.castAtSlotCalls).toEqual([
+      { actorUuid: 'Actor.a1', itemUuid: 'Actor.a1.Item.s1', slotKey: 'spell2' },
     ]);
-    const body = res.json();
-    expect(body.result).toEqual({ total: 11, formula: '4d6', isCritical: false, isFumble: false });
-    expect(body.sheet.actorId).toBe('a1');
+    expect(res.json().result).toEqual({ total: 18, formula: '1d20 + 7', isCritical: false, isFumble: false });
+  });
+
+  it('execute-js disabled on the module -> 422 naming the setting', async () => {
+    const { app, relay } = setup();
+    const err = new Error('execute-js is disabled in REST API module settings. A GM must enable it…');
+    err.name = 'RelayError';
+    relay.castAtSlotError = err;
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.s1.cast', slotLevel: 2 });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.message).toMatch(/Allow Execute JS/);
+  });
+
+  it('damage accepts an integer slotLevel and rejects junk', async () => {
+    const { app } = setup();
+    const bad = await post(app, 'a1', { kind: 'damage', actionId: 'item.i1.damage', slotLevel: 1.5 });
+    expect(bad.statusCode).toBe(422);
   });
 
   it('damage with critical: true reaches the adapter and rolls the doubled formula', async () => {
