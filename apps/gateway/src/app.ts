@@ -1163,6 +1163,13 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           // Foundry's job, same reasoning as use-and-roll above) THEN create
           // the effect via the relay's embedded-upsert, since the headless
           // use-flow never applies self-effects (see EffectPayload comment).
+          // The target permission gate is checked BEFORE activation: it's
+          // pure over action/id/deps (no dependency on the activation
+          // result), so a forbidden target must never burn the caster's slot.
+          const targetId = action.targetActorId ?? id;
+          if (!buffTargetAllowed(targetId, id, deps)) {
+            return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'cannot target that actor');
+          }
           try {
             if (action.use === 'cast-at-slot') {
               await relay.castAtSlot(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.slotKey as string);
@@ -1177,10 +1184,6 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
               if (mapped) return sendError(reply, 422, 'INVALID_INTENT', mapped);
               throw err;
             }
-          }
-          const targetId = action.targetActorId ?? id;
-          if (!buffTargetAllowed(targetId, id, deps)) {
-            return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'cannot target that actor');
           }
           await relay.applyEffect(`Actor.${targetId}`, {
             _id: mintEffectId(),

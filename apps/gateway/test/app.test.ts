@@ -11,7 +11,7 @@ interface EventStream {
 }
 import { IntentError, type SystemAdapter } from '@companion/adapter-sdk';
 import { wod5eAdapter } from '@companion/adapter-wod5e';
-import { buildApp, isSafeDiceFormula } from '../src/app.js';
+import { buildApp, isSafeDiceFormula, type EncounterManagerPort } from '../src/app.js';
 import { sha256Hex, type Player } from '../src/players.js';
 import { createRegistry } from '../src/registry.js';
 import {
@@ -39,7 +39,7 @@ function makePlayers(): Player[] {
 let app: FastifyInstance | null = null;
 
 function setup(
-  overrides: { rateLimitMax?: number; customItemTimeoutMs?: number } = {},
+  overrides: { rateLimitMax?: number; customItemTimeoutMs?: number; encounters?: EncounterManagerPort } = {},
 ): { app: FastifyInstance; relay: FakeRelay } {
   const relay = new FakeRelay();
   relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
@@ -54,6 +54,7 @@ function setup(
     pingMs: 60_000,
     ...(overrides.rateLimitMax !== undefined ? { rateLimitMax: overrides.rateLimitMax } : {}),
     ...(overrides.customItemTimeoutMs !== undefined ? { customItemTimeoutMs: overrides.customItemTimeoutMs } : {}),
+    ...(overrides.encounters !== undefined ? { encounters: overrides.encounters } : {}),
   });
   return { app, relay };
 }
@@ -107,6 +108,28 @@ describe('GET /api/party', () => {
     expect(actors.find((a) => a.id === 'b1')).toMatchObject({ name: 'Mysterious Stranger', img: 'icons/b1.webp' });
     // 'ghost' has no backing relay entity -> bare id, no name/img
     expect(actors.find((a) => a.id === 'ghost')).toEqual({ id: 'ghost' });
+  });
+
+  it('dedupes an actor co-owned by two players', async () => {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
+    const dedupApp = buildApp({
+      relay,
+      players: memoryPlayers([
+        { name: 'Anna', tokenHash: sha256Hex(ANNA_TOKEN), actorIds: ['a1'] },
+        { name: 'Bob', tokenHash: sha256Hex(BOB_TOKEN), actorIds: ['a1'] },
+      ]),
+      registry: createRegistry([fakeAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+    });
+    try {
+      const res = await dedupApp.inject({ method: 'GET', url: '/api/party', headers: asAnna });
+      expect((res.json().actors as Array<{ id: string }>).filter((a) => a.id === 'a1')).toHaveLength(1);
+    } finally {
+      await dedupApp.close();
+    }
   });
 
   it('401 without a token', async () => {
@@ -868,6 +891,20 @@ describe('actions', () => {
     const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.b1.cast', slotLevel: 1, targetActorId: 'STRANGERACTORXX' });
     expect(res.statusCode).toBe(403);
     expect(relay.applyEffectCalls.every((c) => c.actorUuid !== 'Actor.STRANGERACTORXX')).toBe(true);
+    // The gate runs before activation: a forbidden target must never burn the caster's slot.
+    expect(relay.useAbilityCalls).toHaveLength(0);
+    expect(relay.castAtSlotCalls).toHaveLength(0);
+    expect(relay.applyEffectCalls).toHaveLength(0);
+  });
+
+  it('cast-and-apply-effect applies to a combatant that is not a party member', async () => {
+    const encounters = {
+      view: () => ({ active: true, combatants: [{ id: 'c1', actorId: 'monsterX000000001' }] }),
+    } as unknown as EncounterManagerPort;
+    const { app, relay } = setup({ encounters });
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.b1.cast', slotLevel: 1, targetActorId: 'monsterX000000001' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.applyEffectCalls.at(-1)!.actorUuid).toBe('Actor.monsterX000000001');
   });
 
   it('no targetActorId applies to the caster', async () => {
