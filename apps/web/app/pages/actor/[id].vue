@@ -235,6 +235,7 @@
         v-if="sheetAction"
         :action="sheetAction"
         :busy="actionBusy !== null"
+        :slots-left="slotsLeft"
         @submit="onActionSubmit"
         @close="actionSheetFor = null"
       />
@@ -1031,12 +1032,34 @@ function updateCritArmed(intent: ActionIntent, result: ActionRollResult): void {
     if (result.isCritical === true) next.add(damageId)
     else next.delete(damageId)
     critArmed.value = next
-  } else if (intent.kind === 'damage' && critArmed.value.has(intent.actionId)) {
-    const next = new Set(critArmed.value)
-    next.delete(intent.actionId)
-    critArmed.value = next
+  } else if (intent.kind === 'damage') {
+    if (critArmed.value.has(intent.actionId)) {
+      const next = new Set(critArmed.value)
+      next.delete(intent.actionId)
+      critArmed.value = next
+    }
+    if (intent.actionId in castLevels.value) {
+      const next = { ...castLevels.value }
+      delete next[intent.actionId]
+      castLevels.value = next
+    }
   }
 }
+
+/** Remaining slots per level, for the upcast picker labels. */
+const slotsLeft = computed<Record<number, number>>(() => {
+  const out: Record<number, number> = {}
+  for (const r of sheet.value?.resources ?? []) {
+    const m = /^slots\.([1-9])$/.exec(r.id)
+    if (m) out[Number(m[1])] = r.value
+  }
+  return out
+})
+
+/** Upcast memory (2026-07-19): the level each spell was last cast at, keyed
+ *  by its damage-action id — the companion Dmg roll sends it so the display
+ *  dice scale. Consumed by that roll; overwritten by the next cast. */
+const castLevels = ref<Record<string, number>>({})
 
 /** M15: heal -> "+N HP", damage (weapon or spell) -> "N dmg", everything
  *  else keeps today's plain total. Only the displayed label changes —
@@ -1166,8 +1189,9 @@ function onAction(actionId: string): void {
       break
     case 'damage': {
       const crit = critArmed.value.has(actionId)
+      const lvl = castLevels.value[actionId]
       void submitAction(
-        { kind: 'damage', actionId, ...(crit ? { critical: true } : {}) },
+        { kind: 'damage', actionId, ...(crit ? { critical: true } : {}), ...(lvl !== undefined ? { slotLevel: lvl } : {}) },
         `${action.label} — ${crit ? 'Critical Damage' : 'Damage'}`,
       )
       break
@@ -1214,6 +1238,12 @@ function onCombatAction(actionId: string): void {
       return
     }
     if (action.slotLevels.length === 0) return
+    if (action.slotLevels.length === 1) {
+      void submitAction({ kind: 'cast', actionId, slotLevel: action.slotLevels[0] }, action.label, action.effectType)
+      return
+    }
+    actionSheetFor.value = actionId
+    return
   }
   onAction(actionId)
 }
@@ -1531,6 +1561,9 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
       body: intent,
     })
     applySheet(res.sheet)
+    if (intent.kind === 'cast' && intent.slotLevel !== undefined) {
+      castLevels.value = { ...castLevels.value, [intent.actionId.replace(/\.cast$/, '.damage')]: intent.slotLevel }
+    }
     if (res.result) {
       updateCritArmed(intent, res.result)
       // Weapon damage rolls carry their effect via the intent kind itself
@@ -1583,7 +1616,9 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
       // pretending the cached sheet works.
       showNotLinked()
     } else if (status === 403 || status === 422) {
-      toast.show('That action isn’t available right now.')
+      const msg = errorData<{ error?: { message?: string } }>(err)?.error?.message
+      if (msg && /Allow Execute JS/i.test(msg)) toast.show(msg)
+      else toast.show('That action isn’t available right now.')
       void fetchSheet()
     } else if (status === 429) {
       toast.show('Slow down — too many actions at once')

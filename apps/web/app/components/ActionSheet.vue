@@ -35,7 +35,7 @@
             :disabled="busy"
             @click="cast(lvl)"
           >
-            Cast at {{ ordinal(lvl) }} level
+            Cast at {{ ordinal(lvl) }} level{{ props.slotsLeft?.[lvl] !== undefined ? ` · ${props.slotsLeft[lvl]} left` : '' }}
           </button>
           <p v-if="action.slotLevels.length === 0" class="none">
             No spell slots left for this spell.
@@ -51,7 +51,7 @@
 <script setup lang="ts">
 import type { ActionDescriptor, ActionIntent } from '@companion/adapter-sdk'
 
-const props = defineProps<{ action: ActionDescriptor; busy: boolean }>()
+const props = defineProps<{ action: ActionDescriptor; busy: boolean; slotsLeft?: Record<number, number> }>()
 
 const emit = defineEmits<{
   (e: 'submit', intent: ActionIntent): void
