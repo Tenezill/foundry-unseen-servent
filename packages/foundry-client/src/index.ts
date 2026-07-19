@@ -318,6 +318,9 @@ export class FoundryRelayClient {
    * `execute-js` AND the module setting "Allow Execute JS".
    * Only validated ids/slot keys are interpolated, via JSON.stringify —
    * callers can never inject script text.
+   * `actorUuid` is validated for defense-in-depth/API symmetry with the
+   * other methods but is never interpolated into the script — the item
+   * uuid alone resolves the actor via `fromUuid`.
    */
   async castAtSlot(actorUuid: string, itemUuid: string, slotKey: string): Promise<Record<string, unknown>> {
     if (!/^Actor\.[A-Za-z0-9]{1,32}$/.test(actorUuid)) throw new Error(`castAtSlot: invalid actorUuid "${actorUuid}"`);
@@ -345,9 +348,15 @@ export class FoundryRelayClient {
       `} finally { Hooks.off('dnd5e.rollAttackV2', hookId); }`,
       `return attackRoll ? { roll: { total: attackRoll.total, formula: attackRoll.formula, isCritical: attackRoll.isCritical ?? false, isFumble: attackRoll.isFumble ?? false } } : {};`,
     ].join('\n');
-    const body = await this.request<Record<string, unknown>>('POST', '/execute-js', {}, { script });
+    const body = await this.request<{ result?: unknown; error?: string; success?: boolean }>('POST', '/execute-js', {}, { script });
+    if (typeof body.error === 'string' && body.error !== '') {
+      throw new RelayError(`relay /execute-js: ${body.error}`, 200, '/execute-js');
+    }
+    if (body.success === false) {
+      throw new RelayError('relay /execute-js: reported failure with no error text', 200, '/execute-js');
+    }
     const result = body.result;
-    return result !== null && typeof result === 'object' ? (result as Record<string, unknown>) : body;
+    return result !== null && typeof result === 'object' ? (result as Record<string, unknown>) : (body as Record<string, unknown>);
   }
 
   /** POST /dnd5e/equip-item — toggle an embedded item's equipped state. */

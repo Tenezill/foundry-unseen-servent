@@ -468,6 +468,35 @@ describe('FoundryRelayClient.castAtSlot()', () => {
     const res = await client.castAtSlot('Actor.abc123', 'Actor.abc123.Item.def456', 'spell3');
     expect(res).toEqual({ success: true });
   });
+
+  it('rejects with a RelayError carrying the error text when the 200 body reports execute-js disabled', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({
+        success: false,
+        error: 'execute-js is disabled in REST API module settings',
+      }),
+      text: vi.fn(),
+    });
+
+    await expect(client.castAtSlot('Actor.abc123', 'Actor.abc123.Item.def456', 'spell3')).rejects.toThrow(
+      /execute-js is disabled in REST API module settings/,
+    );
+  });
+
+  it('rejects when the 200 body reports success: false with no error text', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({ success: false }),
+      text: vi.fn(),
+    });
+
+    await expect(client.castAtSlot('Actor.abc123', 'Actor.abc123.Item.def456', 'spell3')).rejects.toThrow(
+      /reported failure/,
+    );
+  });
 });
 
 describe('FoundryRelayClient — provider-based credentials (turnkey)', () => {
