@@ -484,6 +484,18 @@ export class FoundryRelayClient {
   }
 
   /**
+   * PUT /update — create/replace an Active Effect on an actor via the relay's
+   * embedded-doc upsert (the effect is upserted by its `_id`). Used to apply
+   * buff-spell effects the headless use-flow never applies (2026-07-19; see
+   * docs/M-buff-effects-findings.md). Needs only `entity:write` — no
+   * execute-js. `effect` is a full AE document (the caller supplies `_id`
+   * and flags).
+   */
+  async applyEffect(actorUuid: string, effect: Record<string, unknown>): Promise<void> {
+    await this.request('PUT', '/update', { uuid: actorUuid }, { data: { effects: [effect] } });
+  }
+
+  /**
    * GET /hooks/subscribe?hooks=updateActor,… — SSE push of Foundry hook
    * events. This is the live feed that works (M0-verified); a single
    * subscription covers all actors — filter by the document `_id` in

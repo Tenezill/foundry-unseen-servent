@@ -499,6 +499,40 @@ describe('FoundryRelayClient.castAtSlot()', () => {
   });
 });
 
+describe('FoundryRelayClient.applyEffect()', () => {
+  let client: FoundryRelayClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new FoundryRelayClient({
+      baseUrl: 'http://relay:3010',
+      apiKey: 'test-api-key',
+      clientId: 'fvtt_test123',
+    });
+  });
+
+  it('PUTs /update with the actor uuid in the query and an effects-upsert body', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({}),
+      text: vi.fn(),
+    });
+
+    const effect = { _id: 'aeXXXXXXXXXXXXXX', name: 'Shield', changes: [] };
+    await client.applyEffect('Actor.abc123', effect);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/update');
+    expect(url).toContain('uuid=Actor.abc123');
+    expect(url).toContain('clientId=fvtt_test123');
+    expect(init.method).toBe('PUT');
+    expect((init.headers as Record<string, string>)['x-api-key']).toBe('test-api-key');
+    expect(JSON.parse(init.body as string)).toEqual({ data: { effects: [effect] } });
+  });
+});
+
 describe('FoundryRelayClient — provider-based credentials (turnkey)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
