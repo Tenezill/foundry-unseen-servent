@@ -11,6 +11,13 @@
       />
       <span v-else class="dot" aria-hidden="true" />
       {{ c.label }}
+      <button
+        v-if="c.removeActionId"
+        type="button"
+        class="remove"
+        :aria-label="`Remove ${c.label}`"
+        @click="emit('action', c.removeActionId!)"
+      >×</button>
     </span>
   </div>
 </template>
@@ -19,6 +26,7 @@
 import type { Condition } from '@companion/adapter-sdk'
 
 const props = defineProps<{ conditions: Condition[] }>()
+const emit = defineEmits<{ (e: 'action', actionId: string): void }>()
 
 const config = useRuntimeConfig()
 const foundryBase = String(config.public.foundryBase || '')
@@ -66,5 +74,18 @@ function iconOf(c: Condition): string | undefined {
   background: var(--garnet);
   box-shadow: 0 0 6px color-mix(in srgb, var(--garnet) 60%, transparent);
   flex: none;
+}
+
+.remove {
+  margin-left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: color-mix(in srgb, var(--garnet) 24%, transparent);
+  color: var(--garnet);
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
 }
 </style>

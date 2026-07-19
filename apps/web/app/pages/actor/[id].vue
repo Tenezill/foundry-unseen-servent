@@ -47,7 +47,7 @@
           @end="onEndConcentration"
         />
 
-        <ConditionBadges v-if="sheet.conditions?.length" :conditions="sheet.conditions" />
+        <ConditionBadges v-if="sheet.conditions?.length" :conditions="sheet.conditions" @action="onConditionAction" />
 
         <div v-if="offline" class="offline-banner">
           Offline — showing your last known sheet, read-only.
@@ -1309,6 +1309,16 @@ function onEndConcentration(): void {
   void submitAction({ kind: 'endconcentration', actionId: 'concentration.end' }, `End ${label}`)
 }
 
+async function onConditionAction(actionId: string): Promise<void> {
+  if (offline.value || actionBusy.value) return
+  const action = actionMap.value[actionId]
+  if (!action || action.kind !== 'endeffect') return
+  const label = action.label.replace(/^End /, '')
+  const ok = await askConfirm(`Remove ${label}?`)
+  if (!ok) return
+  void submitAction({ kind: 'endeffect', actionId }, action.label)
+}
+
 /** M23: pool rolls and the Rouse check are wod5e's "successes counted, no
  *  total" mechanic — a RollResultPill (built for d20 totals/crits) doesn't
  *  fit, so both surface their outcome as a toast instead of submitAction's
@@ -1632,6 +1642,9 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
         break
       case 'deathsave':
         toast.show('Death save rolled — see Foundry chat')
+        break
+      case 'endeffect':
+        toast.show(`${label.replace(/^End /, '')} removed`)
         break
       default:
         toast.show(`${label} done — see Foundry chat`)
