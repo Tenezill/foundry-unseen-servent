@@ -36,26 +36,40 @@ would show as a badge AND AC would read 16. So the fix is: **after casting a
 buff spell that carries a self-applicable Active Effect, explicitly apply that
 effect to the caster** (Foundry won't, headless).
 
-### Mechanism options (decision needed before building)
-1. **Relay `create` an embedded ActiveEffect on the actor** (mirrors the
-   existing hand-add-item chain create→give). Copy the item effect's
-   name/changes/duration/img, set `origin` to the spell item, flag it
-   `flags.unseen-servent.appliedBy` so we can find/remove it. No execute-js
-   dependency; pure entity write (needs `entity:write`, already granted).
-   Cleanest + charter-aligned.
-2. **execute-js** apply (now that it's enabled): a script that applies the
-   activity's effects to the actor. Couples buff-application to the execute-js
-   setting (same gate as upcasting) — avoid unless option 1 can't carry the
-   effect faithfully.
+### Mechanism — DECIDED + LIVE-PROVEN (2026-07-19)
+**Relay `PUT /update` with an embedded-effect upsert** — the relay's entity
+update handler upserts embedded docs by `_id`, so posting
+`data: { effects: [ ae ] }` to `/update?uuid=Actor.<id>` CREATES the effect.
+No execute-js dependency; needs only `entity:write` (always minted), so buff
+apply works on every install regardless of the "Allow Execute JS" setting.
 
-Recommendation: **option 1.** Self-targeted-only to start (Shield, Mage Armor
-on self); a self/other target picker is a later increment. Manual "tap AC, add
-a modifier" stays a fallback only if AE-create proves unreliable.
+Two live self-reverting probes confirmed the whole chain:
+1. `createEmbeddedDocuments` of a Shield-copied AE → `ac.value` 11→16,
+   `ac.bonus` 5, effect present (→ badge); delete → 11.
+2. **Relay `/update`** with `{data:{effects:[{_id,name,changes:[{key:
+   "system.attributes.ac.bonus",mode:2,value:"+5"}],flags:{unseen-servent:
+   {appliedBy}}}]}}` → `get-actor-details stats.ac` (the app's own AC source)
+   returned **16**; cleanup via delete → 11.
 
-### Open sub-questions for the build
+So the build: on a self-buff cast, after the normal `use-spell` activation,
+PUT-update the actor with an effect copied from the spell item's own AE
+(generated `_id`, `origin` = spell uuid, flag `flags.unseen-servent.appliedBy`
+so it's findable). The next sheet re-fetch shows the badge (`parseEffects`) and
+AC 16 (`enrich`→`stats.ac`) for free. Removal = delete the flagged effect via
+an "End <buff>" action mirroring End Concentration.
+
+Decisions (user-approved 2026-07-19): auto-apply as a condition (not a manual
+AC modifier), **self-target only** first (a self/other picker is a later
+increment). Manual "tap AC + modifier" is dropped unless a real need appears.
+
+### Open sub-questions for the build (for the plan/live-verify)
 - **Which spells qualify?** A spell whose item (or activity) carries an AE
   with `transfer:false` and at least one change, cast at self. Need to detect
   this in the adapter without a rules engine (data-shape only).
+- **Cast flow shape.** Pressing Cast on a self-buff should do BOTH: the normal
+  `use-spell` (consume slot, post card) AND the effect PUT-update — model as a
+  new RelayAction (e.g. `cast-and-apply-effect`) or extend `use-and-roll`'s
+  activate-then-do shape. Upcast (cast-at-slot) + buff-apply must compose.
 - **Duration:** Shield's `expiry:"turnStart"` is combat-shaped; outside combat
   it simply persists (worldTime doesn't advance per turn). Acceptable — the
   player (or GM) drops it; we already have an effect-removal path idea.
