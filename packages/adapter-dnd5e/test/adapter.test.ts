@@ -1656,6 +1656,24 @@ describe('Saving Throw Notes section (2026-07-19)', () => {
     expect(section.stats).toHaveLength(1);
   });
 
+  it('dedupes race-name-prefixed duplicates, keeping the clean feat sentence', () => {
+    // Live-data gap (2026-07-19): race items embed the trait name INSIDE the
+    // sentence with no colon separator ("Dwarven Resilience You have
+    // advantage…"), so the naive lowercased-full-sentence key never matches
+    // the clean standalone trait feat's sentence. 4/9 live PCs showed every
+    // racial note twice until the dedupe key was anchored at the "you have
+    // advantage…" gate match instead of the full sentence.
+    const actor = actorWithFeats([
+      { name: 'Mountain Dwarf', type: 'race', desc: '<p>Dwarven Resilience You have advantage on saving throws against poison.</p>' },
+      { name: 'Dwarven Resilience', desc: '<p>You have advantage on saving throws against poison.</p>' },
+    ]);
+    const section = dnd5eAdapter.toViewModel(actor).sections.find((s) => s.id === 'savenotes');
+    if (section?.kind !== 'stats') throw new Error('savenotes must be a stats section');
+    expect(section.stats).toHaveLength(1);
+    expect(section.stats[0]?.value).toBe('You have advantage on saving throws against poison.');
+    expect(section.stats[0]?.label).toBe('Dwarven Resilience');
+  });
+
   it('resolves enricher tokens and caps runaway sentences at 200 chars', () => {
     const longTail = 'that you can see, such as traps and spells, and also '.repeat(6);
     const actor = actorWithFeats([

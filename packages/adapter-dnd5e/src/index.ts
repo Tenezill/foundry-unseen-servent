@@ -906,6 +906,13 @@ const SAVE_NOTE_ITEM_TYPES = new Set(['feat', 'race', 'background', 'equipment',
 /** One qualifying sentence: mentions (dis)advantage AND saving throw(s). */
 const SAVE_NOTE_SENTENCE = /[^.!?]*\b(?:dis)?advantage\b[^.!?]*\bsaving throws?\b[^.!?]*[.!?]/gi;
 
+/** The player must be the explicit subject of the (dis)advantage grant
+ * ("you have advantage", "…of you have advantage", "you also gain
+ * advantage") — also anchors the dedupe key (see saveNoteStats) so a race
+ * item's trait-name prefix ("Dwarven Resilience You have advantage…") can't
+ * defeat matching against the clean standalone trait feat's sentence. */
+const SAVE_NOTE_SUBJECT_GATE = /\byou(?:\s+\w+)?\s+(?:have|gain|get|make)s?\s+(?:dis)?advantage\b/i;
+
 /**
  * D&D-Beyond-style situational save reminders (2026-07-19). The structured
  * data does NOT exist in dnd5e/ddb-importer documents — the only source is
@@ -915,7 +922,9 @@ const SAVE_NOTE_SENTENCE = /[^.!?]*\b(?:dis)?advantage\b[^.!?]*\bsaving throws?\
  */
 function saveNoteStats(actor: FoundryActorDoc): Stat[] {
   const out: Stat[] = [];
-  const seen = new Set<string>();
+  // key -> index into `out`, so a later shorter duplicate can replace a
+  // race-name-prefixed row already emitted (see the dedupe-key comment below).
+  const seen = new Map<string, number>();
   for (const item of actor.items ?? []) {
     if (!SAVE_NOTE_ITEM_TYPES.has(item.type)) continue;
     const html = strAt(item.system, 'description.value') ?? '';
@@ -936,15 +945,34 @@ function saveNoteStats(actor: FoundryActorDoc): Stat[] {
       if (colon !== -1) sentence = sentence.slice(colon + 1);
       sentence = sentence.trim();
       // Only the player's own saves: the (dis)advantage must be granted to
-      // "you" as its subject ("you have advantage", "…of you have advantage",
-      // "you also gain advantage"). A looser earlier-"you" test wrongly keeps
-      // "When you do so, undead have disadvantage…" (Holy Symbol of Ravenkind).
-      if (!/\byou(?:\s+\w+)?\s+(?:have|gain|get|make)s?\s+(?:dis)?advantage\b/i.test(sentence)) continue;
+      // "you" as its subject. A looser earlier-"you" test wrongly keeps "When
+      // you do so, undead have disadvantage…" (Holy Symbol of Ravenkind).
+      const gateMatch = SAVE_NOTE_SUBJECT_GATE.exec(sentence);
+      if (!gateMatch) continue;
       if (sentence.length > 200) sentence = `${sentence.slice(0, 199).trimEnd()}…`;
-      const key = sentence.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ id: `savenote.${out.length}`, label: item.name, value: sentence });
+      // Dedupe key starts at the subject-gate match ("you have advantage…"
+      // onward), not the full sentence: race items embed the trait name
+      // INSIDE the sentence with no colon separator ("Dwarven Resilience You
+      // have advantage on saving throws against poison…"), which otherwise
+      // defeats matching against the clean standalone trait feat's identical
+      // tail (live-verified 2026-07-19: 4/9 party PCs doubled every racial
+      // note).
+      const key = sentence.slice(gateMatch.index).toLowerCase();
+      const existingIndex = seen.get(key);
+      if (existingIndex === undefined) {
+        seen.set(key, out.length);
+        out.push({ id: `savenote.${out.length}`, label: item.name, value: sentence });
+        continue;
+      }
+      const existing = out[existingIndex];
+      // A strictly shorter duplicate is the clean feat sentence without the
+      // race's name prefix — it wins in place, regardless of item order
+      // (race items serialize before their trait feats in live data). Equal
+      // length (e.g. both already colon-trimmed to the same clause) keeps
+      // the first source, unchanged.
+      if (existing && sentence.length < String(existing.value).length) {
+        out[existingIndex] = { ...existing, label: item.name, value: sentence };
+      }
     }
   }
   return out;
