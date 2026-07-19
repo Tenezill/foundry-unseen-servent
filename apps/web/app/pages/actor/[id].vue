@@ -239,7 +239,14 @@
         :busy="actionBusy !== null"
         :slots-left="slotsLeft"
         @submit="onActionSubmit"
-        @close="actionSheetFor = null"
+        @close="closeActionSheet"
+      />
+      <TargetPickerSheet
+        v-if="targetPickerFor"
+        :encounter="encounter"
+        :party="party"
+        @pick="onTargetPick"
+        @close="targetPickerFor = null"
       />
       <PoolRollSheet
         v-if="poolAction"
@@ -345,6 +352,7 @@ import type {
   LibraryPreviewResponse,
   LibrarySearchEntry,
   LibrarySearchResponse,
+  PartyView,
   RollLogEntry,
   SheetResponse,
 } from '~/types/api'
@@ -512,6 +520,86 @@ const actionSheetFor = ref<string | null>(null)
 const sheetAction = computed(() =>
   actionSheetFor.value ? (actionMap.value[actionSheetFor.value] ?? null) : null,
 )
+
+/* ---- target picker (2026-07-19) -------------------------------------------
+ * Creature-targetable buff casts (Bless, Aid, Mage Armor, Shield of Faith…)
+ * open this picker BEFORE casting; self-only buffs (Shield) keep
+ * auto-applying to the caster, untouched. Target first, then — if the spell
+ * also has a multi-level slot choice — the existing ActionSheet upcast
+ * picker; pendingTargetActorId carries the choice across that second sheet. */
+const targetPickerFor = ref<string | null>(null)
+const party = ref<PartyView | null>(null)
+const pendingTargetActorId = ref<string | undefined>(undefined)
+
+/** Lazy + cached: only fetched the first time a targetable cast opens the
+ *  picker with no active encounter. Left null on failure so the picker's
+ *  "Loading party…" hint stays honest and a later reopen retries. */
+async function loadParty(): Promise<void> {
+  if (party.value !== null) return
+  try {
+    party.value = await api<PartyView>('/api/party')
+  } catch {
+    /* leave null — reopening the picker retries */
+  }
+}
+
+/** Best-known display name for a chosen target: the live combat roster
+ *  first (freshest for an active encounter), else the party roster. */
+function targetNameFor(targetActorId: string | undefined): string | undefined {
+  if (!targetActorId) return undefined
+  return (
+    encounter.value.combatants?.find((c) => c.actorId === targetActorId)?.name ??
+    party.value?.actors.find((a) => a.id === targetActorId)?.name
+  )
+}
+
+/** "<label>" unchanged for self; "<label> on <target name>" once a non-self
+ *  target is known — feeds the roll/toast label and roll-history entry. */
+function castLabel(label: string, targetActorId: string | undefined): string {
+  if (!targetActorId) return label
+  const name = targetNameFor(targetActorId)
+  return name ? `${label} on ${name}` : label
+}
+
+function openTargetPicker(actionId: string): void {
+  targetPickerFor.value = actionId
+  if (!encounterActive.value) void loadParty()
+}
+
+function closeActionSheet(): void {
+  actionSheetFor.value = null
+  pendingTargetActorId.value = undefined
+}
+
+/** After a target is chosen: a multi-level slot choice opens the existing
+ *  upcast picker next (target carried via pendingTargetActorId, consumed in
+ *  onActionSubmit); otherwise cast immediately with whatever single/absent
+ *  slot level the descriptor already resolved. */
+function onTargetPick(targetActorId: string | null): void {
+  const actionId = targetPickerFor.value
+  targetPickerFor.value = null
+  if (!actionId) return
+  const action = actionMap.value[actionId]
+  if (!action || action.kind !== 'cast') return
+  const resolvedTarget = targetActorId ?? undefined
+  if (action.slotLevels !== undefined && action.slotLevels.length > 1) {
+    pendingTargetActorId.value = resolvedTarget
+    actionSheetFor.value = actionId
+    return
+  }
+  if (action.slotLevels?.length === 0) return
+  const slotLevel = action.slotLevels?.length === 1 ? action.slotLevels[0] : undefined
+  void submitAction(
+    {
+      kind: 'cast',
+      actionId,
+      ...(slotLevel !== undefined ? { slotLevel } : {}),
+      ...(resolvedTarget ? { targetActorId: resolvedTarget } : {}),
+    },
+    castLabel(action.label, resolvedTarget),
+    action.effectType,
+  )
+}
 
 /* ---- M8 derived vitals -------------------------------------------------- */
 
@@ -1213,8 +1301,11 @@ function onAction(actionId: string): void {
   switch (action.kind) {
     case 'check':
     case 'save':
-    case 'cast':
       actionSheetFor.value = actionId
+      break
+    case 'cast':
+      if (action.targetable) openTargetPicker(actionId)
+      else actionSheetFor.value = actionId
       break
     case 'attack':
       void submitAction({ kind: 'attack', actionId }, action.label)
@@ -1265,6 +1356,10 @@ function onCombatAction(actionId: string): void {
   const action = actionMap.value[actionId]
   if (!action) return
   if (action.kind === 'cast') {
+    if (action.targetable) {
+      openTargetPicker(actionId)
+      return
+    }
     if (action.slotLevels === undefined) {
       void submitAction({ kind: 'cast', actionId }, action.label, action.effectType)
       return
@@ -1283,7 +1378,13 @@ function onCombatAction(actionId: string): void {
 function onActionSubmit(intent: ActionIntent): void {
   const action = actionMap.value[intent.actionId]
   actionSheetFor.value = null
-  void submitAction(intent, action?.label ?? 'Roll', action?.effectType)
+  const targetActorId = pendingTargetActorId.value
+  pendingTargetActorId.value = undefined
+  const finalIntent: ActionIntent =
+    intent.kind === 'cast' && targetActorId ? { ...intent, targetActorId } : intent
+  const label =
+    intent.kind === 'cast' ? castLabel(action?.label ?? 'Roll', targetActorId) : (action?.label ?? 'Roll')
+  void submitAction(finalIntent, label, action?.effectType)
 }
 
 async function onRest(kind: 'short' | 'long'): Promise<void> {

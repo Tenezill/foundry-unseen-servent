@@ -131,3 +131,8 @@ export interface EncounterView {
 export interface EncounterHpResponse {
   encounter: EncounterView
 }
+
+/** GET /api/party — roster for the out-of-combat buff target picker. */
+export interface PartyView {
+  actors: Array<{ id: string; name?: string; img?: string }>
+}
