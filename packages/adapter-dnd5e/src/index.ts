@@ -28,6 +28,7 @@ import type {
   ActionIntent,
   AdapterIO,
   Condition,
+  EffectPayload,
   FoundryActorDoc,
   FoundryItemDoc,
   FoundryUpdate,
@@ -1337,6 +1338,47 @@ function effectTypeOf(item: FoundryItemDoc): 'damage' | 'heal' | 'utility' {
 }
 
 /**
+ * The Active Effect a self-buff spell should apply to the caster on cast, or
+ * undefined. Data-shape only (no rules engine): the spell item carries an
+ * effect that is applied on use — `transfer: false` (not a passive/always-on
+ * effect) with at least one `change` — and the spell isn't a heal/damage
+ * effect. Copied verbatim; `origin` points at the embedded item so Foundry
+ * shows provenance. dnd5e/DAE never applies these headless (M-buff-effects
+ * findings), so the gateway creates the effect itself.
+ */
+function selfBuffEffect(actor: FoundryActorDoc, item: FoundryItemDoc): EffectPayload | undefined {
+  if (item.type !== 'spell') return undefined;
+  if (effectTypeOf(item) !== 'utility') return undefined; // heals/damage handled elsewhere
+  const rawEffects = getPath(item, 'effects');
+  const effects = Array.isArray(rawEffects) ? rawEffects : [];
+  for (const raw of effects) {
+    const eff = rec(raw);
+    if (eff.transfer === true) continue; // passive/always-on, not a cast-applied buff
+    if (eff.disabled === true) continue;
+    const changes = Array.isArray(eff.changes)
+      ? eff.changes
+          .map(rec)
+          .filter((c) => typeof c.key === 'string' && c.key !== '')
+          .map((c) => ({
+            key: c.key as string,
+            mode: typeof c.mode === 'number' ? c.mode : 0,
+            value: typeof c.value === 'string' ? c.value : String(c.value ?? ''),
+          }))
+      : [];
+    if (changes.length === 0) continue;
+    const name = typeof eff.name === 'string' && eff.name !== '' ? eff.name : item.name;
+    return {
+      name,
+      ...(typeof eff.img === 'string' ? { img: eff.img } : {}),
+      changes,
+      ...(eff.duration !== undefined && eff.duration !== null ? { duration: rec(eff.duration) } : {}),
+      origin: `Actor.${actor._id}.Item.${item._id}`,
+    };
+  }
+  return undefined;
+}
+
+/**
  * The ability modifier dnd5e would add to this weapon's attack/damage roll.
  * An explicit activity `attack.ability` override wins; otherwise a finesse
  * weapon picks the better of STR/DEX, a ranged weapon uses DEX, and anything
@@ -1860,6 +1902,16 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         }
       }
       const upcast = descriptor.slotLevels !== undefined && chosen > baseLevel;
+      const buff = item ? selfBuffEffect(actor, item) : undefined;
+      if (buff) {
+        return {
+          endpoint: 'cast-and-apply-effect',
+          use: upcast ? 'cast-at-slot' : 'use-spell',
+          itemId,
+          ...(upcast ? { slotKey: `spell${chosen}` } : {}),
+          effect: buff,
+        };
+      }
       if (item && activityType(item) === 'heal') {
         return buildHealAction(actor, item, intent.actionId, upcast ? { slotLevel: chosen } : undefined);
       }

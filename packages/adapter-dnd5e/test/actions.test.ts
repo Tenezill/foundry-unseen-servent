@@ -3,7 +3,7 @@
  * (Randal, Fighter 5 / Akra, Cleric 5 — dnd5e 5.3.3 on Foundry 13.351).
  */
 import { describe, expect, it } from 'vitest';
-import type { ActionDescriptor, ActionIntent, FoundryActorDoc, SheetSection } from '@companion/adapter-sdk';
+import type { ActionDescriptor, ActionIntent, FoundryActorDoc, FoundryItemDoc, SheetSection } from '@companion/adapter-sdk';
 import { IntentError } from '@companion/adapter-sdk';
 import { dnd5eAdapter } from '../src/index.js';
 import casterJson from './fixtures/caster.json' with { type: 'json' };
@@ -1782,5 +1782,76 @@ describe('MF-3: multiclass warlock — a true method:"pact" spell stays pickerle
   it('with pact drained (pact.value = 0) gets slotLevels: [] (disabled), never the spellN picker', () => {
     const actor = warlock({ value: 0, max: 2, level: 4 }, [pactSpell]);
     expect(action(actor, 'spell.spellPactCast0001.cast').slotLevels).toEqual([]);
+  });
+});
+
+describe('buildAction — self-buff spells apply their active effect', () => {
+  // A minimal Shield-shaped spell: level 1, an item Active Effect applied on
+  // use (transfer:false) that adds +5 to ac.bonus. Cast at self.
+  function withShield(base = casterCaptured): FoundryActorDoc {
+    const actor = structuredClone(base);
+    (actor.items as FoundryItemDoc[]).push({
+      _id: 'spellShield0001',
+      name: 'Shield',
+      type: 'spell',
+      system: {
+        level: 1,
+        school: 'abj',
+        prepared: 1,
+        method: 'spell',
+        activities: { a1: { type: 'utility' } },
+      },
+      effects: [
+        {
+          _id: 'aeShield00000001',
+          name: 'Shield',
+          img: 'icons/svg/shield.svg',
+          transfer: false,
+          disabled: false,
+          duration: { seconds: 6 },
+          changes: [{ key: 'system.attributes.ac.bonus', mode: 2, value: '+5' }],
+        },
+      ],
+    } as unknown as FoundryItemDoc);
+    return actor;
+  }
+
+  it('a leveled self-buff cast at base -> cast-and-apply-effect via use-spell, effect copied verbatim', () => {
+    const actor = withShield();
+    expect(build(actor, { kind: 'cast', actionId: 'spell.spellShield0001.cast', slotLevel: 1 })).toEqual({
+      endpoint: 'cast-and-apply-effect',
+      use: 'use-spell',
+      itemId: 'spellShield0001',
+      effect: {
+        name: 'Shield',
+        img: 'icons/svg/shield.svg',
+        changes: [{ key: 'system.attributes.ac.bonus', mode: 2, value: '+5' }],
+        duration: { seconds: 6 },
+        origin: 'Actor.pTvtx5dm2AuYqeX2.Item.spellShield0001',
+      },
+    });
+  });
+
+  it('the same spell upcast -> cast-and-apply-effect via cast-at-slot', () => {
+    // caster-captured has spell2.value>0; casting Shield (base 1) at 2 upcasts.
+    const a = build(withShield(), { kind: 'cast', actionId: 'spell.spellShield0001.cast', slotLevel: 2 });
+    expect(a).toMatchObject({ endpoint: 'cast-and-apply-effect', use: 'cast-at-slot', slotKey: 'spell2', itemId: 'spellShield0001' });
+  });
+
+  it('a spell with no use-applied effect is unaffected (Guiding Bolt still use-spell)', () => {
+    expect(build(casterCaptured, { kind: 'cast', actionId: 'spell.pZMrJb3AXiRYO5E8.cast' })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'pZMrJb3AXiRYO5E8',
+    });
+  });
+
+  it('a transfer:true (passive) item effect does NOT count as a castable buff', () => {
+    const actor = withShield();
+    const shield = (actor.items as FoundryItemDoc[]).find((i) => i._id === 'spellShield0001')!;
+    (shield.effects as Array<Record<string, unknown>>)[0]!.transfer = true;
+    expect(build(actor, { kind: 'cast', actionId: 'spell.spellShield0001.cast', slotLevel: 1 })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'spellShield0001',
+    });
   });
 });
