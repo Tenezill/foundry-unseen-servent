@@ -574,6 +574,7 @@ export const fakeAdapter: SystemAdapter = {
               changes: [{ key: 'system.attributes.ac.bonus', mode: 2, value: '+5' }],
               origin: 'Actor.a1.Item.b1',
             },
+            ...(intent.targetActorId !== undefined ? { targetActorId: intent.targetActorId } : {}),
           };
         }
         if (intent.actionId === 'spell.h1.cast') {

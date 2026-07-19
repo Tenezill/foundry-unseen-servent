@@ -302,9 +302,18 @@ function parseActionIntent(
       ) {
         return null;
       }
-      return body.slotLevel === undefined
-        ? { kind, actionId }
-        : { kind, actionId, slotLevel: body.slotLevel };
+      if (
+        body.targetActorId !== undefined &&
+        (typeof body.targetActorId !== 'string' || !/^[A-Za-z0-9]{1,32}$/.test(body.targetActorId))
+      ) {
+        return null;
+      }
+      return {
+        kind,
+        actionId,
+        ...(body.slotLevel !== undefined ? { slotLevel: body.slotLevel } : {}),
+        ...(body.targetActorId !== undefined ? { targetActorId: body.targetActorId } : {}),
+      };
     case 'equip':
       if (typeof body.equipped !== 'boolean') return null;
       return { kind, actionId, equipped: body.equipped };
@@ -413,6 +422,20 @@ function mintEffectId(): string {
   let s = '';
   for (let i = 0; i < 16; i++) s += AE_ID_ALPHABET[Math.floor(Math.random() * AE_ID_ALPHABET.length)];
   return s;
+}
+
+/** actor ids a player may drop a buff on: the caster is always allowed;
+ *  otherwise the target must be a current combatant or a party member. */
+function buffTargetAllowed(targetId: string, casterId: string, deps: GatewayDeps): boolean {
+  if (targetId === casterId) return true;
+  const party = new Set(deps.players.list().flatMap((p) => p.actorIds));
+  if (party.has(targetId)) return true;
+  const combatIds = new Set(
+    (deps.encounters?.view().combatants ?? [])
+      .map((c) => c.actorId)
+      .filter((a): a is string => typeof a === 'string'),
+  );
+  return combatIds.has(targetId);
 }
 
 /**
@@ -1155,7 +1178,11 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
               throw err;
             }
           }
-          await relay.applyEffect(`Actor.${id}`, {
+          const targetId = action.targetActorId ?? id;
+          if (!buffTargetAllowed(targetId, id, deps)) {
+            return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'cannot target that actor');
+          }
+          await relay.applyEffect(`Actor.${targetId}`, {
             _id: mintEffectId(),
             ...action.effect,
             flags: { 'unseen-servent': { appliedBy: 'app' } },

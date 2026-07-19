@@ -856,6 +856,33 @@ describe('actions', () => {
     expect(relay.applyEffectCalls).toHaveLength(1);
   });
 
+  it('cast-and-apply-effect applies to a party targetActorId', async () => {
+    const { app, relay } = setup(); // players own a1 (Anna, caster) and b1 (Bob) — both in the party union
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.b1.cast', slotLevel: 1, targetActorId: 'b1' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.applyEffectCalls.at(-1)!.actorUuid).toBe('Actor.b1');
+  });
+
+  it('a targetActorId outside combat + party is refused 403', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.b1.cast', slotLevel: 1, targetActorId: 'STRANGERACTORXX' });
+    expect(res.statusCode).toBe(403);
+    expect(relay.applyEffectCalls.every((c) => c.actorUuid !== 'Actor.STRANGERACTORXX')).toBe(true);
+  });
+
+  it('no targetActorId applies to the caster', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.b1.cast', slotLevel: 1 });
+    expect(res.statusCode).toBe(200);
+    expect(relay.applyEffectCalls.at(-1)!.actorUuid).toBe('Actor.a1');
+  });
+
+  it('rejects a malformed targetActorId (422)', async () => {
+    const { app } = setup();
+    const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.b1.cast', slotLevel: 1, targetActorId: 'bad id!' });
+    expect(res.statusCode).toBe(422);
+  });
+
   it('a bare base-slot cast tolerates a relay 408 on useAbility and returns 200 with a null result (2026-07-19 fix)', async () => {
     // Live-confirmed: the cast DID execute in Foundry, but the relay's
     // response was slow — this must not surface as a 502 (which would
