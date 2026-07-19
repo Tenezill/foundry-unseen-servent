@@ -47,6 +47,7 @@ describe('ensureKey', () => {
     expect(readPersistedKey(keyFilePath)).toBe('key-1');
     expect(server.mintedScopes[0]).toEqual([...GATEWAY_KEY_SCOPES]);
     expect(GATEWAY_KEY_SCOPES).toContain('encounter:read'); // the HOSTING.md:149 omission, fixed at the source
+    expect(GATEWAY_KEY_SCOPES).toContain('execute-js'); // dnd5e upcasting mints out of the box
     expect(status.current().phase).toBe('key-ready');
   });
 

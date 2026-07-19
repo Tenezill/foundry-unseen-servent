@@ -681,16 +681,47 @@ and `GET <relay>/clients` (with the key) → world `isOnline: true`.
 - **dnd5e or module update breaks the sheet:** the adapter is pinned to dnd5e
   5.3.3; bump one pin at a time in `VERSIONS.md`, run `pnpm test`, then one live
   read/write round-trip. See `docs/OPERATIONS.md`.
-- **Spell upcasting:** the relay casts at a spell's base level only — the app
-  offers a single Cast and disables it when no base-level slot remains. Not a
-  bug; a documented bridge limitation.
-- **Upcasting (casting at a higher spell level):** rides the relay's
-  `execute-js` endpoint and is **off** until two switches are flipped:
-  1. Foundry → Configure Settings → REST API module → enable
-     **"Allow Execute JS"**.
-  2. Relay web UI → the gateway's API key → grant the **`execute-js`** scope.
-
-  Without them, base-level casting still works normally and upcast attempts
-  return a clear error naming this section. The gateway only ever sends a
-  fixed script template (cast this spell consuming that slot) — phone
+- **Upcasting (casting at a higher spell level):** the app offers a slot-level
+  picker and rides the relay's `execute-js` endpoint. It needs the
+  `execute-js` **key scope** and the **"Allow Execute JavaScript"** module
+  setting; without both, base-level casting still works normally and upcast
+  attempts return a clear error naming this section. The gateway only ever
+  sends a fixed script template (cast this spell consuming that slot) — phone
   clients cannot inject script text.
+
+  - **Key scope — automatic on fresh installs.** `make setup` mints the
+    gateway key with `execute-js` already included (see
+    `apps/bootstrap/src/scopes.ts`). Nothing to do.
+  - **Key scope — existing installs (key already minted before this change).**
+    The persisted key keeps its old scopes; add `execute-js` once. From the
+    relay dashboard: **API Keys → the `companion-gateway` key → Edit →** tick
+    `execute-js` → Save. Or over the wire (host shell):
+    ```bash
+    cd ~/foundry-unseen-servent/stack/quickstart
+    # relay account password:
+    PW=$(podman unshare cat secrets/bootstrap.env | grep -oP '(?<=^RELAY_ACCOUNT_PASSWORD=).*')
+    TOKEN=$(curl -s -X POST http://localhost:3010/auth/login \
+      -H 'Content-Type: application/json' \
+      -d "{\"email\":\"bootstrap@companion.local\",\"password\":\"$PW\"}" \
+      | grep -oP '(?<="sessionToken":")[^"]*')
+    # inspect key id + current scopes:
+    curl -s http://localhost:3010/auth/api-keys -H "Authorization: Bearer $TOKEN"
+    # PATCH the companion-gateway key (id 1 in a single-key install) with the
+    # full list PLUS execute-js — a PATCH REPLACES the scopes array:
+    curl -s -X PATCH http://localhost:3010/auth/api-keys/1 \
+      -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+      -d '{"scopes":["entity:read","entity:write","search","events:subscribe","clients:read","roll:execute","roll:read","chat:read","encounter:read","session:manage","dnd5e","execute-js"]}'
+    ```
+    (No restart needed; the next upcast picks it up.)
+  - **Module setting — one-time, in Foundry (all installs).** Arbitrary-JS
+    execution is a deliberate in-Foundry opt-in, so the bootstrap can't flip
+    it: as a GM, **Configure Settings → Module Settings → Foundry REST API →
+    enable "Allow Execute JavaScript"**.
+  - **Verify** the whole path from the host (read-only probe):
+    ```bash
+    KEY=$(podman unshare cat ~/foundry-unseen-servent/stack/quickstart/companion-runtime/relay.env | grep -oP '(?<=RELAY_API_KEY=).*')
+    curl -s -X POST "http://localhost:3010/execute-js?clientId=<CLIENT_ID>" \
+      -H "x-api-key: $KEY" -H 'Content-Type: application/json' \
+      -d '{"script":"return game.system.id + \" \" + game.system.version;"}'
+    # -> {"success":true,"result":"dnd5e 5.3.3"}
+    ```

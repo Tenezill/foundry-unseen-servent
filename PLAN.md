@@ -195,12 +195,12 @@ Known limits (documented, M6-live-verified):
 - Chat cards are authored by the module's GM user but *speak as* the character
   (card alias = character name); true per-player authorship needs per-player
   Foundry sessions (open-source-phase).
-- The relay module (3.4.1) casts a spell at its **base level only** — it
-  ignores any requested higher slot level, so **upcasting is not supported**
-  over the bridge. The app therefore offers a single Cast per spell (consumes
-  a base-level slot) and disables it when no base-level slot remains, rather
-  than a misleading slot-level picker. Upcast is a v2 item if the module gains
-  support.
+- The relay module's `use-spell` casts a spell at its **base level only** — it
+  ignores any requested higher slot level. **(SUPERSEDED 2026-07-19:** upcasting
+  now works via the relay's `execute-js` endpoint — the app shows a slot-level
+  picker and the gateway runs a fixed cast-at-slot script; needs the
+  `execute-js` key scope + module setting, see docs/HOSTING.md "Upcasting".
+  Base-level casts still use `use-spell`.)
 
 ### v2 backlog (do not build in v1): Mörk Borg adapter, OIDC, push notifications ("you took damage"), GM dashboard, per-player roll authorship.
 

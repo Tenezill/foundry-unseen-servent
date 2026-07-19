@@ -208,17 +208,19 @@ agent is driving the GM's browser with permission.
    - The status in Foundry flips to paired; the token persists in that
      browser, reconnecting automatically on reload.
 7. **Upcasting (cast at a higher spell level):** rides the relay's
-   `execute-js` endpoint, which is exactly the "Allow Execute JavaScript"
-   module setting step 2 above says to leave off. If the human wants
-   upcasting, override that default — two switches, both required:
-   - Foundry → Configure Settings → REST API module → enable **"Allow
-     Execute JS"**.
-   - Relay web UI → the gateway's API key → grant the **`execute-js`** scope.
+   `execute-js` endpoint. The gateway key is minted WITH the `execute-js`
+   scope automatically (`apps/bootstrap/src/scopes.ts`), so on a fresh
+   install the only remaining switch is the Foundry module setting:
+   - As a GM → Configure Settings → Module Settings → Foundry REST API →
+     enable **"Allow Execute JavaScript"** (arbitrary-JS execution is a
+     deliberate in-Foundry opt-in; the bootstrap cannot flip it).
 
-   Without them, base-level casting still works normally and upcast attempts
-   return a clear error naming this section. The gateway only ever sends a
-   fixed script template (cast this spell consuming that slot) — phone
-   clients cannot inject script text.
+   Existing installs minted before this change keep their old key scopes and
+   must add `execute-js` by hand — see `docs/HOSTING.md` "Upcasting" for the
+   dashboard + curl recipe. Without both the scope and the setting, base-level
+   casting still works and upcast attempts return a clear error naming this
+   step. The gateway only ever sends a fixed script template (cast this spell
+   consuming that slot) — phone clients cannot inject script text.
 
 **Verify (after Phase 4's key exists):**
 
@@ -421,8 +423,10 @@ All eight green = the installation is complete.
 - **Area-effect item use (e.g. Bead of Force) takes ~10 s:** expected — the
   relay times out while Foundry waits on its template prompt; consumption
   already happened and the app continues with the roll.
-- **No upcasting:** the bridge casts at base level only; the app disables
-  Cast when no base-level slot remains. Documented limitation, not a bug.
+- **Upcasting:** supported via the relay's `execute-js` endpoint (slot-level
+  picker in the app). Needs the `execute-js` key scope (auto-minted on fresh
+  installs) + the "Allow Execute JavaScript" module setting — see Phase 3
+  step 7 and `docs/HOSTING.md` "Upcasting".
 - **dnd5e/module upgrades:** pins live in `VERSIONS.md`; bump ONE at a time,
   `pnpm -r test`, then one live read/write round-trip (`docs/OPERATIONS.md`).
 
