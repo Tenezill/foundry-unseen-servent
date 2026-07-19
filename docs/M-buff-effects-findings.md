@@ -79,6 +79,23 @@ increment). Manual "tap AC + modifier" is dropped unless a real need appears.
   or a flat bonus depending on import; verify its effect shape before assuming
   it matches Shield's `ac.bonus +5`.
 
+## Live confirmation of the built feature (2026-07-19, self-reverting probes)
+- Real data is MIXED on `disabled`: Morgrim's Mage Armor/Shield effects are
+  `disabled:false`; the caster fixture's Shield of Faith/Bane are
+  `disabled:true`. → validated dropping the `disabled` guard in `selfBuffEffect`
+  (MF-1): keeping it would have no-op'd the disabled:true buffs.
+- **Shield**: `changes:[{key:'system.attributes.ac.bonus',mode:2,value:'+5'}]`;
+  applying it → AC 11→16, badge shown, delete → 11.
+- **Mage Armor**: `changes:[{key:'system.attributes.ac.calc',mode:5,value:
+  'mage'}]` (an OVERRIDE, not a flat bonus); applying the copied effect →
+  AC 11→14, "Mage Armor" badge, delete → 11. Verbatim copy handles both
+  shapes — no special-casing needed.
+- Save-gated debuffs (Bane) correctly excluded by MF-2's save-activity guard.
+- REMAINING (full e2e through the deployed PWA→gateway→relay): pending a
+  deploy of the branch — the underlying Foundry mechanism is proven for both
+  Shield and Mage Armor; the app path is code-reviewed (per-task + adversarial
+  whole-branch + fix wave + re-review, all clean).
+
 ## Charter note
 This is the first place the app would CREATE game state Foundry didn't derive
 on its own. Justified: Foundry genuinely cannot apply the effect headless, and
