@@ -57,9 +57,11 @@ function spellRows(actor: FoundryActorDoc) {
 }
 
 /** Minimal warlock: one class item, one prepared 1st-level spell, one
- *  prepared 4th-level spell, pact data as given. Mirrors what the relay
- *  serializes for an imported warlock. */
-function warlock(pact: Record<string, unknown>): FoundryActorDoc {
+ *  prepared 4th-level spell, pact data as given, plus any extra items
+ *  (e.g. a pact-method damage spell for scaling tests). Mirrors what the
+ *  relay serializes for an imported warlock. `extraItems` defaults to none
+ *  so every existing caller is unaffected. */
+function warlock(pact: Record<string, unknown>, extraItems: FoundryActorDoc['items'] = []): FoundryActorDoc {
   return {
     _id: 'actorWarlock0001',
     name: 'Pact Test',
@@ -88,6 +90,7 @@ function warlock(pact: Record<string, unknown>): FoundryActorDoc {
         type: 'spell',
         system: { level: 4, school: 'abj', prepared: 1, method: 'spell', activities: {} },
       },
+      ...extraItems,
     ],
   };
 }
@@ -1447,6 +1450,20 @@ describe('display formula scaling (upcast + cantrip tiers)', () => {
     );
   });
 
+  it('an in-range slotLevel still below the spell\'s own base level is INVALID', () => {
+    // slotLevel 0 above is rejected by the integer/1-9 range check alone —
+    // it never reaches the spell-specific "< baseLevel" branch. Raise
+    // Guiding Bolt's base level to 2 so slotLevel 1 (a valid 1-9 integer)
+    // exercises that branch instead.
+    const actor = structuredClone(casterCaptured);
+    const items = actor.items as Array<{ _id: string; system: Record<string, unknown> }>;
+    items.find((i) => i._id === 'pZMrJb3AXiRYO5E8')!.system.level = 2;
+    expectIntentError(
+      () => build(actor, { kind: 'damage', actionId: 'spell.pZMrJb3AXiRYO5E8.damage', slotLevel: 1 }),
+      'INVALID',
+    );
+  });
+
   it('upcast heal formula scales (Cure Wounds at 2nd: 2d8 + 2)', () => {
     const a = build(casterCaptured, { kind: 'cast', actionId: 'spell.LjT1wf4D38c9Ieuo.cast', slotLevel: 2 });
     if (a.endpoint !== 'use-and-roll') throw new Error('expected use-and-roll');
@@ -1492,6 +1509,41 @@ describe('pact magic (warlock) — slots display and castability', () => {
   it('no pact slots remaining disables leveled spells', () => {
     const actor = warlock({ value: 0, max: 2, level: 4 });
     expect(action(actor, 'spell.spellHex00000001.cast').slotLevels).toEqual([]);
+  });
+
+  it('pact-method damage spell display roll scales to the pact slot level with no explicit slotLevel (base 1 -> pact 3 = 2 steps: 4d6 -> 6d6)', () => {
+    const actor = warlock(
+      { value: 2, max: 2, level: 3 },
+      [
+        {
+          _id: 'spellPactDmg001',
+          name: 'Eldritch Blast',
+          type: 'spell',
+          system: {
+            level: 1,
+            school: 'evo',
+            prepared: 1,
+            method: 'pact',
+            activities: {
+              dnd5eactivity001: {
+                _id: 'dnd5eactivity001',
+                type: 'attack',
+                damage: {
+                  parts: [
+                    { number: 4, denomination: 6, bonus: '', types: ['force'], scaling: { mode: 'whole', number: 1, formula: '' } },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      ],
+    );
+    expect(build(actor, { kind: 'damage', actionId: 'spell.spellPactDmg001.damage' })).toEqual({
+      endpoint: 'roll',
+      formula: '6d6',
+      flavor: 'Eldritch Blast — Damage',
+    });
   });
 
   it('enrich merges pact value/max/level from the relay spells detail (imported-warlock regression)', async () => {

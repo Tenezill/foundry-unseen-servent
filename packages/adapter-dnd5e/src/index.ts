@@ -1757,7 +1757,7 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       if (isSpell && item && intent.slotLevel !== undefined) {
         const baseLevel = numAt(item.system, 'level') ?? 0;
         if (intent.slotLevel < baseLevel) {
-          throw new IntentError('damage slotLevel must be an integer 1-9', 'INVALID');
+          throw new IntentError("damage slotLevel must be at least the spell's base level", 'INVALID');
         }
       }
       const formula = item
