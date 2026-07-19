@@ -38,6 +38,18 @@ players:
 Summaries of the player's own actors only.
 → `200 { "actors": [ { "id": "kbXH9…", "name": "Sariel", "img": "…", "systemId": "dnd5e" } ] }`
 
+### `GET /api/party`
+Roster for the out-of-combat buff target picker (see `cast`'s `targetActorId`
+below): the deduped union of **every** player's `actorIds`, not just the
+caller's own.
+→ `200 { "actors": [ { "id": "kbXH9…", "name"?: "Sariel", "img"?: "…" } ] }`
+
+`name`/`img` are resolved best-effort via the relay (same bounded lookup
+pattern as `GET /api/admin/players`); an id that can't be resolved (e.g.
+deleted in Foundry) is returned bare — `{ "id": "ghost-id" }`, no `name`/`img`
+keys. Requires only a valid player token — no actor-ownership check (any
+authenticated player may see the full roster, by design).
+
 ### `GET /api/actors/:id/sheet`
 Full `SheetViewModel` (see `packages/adapter-sdk`).
 → `200 { "sheet": SheetViewModel }`
@@ -93,6 +105,7 @@ lists everything legal; `actionId` must reference one of them.
 { "kind": "save",   "actionId": "ability.con.save" }
 { "kind": "attack", "actionId": "item.X3ab9.attack" }
 { "kind": "cast",   "actionId": "spell.k9Q2f.cast" }
+{ "kind": "cast",   "actionId": "spell.k9Q2f.cast", "targetActorId": "kbXH9…" }
 { "kind": "use",    "actionId": "feature.p0Wm1.use" }
 { "kind": "equip",  "actionId": "item.X3ab9.equip", "equipped": false }
 { "kind": "move",   "actionId": "item.X3ab9.move", "containerId": "wYUZWMKa6FntpIvv" }
@@ -110,6 +123,17 @@ item target; the gateway runs the matching relay command
 (`short-rest`/`long-rest`/`death-save`/`break-concentration`) and returns the
 fresh sheet (`result` null — these post their own chat card). `cast` no longer
 takes `slotLevel`: the bridge casts at base level only (see M6 known limits).
+
+`cast` also accepts an optional `targetActorId` (target-buffs feature): the
+copied effect from a creature-targetable buff (e.g. Bless, Aid) is applied to
+that actor instead of the caster. Format: `^[A-Za-z0-9]{1,32}$`. Allowed
+targets are the caster itself, any actor currently in the active encounter's
+combatants, or any actor in the `GET /api/party` roster (union of all
+invites) — anything else → `403 FORBIDDEN_RESOURCE`. Omitting the field
+applies the buff to the caster, unchanged from the pre-target-buffs
+behavior. Self-only buffs (e.g. Shield) never carry `targetable` on their
+descriptor and are unaffected.
+
 `move` (M19) relocates an item to a container or to carried; `containerId` is
 the container item's `_id` (a bare item id, not an action id) or `null`
 (carried). No roll or chat card. `pool` (M23, wod5e) rolls an
