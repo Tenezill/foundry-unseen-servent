@@ -130,6 +130,9 @@ export interface Condition {
   label: string;
   /** icon path served by Foundry (optional; client falls back to a glyph). */
   icon?: string;
+  /** When set, this condition was applied by the app and can be removed from
+   *  the badge — the id of an 'endeffect' action (2026-07-19 buff effects). */
+  removeActionId?: string;
 }
 
 /** One roll in the world, for the GM roll feed (M9). System-agnostic. */
@@ -243,6 +246,8 @@ export type SheetActionKind =
   | 'rest'
   | 'deathsave'
   | 'endconcentration'
+  /** remove an app-applied active effect (buff), by its actionId (2026-07-19). */
+  | 'endeffect'
   /** roll an attribute+skill dice pool (M23, wod5e: the vampire replacement
    *  for 'check'/'save' — no target number, successes counted client-side). */
   | 'pool'
@@ -294,7 +299,7 @@ export type ActionIntent =
   | { kind: 'prepare'; actionId: string; prepared: boolean }
   | { kind: 'attune'; actionId: string; attuned: boolean }
   | { kind: 'move'; actionId: string; containerId: string | null }
-  | { kind: 'rest' | 'deathsave' | 'endconcentration'; actionId: string }
+  | { kind: 'rest' | 'deathsave' | 'endconcentration' | 'endeffect'; actionId: string }
   /** M23: the player's chosen attribute/skill pairing overrides the
    *  descriptor's default `pool`; `modifier` folds in ad-hoc situational
    *  dice (specialties, bonuses). */
@@ -307,6 +312,18 @@ export type ActionIntent =
  * workflow; `equip-item` toggles equipment; the actor-command endpoints
  * (M8, no item target) run rests, a death save, or drop concentration.
  */
+/** A Foundry Active Effect the app applies to an actor (2026-07-19 buff
+ *  spells). Copied verbatim from the casting spell item's own effect — the
+ *  app never invents `changes`. `mode` is Foundry's CONST.ACTIVE_EFFECT_MODES
+ *  number; `origin` is the source item uuid. */
+export interface EffectPayload {
+  name: string;
+  img?: string;
+  changes: Array<{ key: string; mode: number; value: string }>;
+  duration?: Record<string, unknown>;
+  origin?: string;
+}
+
 export type RelayAction =
   | { endpoint: 'roll'; formula: string; flavor: string }
   | { endpoint: 'use-item' | 'use-spell' | 'use-feature'; itemId: string; slotLevel?: number }
@@ -345,6 +362,15 @@ export type RelayAction =
       flavor: string;
       heal?: { path: string; current: number; max: number };
     }
+  /** Buff spell (dnd5e): activate the spell (consume the slot via use-spell,
+   *  or cast-at-slot for an upcast) THEN create the spell's own Active Effect
+   *  on the caster via the relay's PUT /update embedded-upsert — because the
+   *  headless use-flow never applies self-effects (see M-buff-effects-findings).
+   *  The gateway mints the effect `_id` and sets the unseen-servent flag. */
+  | { endpoint: 'cast-and-apply-effect'; use: 'use-spell' | 'cast-at-slot'; itemId: string; slotKey?: string; effect: EffectPayload }
+  /** Delete an app-applied active effect off the actor (buff removal); the
+   *  gateway resolves `Actor.<id>.ActiveEffect.<effectId>` via deleteEntity. */
+  | { endpoint: 'remove-effect'; effectId: string }
   | { endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration' };
 
 /**
