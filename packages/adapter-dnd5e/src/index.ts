@@ -930,7 +930,7 @@ function biographyItems(actor: FoundryActorDoc): ListItem[] {
   // markup before deciding whether there is anything to read.
   const bioText = (bio ?? '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
   if (bio !== undefined && bioText !== '') {
-    out.push({ id: 'bio', label: 'Biography', sub: 'Tap to read', detail: bio });
+    out.push({ id: 'bio', label: 'Biography', sub: 'Tap to read', detail: resolveEnrichers(bio) });
   }
   for (const f of PERSONALITY_FIELDS) {
     const v = strAt(actor.system, `details.${f.id}`);
@@ -1157,13 +1157,36 @@ function isUsableFeature(item: FoundryItemDoc): boolean {
 }
 
 /**
+ * Resolve Foundry text-enricher tokens to readable text so descriptions don't
+ * leak raw source like "&Reference[inv]{Investigation}". HTML tags are
+ * preserved (callers sanitize + render via v-html). Conservative: only
+ * recognized shapes are rewritten; unknown/labelless tokens pass through.
+ */
+export function resolveEnrichers(text: string): string {
+  return text
+    // Labeled document/reference/check enrichers -> the author's label:
+    // @UUID[..]{Label}, &Reference[..]{Label}, @Check[..]{Label}, @Damage[..]{Label}
+    .replace(/[@&][A-Za-z]+\[[^\]]*\]\{([^}]*)\}/g, '$1')
+    // Labeled inline rolls: [[/r 1d20]]{Label} -> Label
+    .replace(/\[\[[^\]]*\]\]\{([^}]*)\}/g, '$1')
+    // Bare inline rolls: [[/r 1d20 + 3]] -> "1d20 + 3", [[1d6]] -> "1d6"
+    .replace(/\[\[\s*\/?[A-Za-z]*\s*([^\]]*?)\s*\]\]/g, '$1');
+}
+
+/** A world item/doc's description HTML with enrichers resolved; undefined when
+ *  empty/missing. Single source for detail views + compendium previews. */
+function descriptionHtml(system: unknown): string | undefined {
+  const v = getPath(system, 'description.value');
+  return typeof v === 'string' && v !== '' ? resolveEnrichers(v) : undefined;
+}
+
+/**
  * The item's own description HTML (`system.description.value`), for the M8
  * detail view. Content from the user's OWN world — the repo ships none; the
  * client sanitizes before rendering. Empty/missing -> undefined.
  */
 function itemDetail(item: FoundryItemDoc): string | undefined {
-  const v = getPath(item.system, 'description.value');
-  return typeof v === 'string' && v !== '' ? v : undefined;
+  return descriptionHtml(item.system);
 }
 
 /**
@@ -1358,7 +1381,7 @@ function spellPreview(doc: Rec): ListItem {
   const subParts: string[] = [level === 0 ? 'Cantrip' : `${ordinal(level)} level`];
   const schoolLabel = school !== undefined ? SPELL_SCHOOLS[school] : undefined;
   if (schoolLabel !== undefined) subParts.push(schoolLabel);
-  const detail = getPath(system, 'description.value');
+  const detail = descriptionHtml(system);
   const name = typeof doc.name === 'string' && doc.name !== '' ? doc.name : 'Unknown spell';
   const id = typeof doc._id === 'string' && doc._id !== '' ? doc._id : slug(name);
   return {
@@ -1366,7 +1389,7 @@ function spellPreview(doc: Rec): ListItem {
     label: name,
     sub: subParts.join(' · '),
     ...(typeof doc.img === 'string' ? { img: doc.img } : {}),
-    ...(typeof detail === 'string' && detail !== '' ? { detail } : {}),
+    ...(detail !== undefined ? { detail } : {}),
   };
 }
 
@@ -1379,7 +1402,7 @@ function featPreview(doc: Rec): ListItem {
   const system = rec(doc.system);
   const featType = strAt(system, 'type.value');
   const sub = featType === 'class' ? 'Class feature' : 'Feat';
-  const detail = getPath(system, 'description.value');
+  const detail = descriptionHtml(system);
   const name = typeof doc.name === 'string' && doc.name !== '' ? doc.name : 'Unknown feat';
   const id = typeof doc._id === 'string' && doc._id !== '' ? doc._id : slug(name);
   return {
@@ -1387,7 +1410,7 @@ function featPreview(doc: Rec): ListItem {
     label: name,
     sub,
     ...(typeof doc.img === 'string' ? { img: doc.img } : {}),
-    ...(typeof detail === 'string' && detail !== '' ? { detail } : {}),
+    ...(detail !== undefined ? { detail } : {}),
   };
 }
 
@@ -1397,7 +1420,7 @@ function featPreview(doc: Rec): ListItem {
  * (weapon/equipment/consumable…), mirroring inventoryListItem.
  */
 function gearPreview(doc: Rec): ListItem {
-  const detail = getPath(rec(doc.system), 'description.value');
+  const detail = descriptionHtml(rec(doc.system));
   const name = typeof doc.name === 'string' && doc.name !== '' ? doc.name : 'Unknown item';
   const id = typeof doc._id === 'string' && doc._id !== '' ? doc._id : slug(name);
   const type = typeof doc.type === 'string' && doc.type !== '' ? doc.type : undefined;
@@ -1406,7 +1429,7 @@ function gearPreview(doc: Rec): ListItem {
     label: name,
     ...(type !== undefined ? { sub: type } : {}),
     ...(typeof doc.img === 'string' ? { img: doc.img } : {}),
-    ...(typeof detail === 'string' && detail !== '' ? { detail } : {}),
+    ...(detail !== undefined ? { detail } : {}),
   };
 }
 
