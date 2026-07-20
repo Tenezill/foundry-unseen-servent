@@ -118,6 +118,45 @@ export interface RelayEncounter {
   combatants: RelayCombatant[];
 }
 
+/**
+ * The execute-js activation script both castAtSlot and useWithoutTemplate
+ * run: dnd5e's own activity.use, mirroring the relay module's use-* flow
+ * (v13 path) plus two additions the module lacks — an explicit paying slot
+ * (when `slotKey` is given) and suppression of measured-template placement.
+ * dnd5e 5.3.3 `_prepareUsageConfig` (live-read 2026-07-20):
+ *   `config.create.measuredTemplate ??= !!this.target.template.type && this.target.prompt`
+ * — headless there is no one to click the canvas, so the default BLOCKS the
+ * whole use() promise until the relay 408s (5-8s). An explicit `false`
+ * survives the `??=`; the chat card still carries its own place-template
+ * button for the GM. Attack-type activities also capture the to-hit roll
+ * (same dnd5e.rollAttackV2 hook the module uses) and return it as { roll }.
+ * Only validated ids/slot keys are interpolated, via JSON.stringify —
+ * callers can never inject script text.
+ */
+function activationScript(itemUuid: string, slotKey?: string): string {
+  const usage =
+    slotKey !== undefined
+      ? `{ subsequentActions: false, consume: { spellSlot: true }, spell: { slot: ${JSON.stringify(slotKey)} }, create: { measuredTemplate: false } }`
+      : `{ subsequentActions: false, create: { measuredTemplate: false } }`;
+  return [
+    `const item = await fromUuid(${JSON.stringify(itemUuid)});`,
+    `if (!item) throw new Error('item not found');`,
+    `const activities = item.system?.activities;`,
+    `const activity = activities?.size > 0 ? [...activities.values()][0] : null;`,
+    `if (!activity) throw new Error('item has no activity');`,
+    `let attackRoll = null;`,
+    `const hookId = Hooks.once('dnd5e.rollAttackV2', (rolls) => { if (rolls?.length) attackRoll = rolls[0]; });`,
+    `try {`,
+    `  const hasAttack = typeof activity.rollAttack === 'function';`,
+    `  const usage = ${usage};`,
+    `  const useResult = await activity.use(usage, { configure: false }, {});`,
+    `  if (!useResult) throw new Error('cast could not be performed');`,
+    `  if (hasAttack) await activity.rollAttack({}, { configure: false }, {});`,
+    `} finally { Hooks.off('dnd5e.rollAttackV2', hookId); }`,
+    `return attackRoll ? { roll: { total: attackRoll.total, formula: attackRoll.formula, isCritical: attackRoll.isCritical ?? false, isFumble: attackRoll.isFumble ?? false } } : {};`,
+  ].join('\n');
+}
+
 export class FoundryRelayClient {
   constructor(private readonly cfg: RelayConfig) {}
 
@@ -321,6 +360,7 @@ export class FoundryRelayClient {
    * `actorUuid` is validated for defense-in-depth/API symmetry with the
    * other methods but is never interpolated into the script — the item
    * uuid alone resolves the actor via `fromUuid`.
+   * Template placement is suppressed (create.measuredTemplate false — dnd5e would otherwise block awaiting a canvas click that never comes headless; the chat card's own button still lets the GM place it).
    */
   async castAtSlot(actorUuid: string, itemUuid: string, slotKey: string): Promise<Record<string, unknown>> {
     if (!/^Actor\.[A-Za-z0-9]{1,32}$/.test(actorUuid)) throw new Error(`castAtSlot: invalid actorUuid "${actorUuid}"`);
@@ -328,26 +368,31 @@ export class FoundryRelayClient {
       throw new Error(`castAtSlot: invalid itemUuid "${itemUuid}"`);
     }
     if (!/^spell[2-9]$/.test(slotKey)) throw new Error(`castAtSlot: invalid slotKey "${slotKey}"`);
-    // Mirrors the module's own use-spell flow (v13 path) with the one
-    // addition it lacks: spell.slot. Shape live-verified per the plan's
-    // final task before any push.
-    const script = [
-      `const item = await fromUuid(${JSON.stringify(itemUuid)});`,
-      `if (!item) throw new Error('item not found');`,
-      `const activities = item.system?.activities;`,
-      `const activity = activities?.size > 0 ? [...activities.values()][0] : null;`,
-      `if (!activity) throw new Error('spell has no activity');`,
-      `let attackRoll = null;`,
-      `const hookId = Hooks.once('dnd5e.rollAttackV2', (rolls) => { if (rolls?.length) attackRoll = rolls[0]; });`,
-      `try {`,
-      `  const hasAttack = typeof activity.rollAttack === 'function';`,
-      `  const usage = { subsequentActions: false, consume: { spellSlot: true }, spell: { slot: ${JSON.stringify(slotKey)} } };`,
-      `  const useResult = await activity.use(usage, { configure: false }, {});`,
-      `  if (!useResult) throw new Error('cast could not be performed');`,
-      `  if (hasAttack) await activity.rollAttack({}, { configure: false }, {});`,
-      `} finally { Hooks.off('dnd5e.rollAttackV2', hookId); }`,
-      `return attackRoll ? { roll: { total: attackRoll.total, formula: attackRoll.formula, isCritical: attackRoll.isCritical ?? false, isFumble: attackRoll.isFumble ?? false } } : {};`,
-    ].join('\n');
+    return this.executeActivation(activationScript(itemUuid, slotKey));
+  }
+
+  /**
+   * POST /execute-js — run an item's usage workflow with dnd5e's DEFAULT
+   * consumption (base slot for leveled spells, pact slots for pact spells,
+   * item uses for free-use grants, nothing for cantrips — identical to the
+   * relay module's own use-* flow) but with headless-blocking template
+   * placement suppressed. Used for template-bearing items, whose module
+   * use-* activation blocks 5-8s on the canvas prompt and 408s
+   * (M-daylight finding, live-verified 2026-07-20: 267ms vs 5-8s).
+   * Same scope/setting requirements and injection rules as castAtSlot.
+   */
+  async useWithoutTemplate(actorUuid: string, itemUuid: string): Promise<Record<string, unknown>> {
+    if (!/^Actor\.[A-Za-z0-9]{1,32}$/.test(actorUuid)) {
+      throw new Error(`useWithoutTemplate: invalid actorUuid "${actorUuid}"`);
+    }
+    if (!/^Actor\.[A-Za-z0-9]{1,32}\.Item\.[A-Za-z0-9]{1,32}$/.test(itemUuid)) {
+      throw new Error(`useWithoutTemplate: invalid itemUuid "${itemUuid}"`);
+    }
+    return this.executeActivation(activationScript(itemUuid));
+  }
+
+  /** Shared POST + error-normalization for the execute-js activations. */
+  private async executeActivation(script: string): Promise<Record<string, unknown>> {
     const body = await this.request<{ result?: unknown; error?: string; success?: boolean }>('POST', '/execute-js', {}, { script });
     if (typeof body.error === 'string' && body.error !== '') {
       throw new RelayError(`relay /execute-js: ${body.error}`, 200, '/execute-js');
