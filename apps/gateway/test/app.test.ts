@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
 /** Minimal structural type for the injected SSE response stream. */
@@ -10,6 +10,7 @@ interface EventStream {
   destroy(): void;
 }
 import { IntentError, type SystemAdapter } from '@companion/adapter-sdk';
+import { dnd5eAdapter } from '@companion/adapter-dnd5e';
 import { wod5eAdapter } from '@companion/adapter-wod5e';
 import { buildApp, isSafeDiceFormula, type EncounterManagerPort } from '../src/app.js';
 import { sha256Hex, type Player } from '../src/players.js';
@@ -502,6 +503,104 @@ describe('actions', () => {
     const res = await post(app, 'a1', { kind: 'cast', actionId: 'spell.h1.cast', slotLevel: 2 });
     expect(res.statusCode).toBe(422);
     expect(res.json().error.message).toMatch(/Allow Execute JS/);
+  });
+
+  describe('noTemplate routing (M-daylight: headless template-cast, 2026-07-20)', () => {
+    let relay: FakeRelay;
+
+    /** Minimal caster with one leveled utility spell whose activity carries
+     *  an area template (Daylight's live shape: sphere/60) — the same shape
+     *  proven in packages/adapter-dnd5e/test/actions.test.ts to make the
+     *  REAL dnd5e adapter emit `noTemplate: true`. Using the real adapter
+     *  here (not the local fakeAdapter, which has no notion of activities)
+     *  means the cast-descriptor gates (prepared: 1, a payable spell3 slot)
+     *  are genuinely satisfied, not hand-wired. */
+    function templateCasterDoc(): Record<string, unknown> {
+      return {
+        _id: 'a1',
+        name: 'Template Caster',
+        type: 'character',
+        system: {
+          attributes: { hp: { value: 20, max: 20 } },
+          spells: { spell3: { value: 2, max: 3 }, spell4: { value: 1, max: 1 } },
+        },
+        items: [
+          {
+            _id: 'spellDaylight001',
+            name: 'Daylight',
+            type: 'spell',
+            system: {
+              level: 3,
+              school: 'evo',
+              prepared: 1,
+              method: 'spell',
+              activities: {
+                a1: { _id: 'a1', type: 'utility', target: { template: { type: 'sphere', size: 60 } } },
+              },
+            },
+          },
+        ],
+      };
+    }
+
+    beforeEach(() => {
+      relay = new FakeRelay();
+      relay.entities.set('Actor.a1', templateCasterDoc());
+      app = buildApp({
+        relay,
+        players: memoryPlayers(makePlayers()),
+        registry: createRegistry([dnd5eAdapter]),
+        defaultSystemId: 'dnd5e',
+        livePollMs: 10_000,
+        pingMs: 60_000,
+      });
+    });
+
+    /** Base-level cast (no slotLevel) of the template spell above — mirrors
+     *  the :428 cast test's call shape. */
+    const castTemplateSpell = () =>
+      post(app as FastifyInstance, 'a1', { kind: 'cast', actionId: 'spell.spellDaylight001.cast' });
+
+    it('a noTemplate use-spell routes through useWithoutTemplate (no module use-* call)', async () => {
+      relay.useWithoutTemplateResult = { roll: { total: 12, formula: '1d20 + 5' } };
+      const res = await castTemplateSpell();
+      expect(res.statusCode).toBe(200);
+      expect(relay.useWithoutTemplateCalls).toEqual([
+        { actorUuid: expect.stringMatching(/^Actor\./), itemUuid: expect.stringMatching(/\.Item\./) },
+      ]);
+      expect(relay.useAbilityCalls).toEqual([]);
+    });
+
+    it('falls back to the module use-* endpoint when execute-js is unavailable (base-level cast never 422s)', async () => {
+      const err = new Error('execute-js is disabled in REST API module settings. A GM must enable it…');
+      err.name = 'RelayError';
+      relay.useWithoutTemplateError = err;
+      const res = await castTemplateSpell();
+      expect(res.statusCode).toBe(200);
+      expect(relay.useWithoutTemplateCalls).toHaveLength(1); // proves execute-js path was attempted first
+      expect(relay.useAbilityCalls).toHaveLength(1); // fell back
+    });
+
+    it('a non-config execute-js failure on the noTemplate path stays fatal (502), no silent fallback double-cast risk', async () => {
+      const err = new Error('relay /execute-js -> 500: boom');
+      err.name = 'RelayError';
+      (err as unknown as { status: number }).status = 500;
+      relay.useWithoutTemplateError = err;
+      const res = await castTemplateSpell();
+      expect(res.statusCode).toBe(502);
+      expect(relay.useAbilityCalls).toEqual([]);
+    });
+
+    it('a 408 on the noTemplate path is tolerated exactly like the module path (200, null result)', async () => {
+      const err = new Error('relay /execute-js -> 408: Request timed out');
+      err.name = 'RelayError';
+      (err as unknown as { status: number }).status = 408;
+      relay.useWithoutTemplateError = err;
+      const res = await castTemplateSpell();
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { result: unknown }).result).toBeNull();
+      expect(relay.useAbilityCalls).toEqual([]); // a timeout means it likely executed — never re-cast
+    });
   });
 
   it('damage accepts an integer slotLevel and rejects junk', async () => {

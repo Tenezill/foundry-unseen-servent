@@ -36,6 +36,22 @@ declare module '*setup-quickstart.mjs' {
   ): void;
 }
 
+/** Typed surface of scripts/update-stack.mjs for the vitest import —
+ *  keep in sync with the CLI (same convention as setup-quickstart above). */
+declare module '*update-stack.mjs' {
+  export const DESTRUCTIVE_TOKENS: string[];
+  export interface UpdateStep {
+    label: string;
+    cwd: string;
+    cmd: string[];
+  }
+  export function buildUpdateSteps(
+    compose: string[],
+    opts?: { pull?: boolean; cwd?: string; qdir?: string },
+  ): UpdateStep[];
+  export function hasDestructiveStep(steps: UpdateStep[]): boolean;
+}
+
 declare module '*setup-wizard.mjs' {
   export function escapeHtml(s: string): string;
   export function tokenMatches(expected: string, presented: string): boolean;

@@ -1528,6 +1528,17 @@ function allActivities(item: FoundryItemDoc): Rec[] {
   return Object.values(activities).map(rec);
 }
 
+/** True when any activity targets an area template (Daylight sphere/60,
+ *  Fireball radius/20…). Headless, dnd5e's use() blocks awaiting canvas
+ *  placement for these (M-daylight finding) — the gateway routes them
+ *  through the template-suppressing execute-js activation instead. */
+function hasAreaTemplate(item: FoundryItemDoc): boolean {
+  return allActivities(item).some((a) => {
+    const type = getPath(a, 'target.template.type');
+    return typeof type === 'string' && type !== '';
+  });
+}
+
 /** The dnd5e activity `type` this item's first activity carries, e.g.
  *  "attack", "heal", "save", "utility", "check". Undefined for items with
  *  no activities (most physical gear). */
@@ -1901,6 +1912,7 @@ function buildHealAction(
     itemId: item._id,
     formula,
     flavor: `${item.name} — Healing`,
+    ...(hasAreaTemplate(item) ? { noTemplate: true as const } : {}),
   };
   if (!opts?.forceSelf && !isSelfTargeted(item)) {
     return base;
@@ -2168,17 +2180,24 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
             if (!formula) throw new IntentError(`no damage formula for "${intent.actionId}"`, 'UNKNOWN_RESOURCE');
             // use-and-roll, not a bare roll: Foundry's activation consumes
             // the charge / destroys the bead; the roll is display only.
-            return { endpoint: 'use-and-roll', use: 'use-item', itemId, formula, flavor: `${item.name} — Damage` };
+            return {
+              endpoint: 'use-and-roll',
+              use: 'use-item',
+              itemId,
+              formula,
+              flavor: `${item.name} — Damage`,
+              ...(hasAreaTemplate(item) ? { noTemplate: true as const } : {}),
+            };
           }
         }
-        return { endpoint: 'use-item', itemId };
+        return { endpoint: 'use-item', itemId, ...(item !== undefined && hasAreaTemplate(item) ? { noTemplate: true as const } : {}) };
       }
       const itemId = intent.actionId.slice('feature.'.length, -'.use'.length);
       const item = (actor.items ?? []).find((i) => i._id === itemId);
       if (item && activityType(item) === 'heal') {
         return buildHealAction(actor, item, intent.actionId);
       }
-      return { endpoint: 'use-feature', itemId };
+      return { endpoint: 'use-feature', itemId, ...(item !== undefined && hasAreaTemplate(item) ? { noTemplate: true as const } : {}) };
     }
     case 'cast': {
       const itemId = intent.actionId.slice('spell.'.length, -'.cast'.length);
@@ -2209,6 +2228,7 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
           ...(intent.targetActorId !== undefined && item !== undefined && !buffTargetIsSelf(item)
             ? { targetActorId: intent.targetActorId }
             : {}),
+          ...(item !== undefined && hasAreaTemplate(item) ? { noTemplate: true as const } : {}),
         };
       }
       if (item && activityType(item) === 'heal') {
@@ -2220,7 +2240,7 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       if (upcast) {
         return { endpoint: 'cast-at-slot', itemId, slotKey: `spell${chosen}` };
       }
-      return { endpoint: 'use-spell', itemId };
+      return { endpoint: 'use-spell', itemId, ...(item !== undefined && hasAreaTemplate(item) ? { noTemplate: true as const } : {}) };
     }
     case 'equip': {
       if (typeof intent.equipped !== 'boolean') {

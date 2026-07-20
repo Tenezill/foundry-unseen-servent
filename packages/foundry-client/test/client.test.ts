@@ -497,6 +497,94 @@ describe('FoundryRelayClient.castAtSlot()', () => {
       /reported failure/,
     );
   });
+
+  it('suppresses headless template placement (create.measuredTemplate false in the script)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({ success: true, result: {} }),
+      text: vi.fn(),
+    });
+    await client.castAtSlot('Actor.abc123', 'Actor.abc123.Item.def456', 'spell3');
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { script: string };
+    expect(body.script).toContain('create: { measuredTemplate: false }');
+  });
+});
+
+describe('FoundryRelayClient.useWithoutTemplate()', () => {
+  let client: FoundryRelayClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new FoundryRelayClient({
+      baseUrl: 'http://relay:3010',
+      apiKey: 'test-api-key',
+      clientId: 'fvtt_test123',
+    });
+  });
+
+  it('rejects malformed uuids before any network call', async () => {
+    await expect(client.useWithoutTemplate('Actor.abc; drop', 'Actor.abc123.Item.def456')).rejects.toThrow(/actorUuid/);
+    await expect(client.useWithoutTemplate('Actor.abc123', 'Actor.abc123.Item.x"y')).rejects.toThrow(/itemUuid/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('POSTs /execute-js with default consumption (no slot/consume override) and template suppression', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({
+        success: true,
+        result: { roll: { total: 18, formula: '1d20 + 7' } },
+      }),
+      text: vi.fn(),
+    });
+
+    const res = await client.useWithoutTemplate('Actor.abc123', 'Actor.abc123.Item.def456');
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/execute-js');
+    expect(init.method).toBe('POST');
+    const body = JSON.parse(init.body as string) as { script: string };
+    expect(body.script).toContain(JSON.stringify('Actor.abc123.Item.def456'));
+    expect(body.script).toContain('create: { measuredTemplate: false }');
+    // Default consumption: dnd5e picks the slot/uses itself.
+    expect(body.script).not.toContain('spell:');
+    expect(body.script).not.toContain('consume:');
+    // Caller-controlled uuid never appears outside a quoted literal.
+    const rawUuidPattern = /(?<!")Actor\.abc123\.Item\.def456(?!")/g;
+    expect(body.script.match(rawUuidPattern)).toBeNull();
+    expect(res).toEqual({ roll: { total: 18, formula: '1d20 + 7' } });
+  });
+
+  it('rejects with a RelayError carrying the error text when the 200 body reports execute-js disabled', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({
+        success: false,
+        error: 'execute-js is disabled in REST API module settings',
+      }),
+      text: vi.fn(),
+    });
+    await expect(client.useWithoutTemplate('Actor.abc123', 'Actor.abc123.Item.def456')).rejects.toThrow(
+      /execute-js is disabled/,
+    );
+  });
+
+  it('rejects when the 200 body reports success: false with no error text', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: vi.fn().mockResolvedValueOnce({ success: false }),
+      text: vi.fn(),
+    });
+    await expect(client.useWithoutTemplate('Actor.abc123', 'Actor.abc123.Item.def456')).rejects.toThrow(
+      /reported failure/,
+    );
+  });
 });
 
 describe('FoundryRelayClient.applyEffect()', () => {
