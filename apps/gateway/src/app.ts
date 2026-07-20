@@ -437,13 +437,17 @@ async function activateAbility(
   itemUuid: string,
   opts: { slotLevel?: number },
   noTemplate: true | undefined,
+  log?: { warn(obj: unknown, msg?: string): void },
 ): Promise<Record<string, unknown>> {
   if (noTemplate === true && opts.slotLevel === undefined) {
     try {
       return await relay.useWithoutTemplate(actorUuid, itemUuid);
     } catch (err) {
       if (upcastUnavailable(err) === null) throw err;
-      // execute-js unavailable -> module endpoint (slow-but-works).
+      log?.warn(
+        { err: (err as Error).message },
+        'noTemplate activation: execute-js unavailable; falling back to the module endpoint (slow — enable "Allow Execute JS" + the execute-js key scope to fix)',
+      );
     }
   }
   return relay.useAbility(endpoint, actorUuid, itemUuid, opts);
@@ -1105,6 +1109,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
                 `Actor.${id}.Item.${action.itemId}`,
                 action.slotLevel !== undefined ? { slotLevel: action.slotLevel } : {},
                 action.noTemplate,
+                req.log,
               ),
             );
           } catch (err) {
@@ -1164,7 +1169,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
             if (action.use === 'cast-at-slot') {
               await relay.castAtSlot(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.slotKey as string);
             } else {
-              await activateAbility(relay, action.use, `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {}, action.noTemplate);
+              await activateAbility(relay, action.use, `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {}, action.noTemplate, req.log);
             }
           } catch (err) {
             // A relay 408 means Foundry's usage workflow is waiting on
@@ -1209,7 +1214,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
             if (action.use === 'cast-at-slot') {
               await relay.castAtSlot(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.slotKey as string);
             } else {
-              await activateAbility(relay, 'use-spell', `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {}, action.noTemplate);
+              await activateAbility(relay, 'use-spell', `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {}, action.noTemplate, req.log);
             }
           } catch (err) {
             if (isRelayTimeout(err)) {

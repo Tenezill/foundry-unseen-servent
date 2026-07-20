@@ -577,6 +577,7 @@ describe('actions', () => {
       relay.useWithoutTemplateError = err;
       const res = await castTemplateSpell();
       expect(res.statusCode).toBe(200);
+      expect(relay.useWithoutTemplateCalls).toHaveLength(1); // proves execute-js path was attempted first
       expect(relay.useAbilityCalls).toHaveLength(1); // fell back
     });
 

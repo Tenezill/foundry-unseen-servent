@@ -238,8 +238,8 @@ export class FakeRelay implements RelayPort {
   useWithoutTemplateResult: Record<string, unknown> = {};
   useWithoutTemplateError: Error | null = null;
   async useWithoutTemplate(actorUuid: string, itemUuid: string): Promise<Record<string, unknown>> {
-    if (this.useWithoutTemplateError) throw this.useWithoutTemplateError;
     this.useWithoutTemplateCalls.push({ actorUuid, itemUuid });
+    if (this.useWithoutTemplateError) throw this.useWithoutTemplateError;
     return structuredClone(this.useWithoutTemplateResult);
   }
 
