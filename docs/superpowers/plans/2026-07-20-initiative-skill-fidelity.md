@@ -69,13 +69,23 @@ async function enrichWith(actor: FoundryActorDoc, response: unknown, calls?: str
   });
 }
 
-/** Read a stat's `value` from the built sheet by section + stat id. */
+/**
+ * Read a stat's `value` from the built sheet. The init/ac/prof stats live in
+ * the top-level `headline` array; skills/saves live in `sections` by id. Pass
+ * sectionId 'headline' for the former.
+ */
 function statValue(actor: FoundryActorDoc, sectionId: string, statId: string): string | number | undefined {
-  const sheet = dnd5eAdapter.toViewModel(actor) as { sections: Array<Record<string, unknown>> };
-  for (const section of sheet.sections) {
-    if (section.id !== sectionId) continue;
-    const stats = (section.stats as Array<{ id: string; value: string | number }>) ?? [];
-    return stats.find((s) => s.id === statId)?.value;
+  const sheet = dnd5eAdapter.toViewModel(actor) as {
+    headline?: Array<{ id: string; value: string | number }>;
+    sections: Array<{ id: string; stats?: Array<{ id: string; value: string | number }> }>;
+  };
+  const pools =
+    sectionId === 'headline'
+      ? [sheet.headline ?? []]
+      : sheet.sections.filter((s) => s.id === sectionId).map((s) => s.stats ?? []);
+  for (const stats of pools) {
+    const found = stats.find((s) => s.id === statId);
+    if (found) return found.value;
   }
   return undefined;
 }
@@ -85,7 +95,7 @@ describe('enrich — derived initiative', () => {
     const enriched = await enrichWith(martialCaptured, { stats: { initBonus: 5 } });
     const sys = enriched.system as { attributes: { init: { total: unknown } } };
     expect(sys.attributes.init.total).toBe(5);
-    expect(statValue(enriched, 'core', 'init')).toBe('+5');
+    expect(statValue(enriched, 'headline', 'init')).toBe('+5');
   });
 
   it('requests skills and abilities alongside stats (caster: spells too)', async () => {
@@ -104,7 +114,7 @@ describe('enrich — derived initiative', () => {
 });
 ```
 
-> NOTE: The init stat lives in the section whose id is `core` in the view model. If the section id differs, adjust `statValue(enriched, 'core', 'init')` to the actual section id (grep `id: 'init'` in `index.ts` — it is emitted at `:2231` inside the section built around there). Verify the section id while running Step 2 and fix the literal before implementing.
+> CONFIRMED ids (no need to re-verify): the init stat is `id: 'init'` in the view model's top-level `headline` array (`index.ts:2231`, `headline` at `:2357`) — hence `statValue(enriched, 'headline', 'init')`. Saves are section `id: 'saves'` with stat ids `save.<abl>` (`:892`, `:2261`); skills are section `id: 'skills'` with stat ids `skill.<id>` (`:2262`).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -291,7 +301,7 @@ describe('enrich — derived ability mods + saves', () => {
 });
 ```
 
-> NOTE: Confirm the saves section id and save stat id while running Step 2 (grep `id: 'save.` and the section built by `saveStats` in `index.ts`). Adjust the `statValue(enriched, 'saves', 'save.str')` literals to the real ids before implementing.
+> Section `saves` / stat `save.str` are the confirmed ids (see the CONFIRMED-ids note in Task 1).
 
 - [ ] **Step 2: Run test to verify it fails**
 
