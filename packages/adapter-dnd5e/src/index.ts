@@ -2456,6 +2456,28 @@ async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryAct
     merged = base;
   }
 
+  const derivedSkills = rec(body.skills);
+  const skillKeys = Object.keys(derivedSkills);
+  if (skillKeys.length > 0) {
+    const base = merged ?? { ...system };
+    const skills = { ...rec(base.skills) };
+    for (const key of skillKeys) {
+      const d = rec(derivedSkills[key]);
+      const total = typeof d.total === 'number' && Number.isFinite(d.total) ? d.total : undefined;
+      const mod = typeof d.mod === 'number' && Number.isFinite(d.mod) ? d.mod : undefined;
+      const passive = typeof d.passive === 'number' && Number.isFinite(d.passive) ? d.passive : undefined;
+      if (total === undefined && mod === undefined && passive === undefined) continue;
+      skills[key] = {
+        ...rec(skills[key]),
+        ...(total !== undefined ? { total } : {}),
+        ...(mod !== undefined ? { mod } : {}),
+        ...(passive !== undefined ? { passive } : {}),
+      };
+    }
+    base.skills = skills;
+    merged = base;
+  }
+
   return merged === undefined ? actor : { ...actor, system: merged };
 }
 

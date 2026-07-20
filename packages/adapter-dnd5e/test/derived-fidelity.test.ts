@@ -68,3 +68,24 @@ describe('enrich — derived initiative', () => {
     }
   });
 });
+
+describe('enrich — derived skill totals', () => {
+  it('folds skills.<id>.total so the skill card shows the derived bonus', async () => {
+    const enriched = await enrichWith(martialCaptured, {
+      stats: {},
+      skills: { ath: { total: 7, mod: 7, passive: 17 } },
+    });
+    const sys = enriched.system as { skills: Record<string, { total?: unknown }> };
+    expect(sys.skills.ath?.total).toBe(7);
+    expect(statValue(enriched, 'skills', 'skill.ath')).toBe('+7');
+  });
+
+  it('leaves untouched skills alone and ignores non-numeric totals', async () => {
+    const enriched = await enrichWith(martialCaptured, {
+      stats: {},
+      skills: { acr: { total: 'x' } },
+    });
+    const sys = enriched.system as { skills: Record<string, { total?: unknown }> };
+    expect(sys.skills.acr?.total).not.toBe('x');
+  });
+});
