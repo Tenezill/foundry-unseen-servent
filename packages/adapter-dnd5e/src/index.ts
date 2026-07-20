@@ -2386,7 +2386,11 @@ async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryAct
     Object.keys(rec(getPath(actor.system, 'spells'))).length > 0;
   let details: unknown;
   try {
-    details = await io.getSystemDetails(hasSpellcasting ? ['spells', 'stats'] : ['stats']);
+    details = await io.getSystemDetails(
+      hasSpellcasting
+        ? ['spells', 'stats', 'skills', 'abilities']
+        : ['stats', 'skills', 'abilities'],
+    );
   } catch {
     return actor;
   }
@@ -2440,6 +2444,15 @@ async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryAct
         ...(encMax !== undefined ? { max: encMax } : {}),
       },
     };
+    merged = base;
+  }
+
+  const initBonus =
+    typeof stats.initBonus === 'number' && Number.isFinite(stats.initBonus) ? stats.initBonus : undefined;
+  if (initBonus !== undefined) {
+    const base = merged ?? { ...system };
+    const attributes = rec(base.attributes);
+    base.attributes = { ...attributes, init: { ...rec(attributes.init), total: initBonus } };
     merged = base;
   }
 
