@@ -690,6 +690,7 @@ function abilityStats(actor: FoundryActorDoc): Stat[] {
       value: abilityScore(actor.system, a.id),
       sub: signed(abilityMod(actor.system, a.id)),
       actionId: `ability.${a.id}.check`,
+      ...biasFields(rollBias(actor, 'check', a.id)),
     };
   });
 }
@@ -722,6 +723,76 @@ function numericBonus(raw: unknown): number | undefined {
     if (Number.isFinite(n)) return n;
   }
   return undefined;
+}
+
+/** True when a dnd5e advantage/disadvantage flag counts as set (Foundry
+ *  writes "1", true, or 1). */
+function isFlagSet(v: unknown): boolean {
+  if (v === true || v === 1) return true;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    return s !== '' && s !== '0' && s !== 'false';
+  }
+  return false;
+}
+
+/** Any equipped equipment whose dnd5e properties impose stealth disadvantage. */
+function hasStealthDisadvantageArmor(actor: FoundryActorDoc): boolean {
+  for (const item of actor.items ?? []) {
+    if (item.type !== 'equipment') continue;
+    if (getPath(item.system, 'equipped') !== true) continue;
+    const props = getPath(item.system, 'properties');
+    if (Array.isArray(props) && props.includes('stealthDisadvantage')) return true;
+  }
+  return false;
+}
+
+/**
+ * Passive advantage/disadvantage indicator for a d20 roll row. DISPLAY-ONLY:
+ * never applied to the rolled formula, because other effects can flip the net.
+ * OR of dnd5e bonus flags, the per-roll `roll.mode` override, and (Stealth
+ * only) equipped stealth-disadvantage armor.
+ */
+function rollBias(
+  actor: FoundryActorDoc,
+  kind: 'skill' | 'check' | 'save',
+  id: string,
+): { advantage: boolean; disadvantage: boolean } {
+  const flagPaths = (dir: 'advantage' | 'disadvantage'): string[] => {
+    const base = `flags.dnd5e.${dir}`;
+    if (kind === 'skill') return [`${base}.all`, `${base}.skill.all`, `${base}.skill.${id}`];
+    if (kind === 'check')
+      return [`${base}.all`, `${base}.ability.all`, `${base}.ability.check.all`, `${base}.ability.check.${id}`];
+    return [`${base}.all`, `${base}.ability.all`, `${base}.ability.save.all`, `${base}.ability.save.${id}`];
+  };
+  let advantage = flagPaths('advantage').some((p) => isFlagSet(getPath(actor, p)));
+  let disadvantage = flagPaths('disadvantage').some((p) => isFlagSet(getPath(actor, p)));
+
+  const modePath =
+    kind === 'skill'
+      ? `skills.${id}.roll.mode`
+      : kind === 'check'
+        ? `abilities.${id}.check.roll.mode`
+        : `abilities.${id}.save.roll.mode`;
+  const mode = numAt(actor.system, modePath);
+  if (mode === 1) advantage = true;
+  else if (mode === -1) disadvantage = true;
+
+  if (kind === 'skill' && id === 'ste' && hasStealthDisadvantageArmor(actor)) disadvantage = true;
+
+  return { advantage, disadvantage };
+}
+
+/** Emit advantage/disadvantage ONLY when set, so unaffected stat rows stay
+ *  byte-identical to before this feature. */
+function biasFields(bias: { advantage: boolean; disadvantage: boolean }): {
+  advantage?: true;
+  disadvantage?: true;
+} {
+  return {
+    ...(bias.advantage ? { advantage: true as const } : {}),
+    ...(bias.disadvantage ? { disadvantage: true as const } : {}),
+  };
 }
 
 function passiveStats(actor: FoundryActorDoc): Stat[] {
@@ -894,6 +965,7 @@ function saveStats(actor: FoundryActorDoc): Stat[] {
       value: signed(saveBonus(actor, a.id)),
       ...(proficient ? { sub: '● proficient' } : {}),
       actionId: `ability.${a.id}.save`,
+      ...biasFields(rollBias(actor, 'save', a.id)),
     };
   });
 }
@@ -1027,6 +1099,7 @@ function skillStats(actor: FoundryActorDoc): Stat[] {
       value: signed(total),
       sub: subParts.join(' · '),
       actionId: `skill.${s.id}`,
+      ...biasFields(rollBias(actor, 'skill', s.id)),
     };
   });
 }

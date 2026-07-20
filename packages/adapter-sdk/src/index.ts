@@ -86,6 +86,10 @@ export interface Stat {
   display?: 'dots';
   /** dots only: total dots to draw; max ≤ 10. */
   max?: number;
+  /** Passive d20 roll indicators (display-only; never auto-applied to the
+   *  roll). Set only when a source grants it; both may be true at once. */
+  advantage?: boolean;
+  disadvantage?: boolean;
 }
 
 /** One row in a list section (inventory, features, spells). */
