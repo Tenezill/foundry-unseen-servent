@@ -273,9 +273,9 @@ function parseActionIntent(
   switch (kind) {
     case 'check':
     case 'save':
+    case 'attack':
       if (body.mode !== undefined && body.mode !== 'advantage' && body.mode !== 'disadvantage') return null;
       return body.mode === undefined ? { kind, actionId } : { kind, actionId, mode: body.mode };
-    case 'attack':
     case 'use':
       return { kind, actionId };
     case 'damage':
