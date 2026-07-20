@@ -296,7 +296,8 @@ export interface ActionDescriptor {
 
 export type ActionIntent =
   | { kind: 'check' | 'save'; actionId: string; mode?: 'advantage' | 'disadvantage' }
-  | { kind: 'attack' | 'use'; actionId: string }
+  | { kind: 'attack'; actionId: string; mode?: 'advantage' | 'disadvantage' }
+  | { kind: 'use'; actionId: string }
   /** `critical` (5e nat 20): the damage roll doubles its dice, keeping
    *  static bonuses — armed by the PWA when the preceding attack/cast
    *  roll came back `isCritical`. `slotLevel` is the level the spell was

@@ -1650,6 +1650,28 @@ function weaponAbilityMod(actor: FoundryActorDoc, item: FoundryItemDoc): number 
 }
 
 /**
+ * Best-effort attack to-hit bonus for the companion-built attack roll — used
+ * ONLY when the player picks advantage/disadvantage (a plain Roll goes through
+ * Foundry's native use-item). Mirrors weaponDamageFormula's honesty: resolved
+ * ability mod (finesse/ranged/override via weaponAbilityMod) + proficiency
+ * (unless the item is explicitly non-proficient) + the weapon's magical bonus +
+ * a flat activity attack bonus. NOT modelled (documented gaps, same as damage):
+ * weapon-mastery bonuses, non-numeric @-formula attack bonuses, active effects.
+ */
+function weaponAttackBonus(actor: FoundryActorDoc, item: FoundryItemDoc): number {
+  const ability = weaponAbilityMod(actor, item);
+  const proficientRaw = numAt(item.system, 'proficient');
+  const prof = proficientRaw === 0 ? 0 : proficiency(actor);
+  const magic = numAt(item.system, 'magicalBonus') ?? 0;
+  const activities = rec(getPath(item.system, 'activities'));
+  const first = rec(Object.values(activities)[0]);
+  const rawAtk = getPath(first, 'attack.bonus');
+  const flat = typeof rawAtk === 'number' ? rawAtk : typeof rawAtk === 'string' ? Number(rawAtk) : Number.NaN;
+  const atk = Number.isFinite(flat) ? flat : 0;
+  return ability + prof + magic + atk;
+}
+
+/**
  * Weapon damage formula: base dice + the weapon's own static bonus (e.g. a
  * +1 weapon's `damage.base.bonus`) + the resolved ability modifier —
  * dnd5e's default calc for a plain weapon hit. Undefined when the item
@@ -2067,8 +2089,25 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       }
       return buildRollAction(actor, intent.actionId, mode);
     }
-    case 'attack':
-      return { endpoint: 'use-item', itemId: intent.actionId.slice('item.'.length, -'.attack'.length) };
+    case 'attack': {
+      const mode = intent.mode;
+      if (mode !== undefined && mode !== 'advantage' && mode !== 'disadvantage') {
+        throw new IntentError(`unknown roll mode "${String(mode)}"`, 'INVALID');
+      }
+      const itemId = intent.actionId.slice('item.'.length, -'.attack'.length);
+      // Plain Roll: Foundry-native item use (consumes ammo/uses, rolls to hit).
+      if (mode === undefined) return { endpoint: 'use-item', itemId };
+      // Advantage/disadvantage: companion-built to-hit (the relay's use-item
+      // path exposes no advantage without execute-JS). Best-effort bonus;
+      // ammo/uses and auto-crit are NOT modelled on this path.
+      const item = (actor.items ?? []).find((i) => i._id === itemId);
+      if (!item) throw new IntentError(`unknown weapon "${itemId}"`, 'UNKNOWN_RESOURCE');
+      return {
+        endpoint: 'roll',
+        formula: d20Formula(weaponAttackBonus(actor, item), mode),
+        flavor: `${item.name} — Attack`,
+      };
+    }
     case 'damage': {
       // Weapons (item.<id>.damage) and damage spells (spell.<id>.damage) both
       // roll their damage as a bare display roll — the attack/cast already
