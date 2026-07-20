@@ -73,6 +73,9 @@ export interface RelayPort {
   ): Promise<Record<string, unknown>>;
   /** POST /execute-js via foundry-client castAtSlot — upcast only. */
   castAtSlot(actorUuid: string, itemUuid: string, slotKey: string): Promise<Record<string, unknown>>;
+  /** POST /execute-js via foundry-client useWithoutTemplate — template-
+   *  bearing items only (headless placement block, M-daylight 2026-07-20). */
+  useWithoutTemplate(actorUuid: string, itemUuid: string): Promise<Record<string, unknown>>;
   /** POST /dnd5e/equip-item — toggle an item's equipped state (M6). */
   equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void>;
   /** POST /dnd5e/attune-item — set an item's attuned state (M12). */
@@ -414,6 +417,36 @@ function upcastUnavailable(err: unknown): string | null {
   // adjust here (and there) if the observed relay wording differs.
   if (!/execute-js is disabled|execute-js.*scope/i.test(err.message)) return null;
   return 'Upcasting is not enabled on the table: enable "Allow Execute JS" in the Foundry REST API module settings and grant the relay API key the execute-js scope.';
+}
+
+/** Run an item's usage workflow. Template-bearing items (action.noTemplate)
+ *  go through the execute-js activation, which suppresses the headless-
+ *  blocking canvas placement prompt (5-8s -> ~250ms, live-verified
+ *  2026-07-20); when the table has execute-js disabled/unscoped
+ *  (upcastUnavailable wording — used here as a detector only, its message is
+ *  NOT surfaced) the module use-* endpoint still works, just slow (the
+ *  template prompt 408s and the caller's isRelayTimeout handling tolerates
+ *  it). Every other execute-js failure stays fatal — a fallback would risk a
+ *  double activation. `slotLevel` casts skip the execute-js path (it speaks
+ *  default consumption only).
+ */
+async function activateAbility(
+  relay: RelayPort,
+  endpoint: 'use-item' | 'use-spell' | 'use-feature',
+  actorUuid: string,
+  itemUuid: string,
+  opts: { slotLevel?: number },
+  noTemplate: true | undefined,
+): Promise<Record<string, unknown>> {
+  if (noTemplate === true && opts.slotLevel === undefined) {
+    try {
+      return await relay.useWithoutTemplate(actorUuid, itemUuid);
+    } catch (err) {
+      if (upcastUnavailable(err) === null) throw err;
+      // execute-js unavailable -> module endpoint (slow-but-works).
+    }
+  }
+  return relay.useAbility(endpoint, actorUuid, itemUuid, opts);
 }
 
 const AE_ID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -1065,11 +1098,13 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
         case 'use-feature':
           try {
             result = extractRoll(
-              await relay.useAbility(
+              await activateAbility(
+                relay,
                 action.endpoint,
                 `Actor.${id}`,
                 `Actor.${id}.Item.${action.itemId}`,
                 action.slotLevel !== undefined ? { slotLevel: action.slotLevel } : {},
+                action.noTemplate,
               ),
             );
           } catch (err) {
@@ -1129,7 +1164,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
             if (action.use === 'cast-at-slot') {
               await relay.castAtSlot(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.slotKey as string);
             } else {
-              await relay.useAbility(action.use, `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {});
+              await activateAbility(relay, action.use, `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {}, action.noTemplate);
             }
           } catch (err) {
             // A relay 408 means Foundry's usage workflow is waiting on
@@ -1174,7 +1209,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
             if (action.use === 'cast-at-slot') {
               await relay.castAtSlot(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, action.slotKey as string);
             } else {
-              await relay.useAbility('use-spell', `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {});
+              await activateAbility(relay, 'use-spell', `Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {}, action.noTemplate);
             }
           } catch (err) {
             if (isRelayTimeout(err)) {

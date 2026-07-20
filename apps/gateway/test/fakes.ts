@@ -234,6 +234,15 @@ export class FakeRelay implements RelayPort {
     return this.castAtSlotResult;
   }
 
+  useWithoutTemplateCalls: Array<{ actorUuid: string; itemUuid: string }> = [];
+  useWithoutTemplateResult: Record<string, unknown> = {};
+  useWithoutTemplateError: Error | null = null;
+  async useWithoutTemplate(actorUuid: string, itemUuid: string): Promise<Record<string, unknown>> {
+    if (this.useWithoutTemplateError) throw this.useWithoutTemplateError;
+    this.useWithoutTemplateCalls.push({ actorUuid, itemUuid });
+    return structuredClone(this.useWithoutTemplateResult);
+  }
+
   async equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void> {
     this.equipCalls.push({ actorUuid, itemUuid, equipped });
     if (this.actionError) this.throwActionError('dnd5e/equip-item');
