@@ -51,7 +51,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { dnd5eAdapter } from '../src/index.js';
-import type { FoundryActorDoc } from '@foundry-companion/adapter-sdk';
+import type { FoundryActorDoc } from '@companion/adapter-sdk';
 
 function fixture(name: string): FoundryActorDoc {
   const path = fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
