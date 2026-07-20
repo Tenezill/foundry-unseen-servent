@@ -2386,7 +2386,11 @@ async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryAct
     Object.keys(rec(getPath(actor.system, 'spells'))).length > 0;
   let details: unknown;
   try {
-    details = await io.getSystemDetails(hasSpellcasting ? ['spells', 'stats'] : ['stats']);
+    details = await io.getSystemDetails(
+      hasSpellcasting
+        ? ['spells', 'stats', 'skills', 'abilities']
+        : ['stats', 'skills', 'abilities'],
+    );
   } catch {
     return actor;
   }
@@ -2440,6 +2444,58 @@ async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryAct
         ...(encMax !== undefined ? { max: encMax } : {}),
       },
     };
+    merged = base;
+  }
+
+  const initBonus =
+    typeof stats.initBonus === 'number' && Number.isFinite(stats.initBonus) ? stats.initBonus : undefined;
+  if (initBonus !== undefined) {
+    const base = merged ?? { ...system };
+    const attributes = rec(base.attributes);
+    base.attributes = { ...attributes, init: { ...rec(attributes.init), total: initBonus } };
+    merged = base;
+  }
+
+  const derivedSkills = rec(body.skills);
+  const skillKeys = Object.keys(derivedSkills);
+  if (skillKeys.length > 0) {
+    const base = merged ?? { ...system };
+    const skills = { ...rec(base.skills) };
+    for (const key of skillKeys) {
+      const d = rec(derivedSkills[key]);
+      const total = typeof d.total === 'number' && Number.isFinite(d.total) ? d.total : undefined;
+      const mod = typeof d.mod === 'number' && Number.isFinite(d.mod) ? d.mod : undefined;
+      const passive = typeof d.passive === 'number' && Number.isFinite(d.passive) ? d.passive : undefined;
+      if (total === undefined && mod === undefined && passive === undefined) continue;
+      skills[key] = {
+        ...rec(skills[key]),
+        ...(total !== undefined ? { total } : {}),
+        ...(mod !== undefined ? { mod } : {}),
+        ...(passive !== undefined ? { passive } : {}),
+      };
+    }
+    base.skills = skills;
+    merged = base;
+  }
+
+  const derivedAbilities = rec(body.abilities);
+  const abilityKeys = Object.keys(derivedAbilities);
+  if (abilityKeys.length > 0) {
+    const base = merged ?? { ...system };
+    const abilities = { ...rec(base.abilities) };
+    for (const key of abilityKeys) {
+      const d = rec(derivedAbilities[key]);
+      const mod = typeof d.mod === 'number' && Number.isFinite(d.mod) ? d.mod : undefined;
+      const save = typeof d.save === 'number' && Number.isFinite(d.save) ? d.save : undefined;
+      if (mod === undefined && save === undefined) continue;
+      const prev = rec(abilities[key]);
+      abilities[key] = {
+        ...prev,
+        ...(mod !== undefined ? { mod } : {}),
+        ...(save !== undefined ? { save: { ...rec(prev.save), value: save } } : {}),
+      };
+    }
+    base.abilities = abilities;
     merged = base;
   }
 

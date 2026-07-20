@@ -315,7 +315,7 @@ describe('M12 enrich — stats detail (encumbrance)', () => {
       { stats: { encumbrance: { value: 142.5, max: 240 } } },
       calls,
     );
-    expect(calls).toEqual([['spells', 'stats']]);
+    expect(calls).toEqual([['spells', 'stats', 'skills', 'abilities']]);
     expect(gearStat(enriched, 'weight').value).toBe('142.5/240 lb');
   });
 
@@ -329,7 +329,7 @@ describe('M12 enrich — stats detail (encumbrance)', () => {
     };
     const calls: string[][] = [];
     const enriched = await enrichWith(spellless, { stats: { encumbrance: { value: 10, max: 100 } } }, calls);
-    expect(calls).toEqual([['stats']]);
+    expect(calls).toEqual([['stats', 'skills', 'abilities']]);
     expect(gearStat(enriched, 'weight').value).toBe('10/100 lb');
   });
 
@@ -343,7 +343,7 @@ describe('M12 enrich — stats detail (encumbrance)', () => {
       },
       calls,
     );
-    expect(calls).toEqual([['spells', 'stats']]);
+    expect(calls).toEqual([['spells', 'stats', 'skills', 'abilities']]);
     const slot1 = dnd5eAdapter.resources(enriched).find((r) => r.id === 'slots.1');
     expect(slot1).toMatchObject({ value: 1, max: 4 });
     expect(gearStat(enriched, 'weight').value).toBe('120/195 lb');
