@@ -374,6 +374,63 @@ describe('buildAction — attack / cast / use / equip', () => {
     });
   });
 
+  it('attack with advantage builds a 2d20kh1 to-hit formula (fallback, no execute-JS)', () => {
+    const actor = {
+      system: { attributes: { prof: 2 }, abilities: { str: { mod: 3 }, dex: { mod: 1 } } },
+      items: [
+        {
+          _id: 'wpn1',
+          type: 'weapon',
+          name: 'Longsword',
+          system: { equipped: true, proficient: 1, damage: { base: { number: 1, denomination: 8 } } },
+        },
+      ],
+    } as unknown as FoundryActorDoc;
+    expect(build(actor, { kind: 'attack', actionId: 'item.wpn1.attack', mode: 'advantage' })).toEqual({
+      endpoint: 'roll',
+      formula: '2d20kh1 + 5', // STR +3 + proficiency +2
+      flavor: 'Longsword — Attack',
+    });
+    expect(build(actor, { kind: 'attack', actionId: 'item.wpn1.attack', mode: 'disadvantage' })).toMatchObject({
+      formula: '2d20kl1 + 5',
+    });
+  });
+
+  it('attack with no mode still maps to native use-item', () => {
+    const actor = {
+      system: { attributes: { prof: 2 }, abilities: { str: { mod: 3 }, dex: { mod: 1 } } },
+      items: [
+        {
+          _id: 'wpn1',
+          type: 'weapon',
+          name: 'Longsword',
+          system: { equipped: true, proficient: 1, damage: { base: { number: 1, denomination: 8 } } },
+        },
+      ],
+    } as unknown as FoundryActorDoc;
+    expect(build(actor, { kind: 'attack', actionId: 'item.wpn1.attack' })).toEqual({
+      endpoint: 'use-item',
+      itemId: 'wpn1',
+    });
+  });
+
+  it('attack rejects an unknown roll mode', () => {
+    const actor = {
+      system: { attributes: { prof: 2 }, abilities: { str: { mod: 3 }, dex: { mod: 1 } } },
+      items: [
+        {
+          _id: 'wpn1',
+          type: 'weapon',
+          name: 'Longsword',
+          system: { equipped: true, proficient: 1, damage: { base: { number: 1, denomination: 8 } } },
+        },
+      ],
+    } as unknown as FoundryActorDoc;
+    expect(() =>
+      build(actor, { kind: 'attack', actionId: 'item.wpn1.attack', mode: 'sideways' as never }),
+    ).toThrow(/roll mode/);
+  });
+
   it('use maps to use-feature (non-heal features are unaffected by M15)', () => {
     // Second Wind is heal-type and now maps to roll-and-heal (see the M15
     // 'buildAction — heal formulas & self-heal write-through' describe

@@ -545,6 +545,35 @@ describe('actions', () => {
     expect(res.json().result).toBeNull();
   });
 
+  it('attack with mode:advantage forwards to relay as an explicit 2d20kh1 roll, not use-item (PR4 Task 1b)', async () => {
+    const { app, relay } = setup();
+    relay.rollResult = { formula: '2d20kh1 + 5', total: 19, isCritical: false, isFumble: false };
+    const res = await post(app, 'a1', { kind: 'attack', actionId: 'item.i1.attack', mode: 'advantage' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.rollCalls).toEqual([{ actorUuid: 'Actor.a1', formula: '2d20kh1 + 5', flavor: 'Arrows' }]);
+    expect(relay.useAbilityCalls).toHaveLength(0);
+    const body = res.json();
+    expect(body.result).toEqual({ formula: '2d20kh1 + 5', total: 19, isCritical: false, isFumble: false });
+  });
+
+  it('attack with mode:disadvantage forwards to relay as an explicit 2d20kl1 roll (PR4 Task 1b)', async () => {
+    const { app, relay } = setup();
+    relay.rollResult = { formula: '2d20kl1 + 5', total: 8, isCritical: false, isFumble: false };
+    const res = await post(app, 'a1', { kind: 'attack', actionId: 'item.i1.attack', mode: 'disadvantage' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.rollCalls).toEqual([{ actorUuid: 'Actor.a1', formula: '2d20kl1 + 5', flavor: 'Arrows' }]);
+    expect(relay.useAbilityCalls).toHaveLength(0);
+  });
+
+  it('422 INVALID_INTENT for an unknown attack mode', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'attack', actionId: 'item.i1.attack', mode: 'lucky' });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('INVALID_INTENT');
+    expect(relay.rollCalls).toHaveLength(0);
+    expect(relay.useAbilityCalls).toHaveLength(0);
+  });
+
   it('equip -> equip-item with the desired state, result null', async () => {
     const { app, relay } = setup();
     const res = await post(app, 'a1', { kind: 'equip', actionId: 'item.i1.equip', equipped: true });

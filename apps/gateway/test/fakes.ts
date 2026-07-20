@@ -538,8 +538,16 @@ export const fakeAdapter: SystemAdapter = {
       case 'check':
       case 'save':
         return { endpoint: 'roll', formula: '1d20 + 6', flavor: desc.label };
-      case 'attack':
-        return { endpoint: 'use-item', itemId: 'i1' };
+      case 'attack': {
+        // Mirrors the real dnd5e adapter (packages/adapter-dnd5e buildAction
+        // 'attack' case): no mode -> Foundry-native use-item; advantage/
+        // disadvantage -> an explicit 2d20kh1/kl1 roll instead, so gateway
+        // tests can prove `mode` actually reaches the adapter (Task 1b).
+        const mode = intent.mode;
+        if (mode === undefined) return { endpoint: 'use-item', itemId: 'i1' };
+        const dice = mode === 'advantage' ? '2d20kh1' : '2d20kl1';
+        return { endpoint: 'roll', formula: `${dice} + 5`, flavor: desc.label };
+      }
       case 'damage': {
         // Mirrors the dnd5e crit rule shape: critical doubles the dice term;
         // slotLevel (MF-4b) reflects the intent's requested slot into the
