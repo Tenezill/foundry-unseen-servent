@@ -16,11 +16,13 @@
           <span class="tap-glyph" aria-hidden="true">⚅</span>
           <span class="cap">{{ stat.label }}</span>
           <span class="mod">{{ stat.sub ?? stat.value }}</span>
+          <RollBadges :advantage="stat.advantage" :disadvantage="stat.disadvantage" />
           <span class="score">{{ stat.value }}</span>
         </button>
         <div v-else class="gem">
           <span class="cap">{{ stat.label }}</span>
           <span class="mod">{{ stat.sub ?? stat.value }}</span>
+          <RollBadges :advantage="stat.advantage" :disadvantage="stat.disadvantage" />
           <span class="score">{{ stat.value }}</span>
         </div>
       </template>
@@ -53,6 +55,7 @@
           <template v-else>
             <span class="value">{{ stat.value }}</span>
             <span v-if="stat.sub" class="sub">{{ stat.sub }}</span>
+            <RollBadges :advantage="stat.advantage" :disadvantage="stat.disadvantage" />
           </template>
           <svg v-if="stat.display !== 'dots'" class="die" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 2 3 7v10l9 5 9-5V7Zm0 2.3L18.9 8 12 11.7 5.1 8ZM5 9.7l6 3.3v6.6l-6-3.3Zm14 0v6.6l-6 3.3V13Z" />
@@ -66,6 +69,7 @@
           <template v-else>
             <span class="value">{{ stat.value }}</span>
             <span v-if="stat.sub" class="sub">{{ stat.sub }}</span>
+            <RollBadges :advantage="stat.advantage" :disadvantage="stat.disadvantage" />
           </template>
         </div>
       </template>
@@ -75,6 +79,7 @@
 
 <script setup lang="ts">
 import type { SheetSection, Stat } from '@companion/adapter-sdk'
+import RollBadges from './RollBadges.vue'
 
 withDefaults(
   defineProps<{
