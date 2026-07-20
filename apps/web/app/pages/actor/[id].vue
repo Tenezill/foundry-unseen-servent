@@ -1308,7 +1308,7 @@ function onAction(actionId: string): void {
       else actionSheetFor.value = actionId
       break
     case 'attack':
-      void submitAction({ kind: 'attack', actionId }, action.label)
+      actionSheetFor.value = actionId
       break
     case 'damage': {
       const crit = critArmed.value.has(actionId)

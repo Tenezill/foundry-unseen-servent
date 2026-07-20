@@ -6,7 +6,7 @@
         <span class="note">Rolls in Foundry as your character</span>
       </div>
 
-      <div v-if="action.kind === 'check' || action.kind === 'save'" class="options">
+      <div v-if="action.kind === 'check' || action.kind === 'save' || action.kind === 'attack'" class="options">
         <button class="opt" type="button" :disabled="busy" @click="roll()">Roll</button>
         <button class="opt adv" type="button" :disabled="busy" @click="roll('advantage')">
           Advantage
@@ -59,7 +59,7 @@ const emit = defineEmits<{
 }>()
 
 function roll(mode?: 'advantage' | 'disadvantage'): void {
-  if (props.action.kind !== 'check' && props.action.kind !== 'save') return
+  if (props.action.kind !== 'check' && props.action.kind !== 'save' && props.action.kind !== 'attack') return
   emit('submit', {
     kind: props.action.kind,
     actionId: props.action.id,
