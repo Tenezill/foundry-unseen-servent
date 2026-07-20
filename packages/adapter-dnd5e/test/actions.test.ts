@@ -2146,6 +2146,31 @@ describe('template-bearing items set noTemplate (M-daylight, 2026-07-20)', () =>
     });
   });
 
+  it('a spell whose activity inherits the ITEM-level template (override:false source shape, live Daylight capture) is flagged', () => {
+    const actor = templateCaster(false); // activity has no template of its own
+    const item = actor.items[0]!;
+    (item.system.activities as Record<string, Record<string, unknown>>).a1 = {
+      _id: 'a1',
+      type: 'utility',
+      // Live source capture: no template.type on the activity; it inherits.
+      target: {
+        template: { contiguous: false, stationary: false, units: 'ft' },
+        affects: { choice: false },
+        override: false,
+        prompt: true,
+      },
+    };
+    (item.system as Record<string, unknown>).target = {
+      affects: { count: '', type: '', choice: false, special: '' },
+      template: { count: '', contiguous: false, type: 'sphere', size: '60', width: '', height: '', units: 'ft', stationary: false },
+    };
+    expect(build(actor, { kind: 'cast', actionId: 'spell.spellDaylight001.cast' })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'spellDaylight001',
+      noTemplate: true,
+    });
+  });
+
   it('upcast of a template spell keeps cast-at-slot (no flag needed — castAtSlot suppresses itself)', () => {
     expect(build(templateCaster(true), { kind: 'cast', actionId: 'spell.spellDaylight001.cast', slotLevel: 4 })).toEqual(
       { endpoint: 'cast-at-slot', itemId: 'spellDaylight001', slotKey: 'spell4' },

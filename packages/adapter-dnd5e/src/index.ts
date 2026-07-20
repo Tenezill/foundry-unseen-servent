@@ -1528,15 +1528,22 @@ function allActivities(item: FoundryItemDoc): Rec[] {
   return Object.values(activities).map(rec);
 }
 
-/** True when any activity targets an area template (Daylight sphere/60,
- *  Fireball radius/20…). Headless, dnd5e's use() blocks awaiting canvas
- *  placement for these (M-daylight finding) — the gateway routes them
- *  through the template-suppressing execute-js activation instead. */
+/** True when any activity targets an area template (Bead of Force, Torch —
+ *  their source activities carry their own `target.template.type`), OR when
+ *  the ITEM-level `system.target.template.type` is set — dnd5e 5.3.3 spell
+ *  activities with `target.override: false` store no type of their own in
+ *  SOURCE data and inherit the item's template when derived (live-verified
+ *  2026-07-20 on Daylight: sphere/60 lives only at system.target). Headless,
+ *  dnd5e's use() blocks awaiting canvas placement for these — the gateway
+ *  routes them through the template-suppressing execute-js activation. */
 function hasAreaTemplate(item: FoundryItemDoc): boolean {
-  return allActivities(item).some((a) => {
+  const activityHas = allActivities(item).some((a) => {
     const type = getPath(a, 'target.template.type');
     return typeof type === 'string' && type !== '';
   });
+  if (activityHas) return true;
+  const itemLevel = getPath(item.system, 'target.template.type');
+  return typeof itemLevel === 'string' && itemLevel !== '';
 }
 
 /** The dnd5e activity `type` this item's first activity carries, e.g.
