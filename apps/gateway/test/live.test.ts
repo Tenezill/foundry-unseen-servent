@@ -260,6 +260,83 @@ describe('LiveManager shared hooks subscription', () => {
     live.stopAll();
   });
 
+  it('suppresses a transient partial sheet whose content sections vanished (spells reappear bug)', async () => {
+    // Foundry fires an item hook, the re-fetch lands mid-write, and the relay
+    // returns an actor doc with empty `items` -> every item-derived section
+    // (spells.*, inventory, ...) is gone at once. That partial sheet must NOT
+    // clobber the last-known-good one; the next full refresh restores it.
+    const h = new Harness();
+    const full = JSON.stringify({
+      sections: [{ id: 'core' }, { id: 'spells.l0' }, { id: 'spells.l1' }, { id: 'inventory' }],
+    });
+    const partial = JSON.stringify({ sections: [{ id: 'core' }] });
+    h.sheets.set('x', full);
+    const live = new LiveManager(h.options);
+    const got: string[] = [];
+    const detach = live.attach('x', (json) => got.push(json), full);
+    await waitFor(() => h.streamOpen);
+
+    h.sheets.set('x', partial);
+    h.emitUpdateActor('x');
+    await waitFor(() => h.fetches.length === 1);
+    expect(got).toEqual([]); // the vanish is not broadcast
+
+    // A genuinely changed FULL sheet still flows through normally.
+    const fullChanged = JSON.stringify({
+      sections: [{ id: 'core' }, { id: 'spells.l0' }, { id: 'spells.l1' }, { id: 'inventory' }],
+      hp: 9,
+    });
+    h.sheets.set('x', fullChanged);
+    h.emitUpdateActor('x');
+    await waitFor(() => got.length === 1);
+    expect(got).toEqual([fullChanged]);
+
+    detach();
+    live.stopAll();
+  });
+
+  it('broadcasts a confirmed section loss when the reduced sheet repeats (real bulk delete)', async () => {
+    const h = new Harness();
+    const full = JSON.stringify({ sections: [{ id: 'core' }, { id: 'spells.l0' }, { id: 'inventory' }] });
+    const reduced = JSON.stringify({ sections: [{ id: 'core' }] });
+    h.sheets.set('x', full);
+    const live = new LiveManager(h.options);
+    const got: string[] = [];
+    const detach = live.attach('x', (json) => got.push(json), full);
+    await waitFor(() => h.streamOpen);
+
+    h.sheets.set('x', reduced);
+    h.emitUpdateActor('x'); // first sighting -> held back as suspicious
+    await waitFor(() => h.fetches.length === 1);
+    expect(got).toEqual([]);
+
+    h.emitUpdateActor('x'); // same reduced sheet again -> confirmed, broadcast
+    await waitFor(() => got.length === 1);
+    expect(got).toEqual([reduced]);
+
+    detach();
+    live.stopAll();
+  });
+
+  it('broadcasts a single dropped section immediately (normal edit, never freezes)', async () => {
+    const h = new Harness();
+    const full = JSON.stringify({ sections: [{ id: 'core' }, { id: 'spells.l0' }, { id: 'spells.l1' }] });
+    const oneLess = JSON.stringify({ sections: [{ id: 'core' }, { id: 'spells.l0' }] });
+    h.sheets.set('x', full);
+    const live = new LiveManager(h.options);
+    const got: string[] = [];
+    const detach = live.attach('x', (json) => got.push(json), full);
+    await waitFor(() => h.streamOpen);
+
+    h.sheets.set('x', oneLess); // deleted the last 1st-level spell: one section gone
+    h.emitUpdateActor('x');
+    await waitFor(() => got.length === 1);
+    expect(got).toEqual([oneLess]);
+
+    detach();
+    live.stopAll();
+  });
+
   it('restarts the stream when a client attaches after everything went idle', async () => {
     const h = new Harness();
     h.sheets.set('x', '{"hp":10}');

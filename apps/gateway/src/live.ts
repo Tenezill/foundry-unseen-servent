@@ -88,6 +88,51 @@ export function extractItemParentActorId(payload: unknown): string | null {
   return null;
 }
 
+/**
+ * A partial upstream read (relay returning the actor doc while Foundry is
+ * mid-write on its embedded items) drops EVERY item-derived section at once —
+ * all spell levels, inventory, features, actions. This threshold distinguishes
+ * that wholesale collapse from a normal edit: a single user action changes one
+ * item and so removes at most one section, which is broadcast immediately.
+ */
+const MIN_VANISHED_SECTIONS = 2;
+
+/**
+ * Section ids of a rebuilt sheet, or null when `json` is not a sheet document
+ * with a `sections` array (keeps the guard inert for non-sheet payloads).
+ */
+export function sheetSectionIds(json: string): Set<string> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const sections = (parsed as Record<string, unknown>).sections;
+  if (!Array.isArray(sections)) return null;
+  const ids = new Set<string>();
+  for (const section of sections) {
+    if (section !== null && typeof section === 'object') {
+      const id = (section as Record<string, unknown>).id;
+      if (typeof id === 'string') ids.add(id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * True when `next` looks like a partial read of `prev`: whole sections vanished
+ * (>= MIN_VANISHED_SECTIONS) and none appeared. A superset or a single-section
+ * drop is a legitimate change, not a suspicious collapse.
+ */
+export function isSuspiciousSectionLoss(prev: Set<string>, next: Set<string>): boolean {
+  for (const id of next) if (!prev.has(id)) return false; // gained a section -> real change
+  let lost = 0;
+  for (const id of prev) if (!next.has(id)) lost++;
+  return lost >= MIN_VANISHED_SECTIONS;
+}
+
 function findArgsArray(node: unknown, depth: number): unknown[] | null {
   if (depth > 6 || node === null || typeof node !== 'object' || Array.isArray(node)) return null;
   const obj = node as Record<string, unknown>;
@@ -104,6 +149,10 @@ class ActorWatcher {
   readonly clients = new Set<Send>();
   private stopped = false;
   private lastJson: string | null = null;
+  /** Section ids of the last broadcast sheet, for the section-loss guard. */
+  private lastSectionIds: Set<string> | null = null;
+  /** A suspicious partial sheet held back once; broadcast if it recurs. */
+  private suspectJson: string | null = null;
   private refreshing = false;
   private pendingRefresh = false;
 
@@ -118,7 +167,10 @@ class ActorWatcher {
 
   /** Seed the change-detection baseline with the sheet a client was just sent. */
   primeIfEmpty(sheetJson: string): void {
-    if (this.lastJson === null) this.lastJson = sheetJson;
+    if (this.lastJson === null) {
+      this.lastJson = sheetJson;
+      this.lastSectionIds = sheetSectionIds(sheetJson);
+    }
   }
 
   /** Re-fetch + rebuild the sheet; broadcast only when the JSON changed. */
@@ -139,8 +191,31 @@ class ActorWatcher {
         }
         if (this.stopped) return;
         if (json !== null && json !== this.lastJson) {
-          this.lastJson = json;
-          for (const send of this.clients) send(json);
+          const newSectionIds = sheetSectionIds(json);
+          if (
+            this.lastSectionIds !== null &&
+            newSectionIds !== null &&
+            json !== this.suspectJson &&
+            isSuspiciousSectionLoss(this.lastSectionIds, newSectionIds)
+          ) {
+            // Whole content sections vanished at once — almost certainly a
+            // partial relay read while Foundry was mid-write. Keep the last
+            // good sheet; if the SAME reduced sheet arrives again it is treated
+            // as a real change and broadcast on that next pass.
+            this.suspectJson = json;
+            this.opts.log?.warn(
+              {
+                actorId: this.actorId,
+                lost: [...this.lastSectionIds].filter((id) => !newSectionIds.has(id)),
+              },
+              'live: suppressing suspicious partial sheet (sections vanished); awaiting confirmation',
+            );
+          } else {
+            this.suspectJson = null;
+            this.lastJson = json;
+            if (newSectionIds !== null) this.lastSectionIds = newSectionIds;
+            for (const send of this.clients) send(json);
+          }
         }
       } while (this.pendingRefresh && !this.stopped);
     } finally {
