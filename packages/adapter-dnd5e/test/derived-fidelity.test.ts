@@ -89,3 +89,28 @@ describe('enrich — derived skill totals', () => {
     expect(sys.skills.acr?.total).not.toBe('x');
   });
 });
+
+describe('enrich — derived ability mods + saves', () => {
+  it('folds abilities.<id>.mod and .save (flattened number) into source shape', async () => {
+    const enriched = await enrichWith(martialCaptured, {
+      stats: {},
+      abilities: { str: { mod: 3, save: 5 } },
+    });
+    const sys = enriched.system as {
+      abilities: Record<string, { mod?: unknown; save?: { value?: unknown } }>;
+    };
+    expect(sys.abilities.str?.mod).toBe(3);
+    expect(sys.abilities.str?.save?.value).toBe(5);
+    // saveBonus (via the Saving Throws card) reflects the derived save value
+    expect(statValue(enriched, 'saves', 'save.str')).toBe('+5');
+  });
+
+  it('ignores non-numeric mod/save', async () => {
+    const enriched = await enrichWith(martialCaptured, {
+      stats: {},
+      abilities: { dex: { mod: 'x', save: null } },
+    });
+    const sys = enriched.system as { abilities: Record<string, { mod?: unknown }> };
+    expect(sys.abilities.dex?.mod).not.toBe('x');
+  });
+});
