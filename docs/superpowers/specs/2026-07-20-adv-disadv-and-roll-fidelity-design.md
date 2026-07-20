@@ -124,6 +124,20 @@ is preserved. If consumption differs, adjust the script to `item.use(...)` with
 the attack config rather than a bare `rollAttack`. **Do not finalize the script
 shape until this is verified live.**
 
+### Defined fallback
+
+If the spike shows the execute-JS attack cannot cleanly preserve consumption
+and crit, fall back to the **companion-built formula** path (no execute-JS):
+emit `{ endpoint: 'roll', formula: d20Formula(attackBonus, mode), flavor:
+'<weapon> — Attack' }` on the generic `/roll` route, computing the to-hit
+bonus in the adapter (ability mod + proficiency + weapon/enchant bonus) — the
+same trade-off already accepted for the `damage` case. This decouples from
+Foundry's item use (no ammo/slot consumption, no auto-crit) but reliably gives
+the chosen advantage/disadvantage. The plan's first task decides between native
+and fallback based on the spike result; everything downstream (intent `mode`,
+`ActionSheet` buttons, `onAction` opening the sheet) is identical either way,
+so the UI work is not blocked on the spike.
+
 ---
 
 ## Feature 3 — Initiative & skill total fidelity
@@ -216,6 +230,22 @@ conservative: it only rewrites recognized token shapes.
   fallback, and that unknown tokens pass through untouched.
 - Full `packages/adapter-dnd5e`, `apps/gateway`, and `apps/web` suites +
   typecheck green before completion.
+
+## Delivery / decomposition
+
+Shipped as **four independent PRs**, each its own branch, plan, and merge — no
+cross-dependencies, so the safe wins land without waiting on the risky one.
+Recommended order (safest / highest-value first):
+
+1. **Feature 3 — initiative & skill fidelity.** Safe, no new deps, fixes a
+   visible correctness bug (Temporal Awareness). Ship first.
+2. **Feature 1 — adv/disadv indicators.** Display-only, no new deps.
+3. **Feature 4 — enricher resolution.** Self-contained web util.
+4. **Feature 2 — attack adv/disadv.** Last, because of the execute-JS spike;
+   the defined fallback keeps it from getting stuck.
+
+Each PR gets its own implementation plan (via writing-plans) executed with
+subagent-driven development, verified independently.
 
 ## Rollout
 
