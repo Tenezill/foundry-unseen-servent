@@ -335,7 +335,12 @@ export interface EffectPayload {
 
 export type RelayAction =
   | { endpoint: 'roll'; formula: string; flavor: string }
-  | { endpoint: 'use-item' | 'use-spell' | 'use-feature'; itemId: string; slotLevel?: number }
+  /** noTemplate: the item's activities carry an area template — dnd5e's
+   *  headless activation would block awaiting canvas placement (relay 408
+   *  after 5-8s). The gateway routes flagged activations through the
+   *  execute-js path (which suppresses placement) and falls back to the
+   *  module endpoint when execute-js is unavailable. */
+  | { endpoint: 'use-item' | 'use-spell' | 'use-feature'; itemId: string; slotLevel?: number; noTemplate?: true }
   /** Upcast (dnd5e): cast the spell consuming a SPECIFIC higher-level slot.
    *  Executed via the relay's execute-js with a fixed script template —
    *  see foundry-client castAtSlot. slotKey matches ^spell[2-9]$. */
@@ -367,6 +372,7 @@ export type RelayAction =
       itemId: string;
       /** required when use === 'cast-at-slot' (upcast heals). */
       slotKey?: string;
+      noTemplate?: true;
       formula: string;
       flavor: string;
       heal?: { path: string; current: number; max: number };
@@ -376,7 +382,15 @@ export type RelayAction =
    *  on the caster via the relay's PUT /update embedded-upsert — because the
    *  headless use-flow never applies self-effects (see M-buff-effects-findings).
    *  The gateway mints the effect `_id` and sets the unseen-servent flag. */
-  | { endpoint: 'cast-and-apply-effect'; use: 'use-spell' | 'cast-at-slot'; itemId: string; slotKey?: string; effect: EffectPayload; targetActorId?: string }
+  | {
+      endpoint: 'cast-and-apply-effect';
+      use: 'use-spell' | 'cast-at-slot';
+      itemId: string;
+      slotKey?: string;
+      effect: EffectPayload;
+      targetActorId?: string;
+      noTemplate?: true;
+    }
   /** Delete an app-applied active effect off the actor (buff removal); the
    *  gateway resolves `Actor.<id>.ActiveEffect.<effectId>` via deleteEntity. */
   | { endpoint: 'remove-effect'; effectId: string }

@@ -764,6 +764,10 @@ describe('buildAction — item on-use effects (M16)', () => {
       itemId: 'iecfawCz0pIwcPVg',
       formula: '5d4',
       flavor: 'Bead of Force — Damage',
+      // Real fixture data: Bead of Force's activities carry a radius/10
+      // template (target.template.type), so this heads through the
+      // template-suppressing execute-js path headless.
+      noTemplate: true,
     });
   });
 
@@ -835,6 +839,9 @@ describe('buildAction — item on-use effects (M16)', () => {
     expect(build(martialCaptured, { kind: 'use', actionId: `item.${torch._id}.use` })).toEqual({
       endpoint: 'use-item',
       itemId: torch._id,
+      // Real fixture data: Torch's attack activity carries a radius/40
+      // template (its light-shedding "area"), so noTemplate applies here too.
+      noTemplate: true,
     });
   });
 });
@@ -872,6 +879,7 @@ describe('buildAction — attunement-required-to-use enforcement (M16)', () => {
       itemId: 'iecfawCz0pIwcPVg',
       formula: '5d4',
       flavor: 'Bead of Force — Damage',
+      noTemplate: true,
     });
   });
 
@@ -886,6 +894,7 @@ describe('buildAction — attunement-required-to-use enforcement (M16)', () => {
       itemId: 'iecfawCz0pIwcPVg',
       formula: '5d4',
       flavor: 'Bead of Force — Damage',
+      noTemplate: true,
     });
   });
 
@@ -896,6 +905,10 @@ describe('buildAction — attunement-required-to-use enforcement (M16)', () => {
       itemId: 'iecfawCz0pIwcPVg',
       formula: '5d4',
       flavor: 'Bead of Force — Damage',
+      // Real fixture data: Bead of Force's activities carry a radius/10
+      // template (target.template.type), so this heads through the
+      // template-suppressing execute-js path headless.
+      noTemplate: true,
     });
   });
 });
@@ -1164,6 +1177,7 @@ describe('item use actions (inventory/actions split)', () => {
     expect(build(martialCaptured, { kind: 'use', actionId: `item.${torch._id}.use` })).toEqual({
       endpoint: 'use-item',
       itemId: torch._id,
+      noTemplate: true,
     });
   });
 
@@ -2081,5 +2095,135 @@ describe('app-applied effects are removable', () => {
       endpoint: 'remove-effect',
       effectId: 'aeApplied0000001',
     });
+  });
+});
+
+describe('template-bearing items set noTemplate (M-daylight, 2026-07-20)', () => {
+  /** Minimal caster with one leveled utility spell; `template` toggles the
+   *  activity's area template (Daylight's live shape: sphere/60). */
+  const templateCaster = (template: boolean) => ({
+    _id: 'actorTemplate001',
+    name: 'Template Caster',
+    type: 'character',
+    system: {
+      attributes: { hp: { value: 20, max: 20 } },
+      spells: { spell3: { value: 2, max: 3 }, spell4: { value: 1, max: 1 } },
+    },
+    items: [
+      {
+        _id: 'spellDaylight001',
+        name: 'Daylight',
+        type: 'spell',
+        system: {
+          level: 3,
+          school: 'evo',
+          prepared: 1,
+          method: 'spell',
+          activities: {
+            a1: {
+              _id: 'a1',
+              type: 'utility',
+              ...(template ? { target: { template: { type: 'sphere', size: 60 } } } : {}),
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  it('base-level cast of a template spell -> use-spell + noTemplate', () => {
+    expect(build(templateCaster(true), { kind: 'cast', actionId: 'spell.spellDaylight001.cast' })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'spellDaylight001',
+      noTemplate: true,
+    });
+  });
+
+  it('base-level cast of a non-template spell carries NO flag (unchanged wire shape)', () => {
+    expect(build(templateCaster(false), { kind: 'cast', actionId: 'spell.spellDaylight001.cast' })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'spellDaylight001',
+    });
+  });
+
+  it('upcast of a template spell keeps cast-at-slot (no flag needed — castAtSlot suppresses itself)', () => {
+    expect(build(templateCaster(true), { kind: 'cast', actionId: 'spell.spellDaylight001.cast', slotLevel: 4 })).toEqual(
+      { endpoint: 'cast-at-slot', itemId: 'spellDaylight001', slotKey: 'spell4' },
+    );
+  });
+
+  it('a template item with damage (Bead of Force shape) -> use-and-roll + noTemplate', () => {
+    const actor = {
+      _id: 'actorTemplate002',
+      name: 'Bead Holder',
+      type: 'character',
+      system: { attributes: { hp: { value: 20, max: 20 } }, spells: {} },
+      items: [
+        {
+          _id: 'itemBeadForce001',
+          name: 'Bead of Force',
+          type: 'consumable',
+          system: {
+            quantity: 1,
+            activities: {
+              a1: {
+                _id: 'a1',
+                type: 'save',
+                target: { template: { type: 'sphere', size: 10 } },
+                damage: { parts: [{ number: 5, denomination: 4, bonus: '', types: ['force'] }] },
+              },
+            },
+          },
+        },
+      ],
+    };
+    const a = build(actor, { kind: 'use', actionId: 'item.itemBeadForce001.use' });
+    if (a.endpoint !== 'use-and-roll') throw new Error('expected use-and-roll, got ' + a.endpoint);
+    expect(a.noTemplate).toBe(true);
+    expect(a.use).toBe('use-item');
+  });
+
+  it('a template save-spell with damage (Fireball shape): the cast intent carries the flag', () => {
+    // Fireball's Cast action is the activation only (damage is the separate
+    // spell.<id>.damage action) -> the cast intent must carry the flag.
+    const actor = templateCaster(true);
+    (actor.items[0]!.system.activities as Record<string, Record<string, unknown>>).a1 = {
+      _id: 'a1',
+      type: 'save',
+      target: { template: { type: 'radius', size: 20 } },
+      damage: { parts: [{ number: 8, denomination: 6, bonus: '', types: ['fire'] }] },
+    };
+    expect(build(actor, { kind: 'cast', actionId: 'spell.spellDaylight001.cast' })).toEqual({
+      endpoint: 'use-spell',
+      itemId: 'spellDaylight001',
+      noTemplate: true,
+    });
+  });
+
+  it('a self-buff template spell threads the flag through cast-and-apply-effect', () => {
+    const actor = templateCaster(true);
+    const item = actor.items[0]! as unknown as Record<string, unknown>;
+    (item.system as Record<string, unknown>).activities = {
+      a1: { _id: 'a1', type: 'utility', target: { template: { type: 'radius', size: 10 }, affects: { type: 'self' } } },
+    };
+    item.effects = [
+      { transfer: false, name: 'Buffed', changes: [{ key: 'system.attributes.ac.bonus', mode: 2, value: '2' }] },
+    ];
+    const a = build(actor, { kind: 'cast', actionId: 'spell.spellDaylight001.cast' });
+    if (a.endpoint !== 'cast-and-apply-effect') throw new Error('expected cast-and-apply-effect, got ' + a.endpoint);
+    expect(a.noTemplate).toBe(true);
+  });
+
+  it('a heal spell with a template threads the flag through use-and-roll', () => {
+    const actor = templateCaster(true);
+    (actor.items[0]!.system.activities as Record<string, Record<string, unknown>>).a1 = {
+      _id: 'a1',
+      type: 'heal',
+      target: { template: { type: 'radius', size: 30 } },
+      healing: { number: 3, denomination: 8, bonus: '', types: ['healing'] },
+    };
+    const a = build(actor, { kind: 'cast', actionId: 'spell.spellDaylight001.cast' });
+    if (a.endpoint !== 'use-and-roll') throw new Error('expected use-and-roll, got ' + a.endpoint);
+    expect(a.noTemplate).toBe(true);
   });
 });
