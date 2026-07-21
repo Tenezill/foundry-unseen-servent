@@ -84,7 +84,7 @@ Movement context for the actor's token on the ACTIVE scene (square grids only).
 actor has no token there. Coordinates are grid cells, never pixels. GM-hidden
 tokens are stripped server-side. 404 foreign/unknown actor; 502 relay failure.
 
-### POST /api/actors/:id/movement
+### `POST /api/actors/:id/movement`
 
 Body `{ cx, cy }` (grid cell). Validates ownership (404), range (422
 INVALID_INTENT, Chebyshev ≤ floor(speed/gridDistance)), occupancy by visible
