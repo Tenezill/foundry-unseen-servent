@@ -997,6 +997,49 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   );
 
   app.post<{ Params: { id: string } }>(
+    '/api/actors/:id/movement',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const player = req.player as Player;
+      const { id } = req.params;
+      // Ownership (404, never 403 — do not leak actor existence).
+      if (!player.actorIds.includes(id)) return sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      if (!limiter.allow(player.tokenHash)) return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
+
+      const body = req.body as { cx?: unknown; cy?: unknown } | null;
+      const cx = body && typeof body === 'object' ? body.cx : undefined;
+      const cy = body && typeof body === 'object' ? body.cy : undefined;
+      if (!Number.isInteger(cx) || !Number.isInteger(cy)) {
+        return sendError(reply, 422, 'INVALID_INTENT', 'cx and cy must be integers');
+      }
+      const target = { cx: cx as number, cy: cy as number };
+
+      const result = await fetchMovementContext(id);
+      if (result === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+      if (result.offScene) return sendError(reply, 409, 'CONFLICT', 'no token on the active scene');
+      const { ctx, tokens } = result;
+      if (!ctx.own || !ctx.gridSize || !ctx.view.sceneId) {
+        return sendError(reply, 409, 'CONFLICT', 'no token on the active scene');
+      }
+
+      const occupied = occupiedCells(tokens, ctx.gridSize, ctx.own._id);
+      const verdict = validateMove(ctx.view, target, occupied);
+      if (!verdict.ok) return sendError(reply, verdict.status, verdict.code, verdict.message);
+
+      const tokenUuid = `Scene.${ctx.view.sceneId}.Token.${ctx.own._id}`;
+      const moved = await boundedMs(
+        relay.moveToken(tokenUuid, target.cx * ctx.gridSize, target.cy * ctx.gridSize).then(() => true),
+        movementTimeoutMs,
+      );
+      if (moved === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+
+      // Confirmed view: same context with the token at its new cell (no refetch —
+      // the relay echoed the destination; a fresh GET runs on the next sheet open).
+      return reply.code(200).send({ movement: { ...ctx.view, token: target } });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
     '/api/actors/:id/intents',
     { preHandler: auth(false) },
     async (req, reply) => {

@@ -239,6 +239,71 @@ describe('GET /api/actors/:id/movement', () => {
     expect(res.statusCode).toBe(502);
     expect(res.json().error.code).toBe('UPSTREAM');
   });
+
+  describe('POST /api/actors/:id/movement', () => {
+    beforeEach(() => {
+      withSpeed(relay, 'a1', 30);
+      relay.scene = squareScene();
+      relay.canvasTokens = [tok('t1', 'a1', 300, 200), tok('t2', 'm1', 500, 200)];
+    });
+
+    // Explicit content-type + stringify: a bare string payload (the 'nope'
+    // malformed-body case) has no object shape for light-my-request to infer
+    // a content-type from, and would otherwise 415 before reaching the route.
+    const post = (id: string, body: unknown, headers = asAnna) =>
+      (app as FastifyInstance).inject({
+        method: 'POST',
+        url: `/api/actors/${id}/movement`,
+        headers: { ...headers, 'content-type': 'application/json' },
+        payload: JSON.stringify(body),
+      });
+
+    it('404s (not 403) on a foreign actor', async () => {
+      expect((await post('b1', { cx: 1, cy: 1 })).statusCode).toBe(404);
+    });
+
+    it('422s on a malformed body', async () => {
+      expect((await post('a1', { cx: 1.5, cy: 2 })).statusCode).toBe(422);
+      expect((await post('a1', { cx: 1 })).statusCode).toBe(422);
+      expect((await post('a1', 'nope')).statusCode).toBe(422);
+    });
+
+    it('422s when the destination is out of range', async () => {
+      const res = await post('a1', { cx: 10, cy: 2 });   // chebyshev 7 > radius 6
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error.code).toBe('INVALID_INTENT');
+    });
+
+    it('409s when the destination cell is occupied by a VISIBLE token', async () => {
+      const res = await post('a1', { cx: 5, cy: 2 });    // t2's cell
+      expect(res.statusCode).toBe(409);
+    });
+
+    it('does NOT block a cell occupied only by a hidden token (no leak)', async () => {
+      relay.canvasTokens = [tok('t1', 'a1', 300, 200), tok('t3', 'm2', 500, 200, { hidden: true })];
+      const res = await post('a1', { cx: 5, cy: 2 });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('409s when the actor has no token on the active scene', async () => {
+      relay.canvasTokens = [];
+      expect((await post('a1', { cx: 4, cy: 2 })).statusCode).toBe(409);
+    });
+
+    it('moves the token: relay gets Scene.<id>.Token.<id> + px, response has the new cell', async () => {
+      const res = await post('a1', { cx: 5, cy: 1 });    // chebyshev 2, free
+      expect(res.statusCode).toBe(200);
+      expect(relay.moveTokenCalls).toEqual([{ tokenUuid: 'Scene.s1.Token.t1', x: 500, y: 100 }]);
+      const movement = res.json().movement;
+      expect(movement.token).toEqual({ cx: 5, cy: 1 });
+      expect(movement.onScene).toBe(true);
+    });
+
+    it('502s when the relay move call hangs', async () => {
+      relay.hangMove = true;
+      expect((await post('a1', { cx: 5, cy: 1 })).statusCode).toBe(502);
+    });
+  });
 });
 
 describe('secret hygiene', () => {
