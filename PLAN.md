@@ -212,6 +212,41 @@ Foundry v14, so the pin does not move until Foundry itself is upgraded). See
 `docs/API.md` for the new surface (custom item creation, adapter-declared
 tabs/glyph, dot-stat and box-track rendering, `pool`/`rouse` action kinds).
 
+### M24 — Combat: End Turn (feature request, Sebastian, 2026-07-21 — not yet planned)
+When it is the player's combatant's turn, the app offers an **End Turn**
+button so the player can tell Foundry they are done; pressing it advances the
+Foundry combat tracker to the next combatant.
+- Gateway: combat-scoped action — valid only when the acting combatant belongs
+  to one of the player's actors AND it is actually that combatant's turn.
+- Bridge surface to verify in Task 0: relay combat/encounter endpoints (M22
+  spike findings) vs `execute-js` (`game.combat.nextTurn()`).
+**Accept:** tapping End Turn in the app advances the turn in Foundry's combat
+tracker within 2 s; the button appears only on the player's own turn; pressing
+it out of turn is rejected server-side.
+
+### M25 — Combat: targeting + attack/heal resolution against a combatant (feature request, Sebastian, 2026-07-21 — not yet planned)
+When combat is running, a player can select another combatant as their
+**target**, then in Actions press **Attack**/**Cast** against it. If the
+attack roll meets the target's AC, a **Damage** button unlocks; pressing it
+applies the rolled damage to the target in Foundry. Healing mirrors this:
+select a friendly combatant, cast a healing spell, and the healing is applied
+to that combatant's HP.
+Open design questions to settle before planning:
+- Hit determination: where roll-vs-AC is compared (gateway reads target AC —
+  interacts with the 2026-07-10 actions-info-disclosure spec) vs letting the
+  dnd5e usage workflow decide; nat 1/20 handling.
+- Writes to actors the player does NOT own (enemy HP, ally HP): this widens
+  the per-player scoping model and needs a combat-mediated exception — e.g.
+  the dnd5e damage-application workflow via relay/`execute-js` — never a
+  general write path. Sanctioned as a scope amendment by this request.
+- Target selection UX: pick from the combat tracker list; what of the target
+  is shown to the player (name/portrait yes; AC/HP disclosure per the
+  info-disclosure spec).
+**Accept:** in a live combat, the player targets an enemy, attacks, and sees
+hit/miss; on a hit, Damage applies to the enemy's HP visibly in Foundry; a
+heal cast on a targeted ally raises that ally's HP in both the app and
+Foundry.
+
 ---
 
 ## 9. Risks & mitigations

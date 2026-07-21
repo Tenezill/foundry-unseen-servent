@@ -643,6 +643,26 @@ given the TLS domain link.
 
 ---
 
+## Token movement (Move button) — GM checklist
+
+The phone's Move button only appears for an actor when **all** of these hold
+(one-time GM work in Foundry, nothing to configure in the stack):
+
+1. **A scene is *activated*** — right-click it in the scene navigation →
+   **Activate**. Merely viewing a scene is not enough; the gateway reads the
+   world's single active scene. Foundry's default landing scene ("Foundry
+   Virtual Tabletop") does **not** qualify — it's gridless.
+2. **That scene uses a square grid** (scene config → Grid → Square).
+   Gridless and hex scenes → no Move button (movement v1 is square-only).
+3. **The player's token is on that scene.** Each player only ever moves their
+   own token; tokens on other (inactive) scenes don't count.
+
+The button appears on the next sheet open — no restart, no re-pairing, no key
+changes needed (the movement scopes `scene:read`/`canvas:write` are minted —
+or drift-re-minted on upgrade — automatically by the bootstrap).
+
+---
+
 ## Connecting to Foundry — the short version
 
 "Connecting" = the REST module (in a GM browser or the relay's headless one)
@@ -664,6 +684,10 @@ and `GET <relay>/clients` (with the key) → world `isOnline: true`.
 
 ## Troubleshooting (things that actually bit us)
 
+- **Move button missing on the phone:** the world's *activated* scene (not the
+  one you're viewing!) must have a square grid and hold that player's token —
+  see "Token movement (Move button) — GM checklist" above. Bit us with tokens
+  parked on Foundry's gridless default landing scene.
 - **`/get` returns 404 / app shows "reconnecting":** no GM client is connected
   — the world is offline. Reopen the GM tab (local) or restart the headless
   session (online).

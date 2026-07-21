@@ -29,4 +29,8 @@ stack/quickstart/gateway-data/
 stack/quickstart/caddy-data/
 stack/quickstart/companion-runtime/
 
+# local host-run utility, not committed for now (re-adds Geppetto's hand-added
+# Guardian items that a DDB re-import wipes)
+scripts/restore-geppetto-guardian-items.sh
+
 licence
