@@ -82,7 +82,10 @@ Movement context for the actor's token on the ACTIVE scene (square grids only).
 `{ movement: { onScene, sceneId?, gridDistance?, gridUnits?, speedFt?, token?: {cx,cy}, others?: [{cx,cy,disposition,name?}] } }`
 `onScene:false` when there is no active scene, the grid is not square, or the
 actor has no token there. Coordinates are grid cells, never pixels. GM-hidden
-tokens are stripped server-side. 404 foreign/unknown actor; 502 relay failure.
+tokens are stripped server-side. Multi-square tokens contribute one `others`
+entry per covered cell (same `disposition`/`name` on each), so a 2×2 monster
+occupies all 4 of its cells, not just its anchor. 404 foreign/unknown actor;
+502 relay failure.
 
 ### `POST /api/actors/:id/movement`
 
@@ -90,7 +93,9 @@ Body `{ cx, cy }` (grid cell). Validates ownership (404), range (422
 INVALID_INTENT, Chebyshev ≤ floor(speed/gridDistance)), occupancy by visible
 tokens (409 CONFLICT), token-on-scene (409). On success moves the token in
 Foundry (animated, straight line) and returns `{ movement }` with the token at
-the new cell. 429 rate-limited; 502 relay failure/stall.
+the new cell. 429 rate-limited; 502 relay failure/stall, including a stall
+while fetching the active scene (distinct from the relay answering "no active
+scene", which is the 409 above).
 
 ### `POST /api/actors/:id/intents`
 Body: a single `ResourceIntent`:

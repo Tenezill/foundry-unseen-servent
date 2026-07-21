@@ -49,6 +49,19 @@ function cellOf(t: RelayCanvasToken, gridSize: number): MovementCell {
   return { cx: Math.round(t.x / gridSize), cy: Math.round(t.y / gridSize) };
 }
 
+/** Cells covered by a token's footprint (multi-square aware): anchor cell
+ *  plus width×height grid squares, each dimension ceil'd and floored at 1.
+ *  Shared by buildMovementContext (others) and occupiedCells so the two
+ *  can't drift apart on what "occupies" a cell means. */
+function coveredCells(t: RelayCanvasToken, gridSize: number): MovementCell[] {
+  const { cx, cy } = cellOf(t, gridSize);
+  const w = Math.max(1, Math.ceil(typeof t.width === 'number' ? t.width : 1));
+  const h = Math.max(1, Math.ceil(typeof t.height === 'number' ? t.height : 1));
+  const cells: MovementCell[] = [];
+  for (let dx = 0; dx < w; dx++) for (let dy = 0; dy < h; dy++) cells.push({ cx: cx + dx, cy: cy + dy });
+  return cells;
+}
+
 export function buildMovementContext(
   scene: RelayScene | null,
   tokens: RelayCanvasToken[],
@@ -63,11 +76,15 @@ export function buildMovementContext(
 
   const others: MovementOther[] = tokens
     .filter((t) => t._id !== own._id && t.hidden !== true)
-    .map((t) => ({
-      ...cellOf(t, gridSize),
-      disposition: typeof t.disposition === 'number' ? t.disposition : 0,
-      ...(typeof t.name === 'string' && t.name !== '' ? { name: t.name } : {}),
-    }));
+    .flatMap((t) => {
+      const disposition = typeof t.disposition === 'number' ? t.disposition : 0;
+      const name = typeof t.name === 'string' && t.name !== '' ? t.name : undefined;
+      return coveredCells(t, gridSize).map((cell) => ({
+        ...cell,
+        disposition,
+        ...(name !== undefined ? { name } : {}),
+      }));
+    });
 
   return {
     own,
@@ -89,10 +106,7 @@ export function occupiedCells(tokens: RelayCanvasToken[], gridSize: number, excl
   const out = new Set<string>();
   for (const t of tokens) {
     if (t._id === excludeTokenId || t.hidden === true) continue;
-    const { cx, cy } = cellOf(t, gridSize);
-    const w = Math.max(1, Math.ceil(typeof t.width === 'number' ? t.width : 1));
-    const h = Math.max(1, Math.ceil(typeof t.height === 'number' ? t.height : 1));
-    for (let dx = 0; dx < w; dx++) for (let dy = 0; dy < h; dy++) out.add(`${cx + dx},${cy + dy}`);
+    for (const { cx, cy } of coveredCells(t, gridSize)) out.add(`${cx},${cy}`);
   }
   return out;
 }

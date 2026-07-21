@@ -44,6 +44,20 @@ describe('buildMovementContext', () => {
     expect(gridSize).toBe(100);
   });
 
+  it('expands a large visible token to one others entry per covered cell', () => {
+    const tokens = [
+      tok('t1', 'a1', 300, 200),
+      tok('t2', 'm1', 500, 200, { disposition: -1, width: 2, height: 2 }),
+    ];
+    const { view } = buildMovementContext(squareScene(), tokens, 'a1', 30);
+    expect(view.others).toHaveLength(4);
+    const cells = view.others?.map(({ cx, cy }) => `${cx},${cy}`).sort();
+    expect(cells).toEqual(['5,2', '5,3', '6,2', '6,3']);
+    for (const other of view.others ?? []) {
+      expect(other).toMatchObject({ disposition: -1, name: 'tok-t2' });
+    }
+  });
+
   it('onScene false when no scene, non-square grid, or no token for the actor', () => {
     expect(buildMovementContext(null, [], 'a1', 30).view).toEqual({ onScene: false });
     expect(buildMovementContext(scene({ type: 0, size: 100, distance: 5 }), [tok('t1', 'a1', 0, 0)], 'a1', 30).view)

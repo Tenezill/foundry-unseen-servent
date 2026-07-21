@@ -40,6 +40,11 @@ import type { WorldHealth } from './client-id-resolver.js';
 import type { BootstrapStatusView } from './status-file.js';
 import type { RelayAccountView } from './relay-account.js';
 
+/** Distinct sentinel for a stalled scene fetch in fetchMovementContext —
+ *  getScene() legitimately resolves null ("no active scene"), so null can't
+ *  double as a timeout marker; a unique Symbol can't collide with it. */
+const SCENE_FETCH_STALLED = Symbol('scene-fetch-stalled');
+
 /** Live view of the player list; backed by FilePlayerStore in production. */
 export interface PlayersPort {
   list(): readonly Player[];
@@ -556,10 +561,21 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
 
   /** Scene + tokens + walk speed for one actor, every leg bounded.
    *  Returns null when a leg AFTER a resolved scene fails (→ 502);
-   *  an unresolved scene is a normal offScene result, not an error. */
+   *  an unresolved scene is a normal offScene result, not an error — EXCEPT
+   *  `stalled: true`, which means the scene leg itself timed out rather than
+   *  the relay answering "no active scene". GET degrades both the same way
+   *  (200 onScene:false); POST must not, since a stall isn't "no token on the
+   *  active scene" — it's an upstream outage (502), so `stalled` lets POST
+   *  tell the two apart while GET ignores it. */
   const fetchMovementContext = async (actorId: string) => {
-    const scene = await boundedMs(relay.getScene(), movementTimeoutMs);
-    if (!scene) return { offScene: true as const };
+    const sceneOrStall = await Promise.race([
+      relay.getScene(),
+      new Promise<typeof SCENE_FETCH_STALLED>((resolve) =>
+        setTimeout(() => resolve(SCENE_FETCH_STALLED), movementTimeoutMs)),
+    ]);
+    if (sceneOrStall === SCENE_FETCH_STALLED) return { offScene: true as const, stalled: true as const };
+    const scene = sceneOrStall;
+    if (!scene) return { offScene: true as const, stalled: false as const };
     const [doc, tokens] = await Promise.all([
       boundedMs(relay.getEntity(`Actor.${actorId}`), movementTimeoutMs),
       boundedMs(relay.getCanvasDocuments<RelayCanvasToken>('tokens', scene._id), movementTimeoutMs),
@@ -1016,7 +1032,12 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
 
       const result = await fetchMovementContext(id);
       if (result === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
-      if (result.offScene) return sendError(reply, 409, 'CONFLICT', 'no token on the active scene');
+      if (result.offScene) {
+        // A stalled scene leg is an upstream outage (502), not "the relay
+        // answered: no token on the active scene" (409) — see fetchMovementContext.
+        if (result.stalled) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+        return sendError(reply, 409, 'CONFLICT', 'no token on the active scene');
+      }
       const { ctx, tokens } = result;
       if (!ctx.own || !ctx.gridSize || !ctx.view.sceneId) {
         return sendError(reply, 409, 'CONFLICT', 'no token on the active scene');

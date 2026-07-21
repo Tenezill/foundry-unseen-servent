@@ -290,6 +290,13 @@ describe('GET /api/actors/:id/movement', () => {
       expect((await post('a1', { cx: 4, cy: 2 })).statusCode).toBe(409);
     });
 
+    it('502s (not 409) on a relay stall fetching the scene', async () => {
+      relay.hangScene = true;
+      const res = await post('a1', { cx: 4, cy: 2 });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().error.code).toBe('UPSTREAM');
+    });
+
     it('moves the token: relay gets Scene.<id>.Token.<id> + px, response has the new cell', async () => {
       const res = await post('a1', { cx: 5, cy: 1 });    // chebyshev 2, free
       expect(res.statusCode).toBe(200);
