@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -7,6 +7,7 @@ import { RelayAuthClient, RelayAuthError } from '../src/relay-auth.js';
 import { StatusWriter } from '../src/status.js';
 import { ensureKey } from '../src/provision.js';
 import { readPersistedKey, writeKeyFileAtomic } from '../src/key-file.js';
+import { readKeyScopesFile, scopesFilePath, writeKeyScopesFileAtomic } from '../src/key-scopes-file.js';
 import { GATEWAY_KEY_SCOPES } from '../src/scopes.js';
 
 const log = { info: () => undefined, warn: () => undefined };
@@ -101,5 +102,69 @@ describe('ensureKey', () => {
   it('wrong account password after conflict: login fails with a named error', async () => {
     server.accounts.set('ops@companion.local', 'DIFFERENT-pass');
     await expect(ensureKey(deps())).rejects.toMatchObject({ name: 'RelayAuthError', endpoint: '/auth/login' });
+  });
+
+  describe('scope drift', () => {
+    it('mint path writes the sidecar with the exact scopes minted', async () => {
+      await ensureKey(deps());
+      expect(readKeyScopesFile(keyFilePath)).toEqual([...GATEWAY_KEY_SCOPES]);
+    });
+
+    it('mint path writes the sidecar with the ACTUAL (post-drop) scopes, not the requested canonical list', async () => {
+      server.rejectScopes.add('wod5e');
+      await ensureKey(deps());
+      const finalScopes = readKeyScopesFile(keyFilePath);
+      expect(finalScopes).not.toContain('wod5e');
+      expect(finalScopes).toContain('dnd5e');
+      expect(finalScopes).toContain('entity:read');
+    });
+
+    it('key file format untouched by the sidecar: still ONLY RELAY_API_KEY=<key>', async () => {
+      await ensureKey(deps());
+      expect(readFileSync(keyFilePath, 'utf8')).toMatch(/^RELAY_API_KEY=[^\n]+\n$/);
+    });
+
+    it('valid key + sidecar matching canonical scopes: kept, zero re-mint', async () => {
+      await ensureKey(deps());
+      const mintsAfterFirst = server.mintedScopes.length;
+      const again = await ensureKey(deps());
+      expect(again).toBe('key-1');
+      expect(server.mintedScopes.length).toBe(mintsAfterFirst);
+    });
+
+    it('valid key + sidecar missing a canonical scope: re-mints with the full canonical list, sidecar rewritten', async () => {
+      await ensureKey(deps());
+      const dropped = GATEWAY_KEY_SCOPES.filter((s) => s !== 'canvas:write');
+      writeKeyScopesFileAtomic(keyFilePath, dropped);
+      const mintsBefore = server.mintedScopes.length;
+
+      const key = await ensureKey(deps());
+
+      expect(key).toBe('key-2');
+      expect(server.mintedScopes.length).toBe(mintsBefore + 1);
+      expect(server.mintedScopes[server.mintedScopes.length - 1]).toEqual([...GATEWAY_KEY_SCOPES]);
+      expect(readKeyScopesFile(keyFilePath)).toEqual([...GATEWAY_KEY_SCOPES]);
+      expect(readPersistedKey(keyFilePath)).toBe('key-2');
+    });
+
+    it('valid key + NO sidecar (pre-migration install): re-mints once and writes the sidecar', async () => {
+      await ensureKey(deps());
+      rmSync(scopesFilePath(keyFilePath), { force: true });
+
+      const key = await ensureKey(deps());
+
+      expect(key).toBe('key-2');
+      expect(readKeyScopesFile(keyFilePath)).toEqual([...GATEWAY_KEY_SCOPES]);
+    });
+
+    it('valid key + corrupt sidecar JSON: re-mints', async () => {
+      await ensureKey(deps());
+      writeFileSync(scopesFilePath(keyFilePath), '{ not valid json', 'utf8');
+
+      const key = await ensureKey(deps());
+
+      expect(key).toBe('key-2');
+      expect(readKeyScopesFile(keyFilePath)).toEqual([...GATEWAY_KEY_SCOPES]);
+    });
   });
 });

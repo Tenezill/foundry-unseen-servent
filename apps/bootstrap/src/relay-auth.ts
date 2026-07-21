@@ -94,8 +94,10 @@ export class RelayAuthClient {
    *  with 400 `Invalid scope: <name>`, failing the WHOLE request. Rather than
    *  never mint, drop the named scope and retry — the fallback scopes.ts
    *  documents. Only the rejected scope is dropped, so a supported system scope
-   *  like `dnd5e` is preserved. */
-  async mintKey(bearer: string, name: string, scopes: readonly string[]): Promise<string> {
+   *  like `dnd5e` is preserved. Returns the scopes ACTUALLY minted (post-drop)
+   *  alongside the key, so callers can persist a scope-drift sidecar that
+   *  matches reality rather than the requested canonical list. */
+  async mintKey(bearer: string, name: string, scopes: readonly string[]): Promise<{ key: string; scopes: string[] }> {
     let current = [...scopes];
     // At most one drop per scope, plus the initial attempt.
     for (let attempt = 0; attempt <= scopes.length; attempt++) {
@@ -106,7 +108,7 @@ export class RelayAuthClient {
       if (status === 429) throw new RelayAuthError('auth throttled', 429, '/auth/api-keys');
       // Field name per Task 0 findings §4 (docs: key; apiKey = fallback).
       const key = typeof body.key === 'string' ? body.key : typeof body.apiKey === 'string' ? body.apiKey : null;
-      if (status >= 200 && status < 300 && key !== null) return key;
+      if (status >= 200 && status < 300 && key !== null) return { key, scopes: current };
       const match =
         status === 400 && typeof body.error === 'string' ? /invalid scope:\s*(\S+)/i.exec(body.error) : null;
       if (match !== null) {
