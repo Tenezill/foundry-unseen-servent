@@ -662,3 +662,87 @@ describe('FoundryRelayClient — provider-based credentials (turnkey)', () => {
     expect(url).toContain('clientId=');
   });
 });
+
+describe('FoundryRelayClient movement wrappers', () => {
+  let client: FoundryRelayClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new FoundryRelayClient({
+      baseUrl: 'http://relay:3010',
+      apiKey: 'test-api-key',
+      clientId: 'fvtt_test123',
+    });
+  });
+
+  it('getScene() GETs /get-scene with active=true and returns data', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, text: vi.fn(),
+      json: vi.fn().mockResolvedValueOnce({
+        type: 'get-scene-result', requestId: 'r1',
+        data: { _id: 's1', name: 'Crypt', grid: { type: 1, size: 100, distance: 5, units: 'ft' } },
+      }),
+    });
+    const scene = await client.getScene();
+    const [url, init] = mockFetch.mock.calls[0] as [string, Record<string, unknown>];
+    expect(url).toContain('/get-scene');
+    expect(url).toContain('active=true');
+    expect((init.method as string)).toBe('GET');
+    expect(scene?.grid?.size).toBe(100);
+  });
+
+  it('getScene() returns null on relay error-in-200 (no active scene)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, text: vi.fn(),
+      json: vi.fn().mockResolvedValueOnce({ type: 'get-scene-result', requestId: 'r1', error: 'Scene not found', data: null }),
+    });
+    expect(await client.getScene()).toBeNull();
+  });
+
+  it('getCanvasDocuments() GETs /get-canvas-documents with documentType and sceneId', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, text: vi.fn(),
+      json: vi.fn().mockResolvedValueOnce({
+        type: 'get-canvas-documents-result', requestId: 'r2', sceneId: 's1', documentType: 'tokens',
+        data: [{ _id: 't1', x: 300, y: 200, hidden: false }],
+      }),
+    });
+    const docs = await client.getCanvasDocuments('tokens', 's1');
+    const [url] = mockFetch.mock.calls[0] as [string];
+    expect(url).toContain('/get-canvas-documents');
+    expect(url).toContain('documentType=tokens');
+    expect(url).toContain('sceneId=s1');
+    expect(docs).toHaveLength(1);
+  });
+
+  it('getCanvasDocuments() throws RelayError on error-in-200', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, text: vi.fn(),
+      json: vi.fn().mockResolvedValueOnce({ type: 'get-canvas-documents-result', requestId: 'r2', error: 'No active scene', data: null }),
+    });
+    await expect(client.getCanvasDocuments('tokens')).rejects.toThrow('No active scene');
+  });
+
+  it('moveToken() POSTs /move-token with uuid, px coords, animate true', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, text: vi.fn(),
+      json: vi.fn().mockResolvedValueOnce({
+        type: 'move-token-result', requestId: 'r3',
+        data: { tokenUuid: 'Scene.s1.Token.t1', name: 'Sariel', x: 500, y: 100, sceneId: 's1' },
+      }),
+    });
+    await client.moveToken('Scene.s1.Token.t1', 500, 100);
+    const [url, init] = mockFetch.mock.calls[0] as [string, Record<string, unknown>];
+    expect(url).toContain('/move-token');
+    expect((init.method as string)).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ uuid: 'Scene.s1.Token.t1', x: 500, y: 100, animate: true });
+  });
+
+  it('moveToken() throws RelayError on error-in-200', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, text: vi.fn(),
+      json: vi.fn().mockResolvedValueOnce({ type: 'move-token-result', requestId: 'r3', error: 'Token not found: X' }),
+    });
+    await expect(client.moveToken('Scene.s1.Token.tX', 0, 0)).rejects.toThrow('Token not found');
+  });
+});

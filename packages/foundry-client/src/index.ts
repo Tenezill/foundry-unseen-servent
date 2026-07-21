@@ -118,6 +118,31 @@ export interface RelayEncounter {
   combatants: RelayCombatant[];
 }
 
+/** Scene document subset from GET /get-scene (relay returns Scene.toObject(true)). */
+export interface RelayScene {
+  _id: string;
+  name?: string;
+  /** Foundry v13 nests grid config: type 1 = square; size = px per cell. */
+  grid?: { type?: number; size?: number; distance?: number; units?: string };
+  [key: string]: unknown;
+}
+
+/** TokenDocument.toObject() subset from GET /get-canvas-documents (documentType "tokens").
+ *  x/y are canvas px of the token's TOP-LEFT corner; width/height are in grid squares. */
+export interface RelayCanvasToken {
+  _id: string;
+  name?: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  hidden?: boolean;
+  /** -1 hostile, 0 neutral, 1 friendly, -2 secret. */
+  disposition?: number;
+  actorId?: string | null;
+  [key: string]: unknown;
+}
+
 /**
  * The execute-js activation script both castAtSlot and useWithoutTemplate
  * run: dnd5e's own activity.use, mirroring the relay module's use-* flow
@@ -305,6 +330,38 @@ export class FoundryRelayClient {
   async getEncounters(): Promise<RelayEncounter[]> {
     const body = await this.request<{ encounters?: RelayEncounter[] }>('GET', '/encounters', {});
     return Array.isArray(body.encounters) ? body.encounters : [];
+  }
+
+  /** GET /get-scene — the currently ACTIVE scene, or null when there is none.
+   *  The relay reports "no active scene" as an error-in-200; that maps to null
+   *  (callers treat it as "movement unavailable", not a failure). */
+  async getScene(): Promise<RelayScene | null> {
+    const body = await this.request<{ data?: RelayScene | null; error?: string }>('GET', '/get-scene', { active: true });
+    if (typeof body.error === 'string' && body.error !== '') return null;
+    return body.data ?? null;
+  }
+
+  /** GET /get-canvas-documents — placeable documents of one type on a scene
+   *  (active scene when sceneId is omitted). Raw toObject() docs. */
+  async getCanvasDocuments<T = Record<string, unknown>>(documentType: string, sceneId?: string): Promise<T[]> {
+    const body = await this.request<{ data?: T[] | null; error?: string }>(
+      'GET', '/get-canvas-documents', { documentType, sceneId },
+    );
+    if (typeof body.error === 'string' && body.error !== '') {
+      throw new RelayError(`relay /get-canvas-documents: ${body.error}`, 200, '/get-canvas-documents');
+    }
+    return Array.isArray(body.data) ? body.data : [];
+  }
+
+  /** POST /move-token — reposition a token (canvas px, top-left), always animated.
+   *  tokenUuid form: `Scene.<sceneId>.Token.<tokenId>`. */
+  async moveToken(tokenUuid: string, x: number, y: number): Promise<void> {
+    const body = await this.request<{ data?: unknown; error?: string }>(
+      'POST', '/move-token', {}, { uuid: tokenUuid, x, y, animate: true },
+    );
+    if (typeof body.error === 'string' && body.error !== '') {
+      throw new RelayError(`relay /move-token: ${body.error}`, 200, '/move-token');
+    }
   }
 
   /**
