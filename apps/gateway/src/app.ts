@@ -29,7 +29,7 @@ import type {
 } from '@companion/adapter-sdk';
 import { IntentError } from '@companion/adapter-sdk';
 import type { RawRoll, RelayCanvasToken, RelayEncounter, RelayScene } from '@companion/foundry-client';
-import { buildMovementContext, occupiedCells, validateMove, walkSpeedOf } from './movement.js';
+import { buildMovementContext, occupiedCells, speedFromStats, validateMove } from './movement.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { verifyToken, type Player } from './players.js';
 import { PlayerStoreError } from './player-store.js';
@@ -576,12 +576,16 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
     if (sceneOrStall === SCENE_FETCH_STALLED) return { offScene: true as const, stalled: true as const };
     const scene = sceneOrStall;
     if (!scene) return { offScene: true as const, stalled: false as const };
-    const doc = await boundedMs(relay.getEntity(`Actor.${actorId}`), movementTimeoutMs);
-    if (doc === null) return null;
+    // Movement v1 is dnd5e-only (spec), and only the relay's derived
+    // get-actor-details response carries a real walk speed — source actor
+    // docs (relay.getEntity) have no system.attributes.movement in dnd5e 5.x
+    // (see speedFromStats doc comment in movement.ts).
+    const details = await boundedMs(relay.getSystemDetails('dnd5e', `Actor.${actorId}`, ['stats']), movementTimeoutMs);
+    if (details === null) return null;
     const tokens: RelayCanvasToken[] = Array.isArray(scene.tokens) ? scene.tokens : [];
     return {
       offScene: false as const,
-      ctx: buildMovementContext(scene, tokens, actorId, walkSpeedOf(doc as { system?: unknown })),
+      ctx: buildMovementContext(scene, tokens, actorId, speedFromStats(details)),
       tokens,
     };
   };

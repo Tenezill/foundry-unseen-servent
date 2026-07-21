@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RelayCanvasToken, RelayScene } from '@companion/foundry-client';
 import {
-  buildMovementContext, chebyshev, occupiedCells, validateMove, walkSpeedOf,
+  buildMovementContext, chebyshev, occupiedCells, speedFromStats, validateMove,
 } from '../src/movement.js';
 
 const scene = (grid: RelayScene['grid']): RelayScene => ({ _id: 's1', name: 'Crypt', grid });
@@ -9,14 +9,17 @@ const squareScene = (): RelayScene => scene({ type: 1, size: 100, distance: 5, u
 const tok = (id: string, actorId: string | null, x: number, y: number, extra: Partial<RelayCanvasToken> = {}): RelayCanvasToken =>
   ({ _id: id, name: `tok-${id}`, x, y, width: 1, height: 1, hidden: false, disposition: 0, actorId, ...extra });
 
-describe('walkSpeedOf', () => {
-  it('reads system.attributes.movement.walk', () => {
-    expect(walkSpeedOf({ system: { attributes: { movement: { walk: 30 } } } })).toBe(30);
+describe('speedFromStats', () => {
+  it('reads stats.speed off the derived get-actor-details response', () => {
+    expect(speedFromStats({ stats: { speed: 30 } })).toBe(30);
   });
   it('returns 0 for missing/invalid speed', () => {
-    expect(walkSpeedOf(null)).toBe(0);
-    expect(walkSpeedOf({ system: {} })).toBe(0);
-    expect(walkSpeedOf({ system: { attributes: { movement: { walk: 'fast' } } } })).toBe(0);
+    expect(speedFromStats(null)).toBe(0);
+    expect(speedFromStats(undefined)).toBe(0);
+    expect(speedFromStats({})).toBe(0);
+    expect(speedFromStats({ stats: {} })).toBe(0);
+    expect(speedFromStats({ stats: { speed: 'fast' } })).toBe(0);
+    expect(speedFromStats({ stats: { speed: -5 } })).toBe(0);
   });
 });
 

@@ -162,9 +162,13 @@ export class FakeRelay implements RelayPort {
   /** Response for getSystemDetails; error message embeds secrets when thrown. */
   systemDetails: unknown = {};
   systemDetailsError = false;
+  /** When true, getSystemDetails never settles (movement's speed leg —
+   *  mirrors hangScene/hangMove for the relay's derived-data endpoint). */
+  hangSystemDetails = false;
 
   async getSystemDetails(systemPath: string, actorUuid: string, details: string[]): Promise<unknown> {
     this.systemDetailCalls.push([systemPath, actorUuid, [...details]]);
+    if (this.hangSystemDetails) return new Promise(() => undefined); // never settles
     if (this.systemDetailsError) {
       throw new Error(`relay ${FAKE_RELAY_URL}/${systemPath} rejected key ${FAKE_API_KEY}`);
     }

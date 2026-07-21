@@ -33,11 +33,21 @@ export interface MovementContext {
 /** Foundry CONST.GRID_TYPES.SQUARE. */
 const SQUARE_GRID = 1;
 
-/** dnd5e walk speed off a raw actor doc; 0 when absent/invalid. */
-export function walkSpeedOf(doc: { system?: unknown } | null): number {
-  const attrs = (doc?.system as { attributes?: { movement?: { walk?: unknown } } } | undefined)?.attributes;
-  const walk = attrs?.movement?.walk;
-  return typeof walk === 'number' && Number.isFinite(walk) && walk > 0 ? walk : 0;
+/**
+ * dnd5e walk speed off the relay's derived get-actor-details response.
+ *
+ * dnd5e 5.x SOURCE actor docs (what `relay.getEntity` returns — Foundry's
+ * `toObject()`) carry NO `system.attributes.movement` at all; walk speed is
+ * computed at prepare-time from the actor's species item and only exists on
+ * the *prepared* document. The relay's derived-data endpoint
+ * (`getSystemDetails('dnd5e', uuid, ['stats'])`) returns that prepared value
+ * as `stats.speed` (live-verified: an actor's source movement was
+ * `undefined` while `stats.speed` was 30). Reading movement off the source
+ * doc — the previous approach — silently reported 0 for every real actor.
+ */
+export function speedFromStats(details: unknown): number {
+  const speed = (details as { stats?: { speed?: unknown } } | null | undefined)?.stats?.speed;
+  return typeof speed === 'number' && Number.isFinite(speed) && speed > 0 ? speed : 0;
 }
 
 /** Chebyshev distance — dnd5e's default 5-5-5 diagonal rule. */

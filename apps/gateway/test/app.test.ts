@@ -189,12 +189,12 @@ describe('GET /api/actors/:id/movement', () => {
   const squareScene = (tokens: Array<ReturnType<typeof tok>> = []) =>
     ({ _id: 's1', name: 'Crypt', grid: { type: 1, size: 100, distance: 5, units: 'ft' }, tokens });
 
-  /** Anna's a1 with a walk speed merged into the fixture doc. */
+  /** Programs the FakeRelay's getSystemDetails response so fetchMovementContext's
+   *  speed leg (relay.getSystemDetails('dnd5e', ..., ['stats'])) resolves a
+   *  walk speed — dnd5e 5.x source docs never carry movement (see
+   *  speedFromStats in movement.ts), so this is the only place speed comes from. */
   function withSpeed(r: FakeRelay, actorId: string, walk: number): void {
-    const doc = r.entities.get(`Actor.${actorId}`) as { system?: Record<string, unknown> };
-    const system = { ...(doc.system ?? {}) } as Record<string, unknown>;
-    system.attributes = { ...((system.attributes as Record<string, unknown>) ?? {}), movement: { walk } };
-    r.entities.set(`Actor.${actorId}`, { ...doc, system });
+    r.systemDetails = { uuid: `Actor.${actorId}`, stats: { speed: walk } };
   }
 
   it('404s (not 403) on a foreign actor', async () => {
@@ -234,9 +234,9 @@ describe('GET /api/actors/:id/movement', () => {
     });
   });
 
-  it('502s when the actor entity fetch hangs after a scene resolved', async () => {
+  it('502s when the actor details fetch hangs after a scene resolved', async () => {
     relay.scene = squareScene([tok('t1', 'a1', 300, 200)]);
-    relay.hangUuid = 'Actor.a1';
+    relay.hangSystemDetails = true;
     const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
     expect(res.statusCode).toBe(502);
     expect(res.json().error.code).toBe('UPSTREAM');
