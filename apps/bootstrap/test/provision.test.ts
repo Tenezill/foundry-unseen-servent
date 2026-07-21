@@ -105,18 +105,47 @@ describe('ensureKey', () => {
   });
 
   describe('scope drift', () => {
-    it('mint path writes the sidecar with the exact scopes minted', async () => {
+    it('mint path writes the sidecar with the exact scopes minted, requested == granted', async () => {
       await ensureKey(deps());
-      expect(readKeyScopesFile(keyFilePath)).toEqual([...GATEWAY_KEY_SCOPES]);
+      expect(readKeyScopesFile(keyFilePath)).toEqual({
+        requested: [...GATEWAY_KEY_SCOPES],
+        granted: [...GATEWAY_KEY_SCOPES],
+      });
     });
 
-    it('mint path writes the sidecar with the ACTUAL (post-drop) scopes, not the requested canonical list', async () => {
+    it('mint path writes GRANTED as the ACTUAL (post-drop) scopes, but REQUESTED stays the full canonical list', async () => {
       server.rejectScopes.add('wod5e');
       await ensureKey(deps());
-      const finalScopes = readKeyScopesFile(keyFilePath);
-      expect(finalScopes).not.toContain('wod5e');
-      expect(finalScopes).toContain('dnd5e');
-      expect(finalScopes).toContain('entity:read');
+      const record = readKeyScopesFile(keyFilePath);
+      expect(record?.granted).not.toContain('wod5e');
+      expect(record?.granted).toContain('dnd5e');
+      expect(record?.granted).toContain('entity:read');
+      // requested always records what was ATTEMPTED (the canonical list),
+      // not what was granted — this is what lets the drift check converge
+      // after one re-mint even though the relay keeps dropping wod5e.
+      expect(record?.requested).toEqual([...GATEWAY_KEY_SCOPES]);
+    });
+
+    it('THE LOOP TEST: a relay that permanently drops a canonical scope does not re-mint forever', async () => {
+      server.rejectScopes.add('wod5e');
+
+      // Pass 1: fresh sidecar means drift (missing/unreadable) -> mints.
+      // mintKey's own drop-and-retry means this ONE logical mint takes two
+      // POST /auth/api-keys attempts (rejected wod5e, then without it).
+      await ensureKey(deps());
+      const mintAttemptsAfterPass1 = server.mintedScopes.length;
+      const authCallsAfterPass1 = server.authCalls.length;
+      expect(mintAttemptsAfterPass1).toBe(2);
+
+      // Pass 2: same relay (still drops wod5e), fresh ensureKey call reading
+      // the sidecar pass 1 just wrote. Before the fix, comparing canonical
+      // scopes against GRANTED would find wod5e missing forever and re-mint
+      // every pass; comparing against REQUESTED converges here.
+      const key = await ensureKey(deps());
+
+      expect(key).toBe('key-1'); // no second mint -> still the pass-1 key
+      expect(server.mintedScopes.length).toBe(mintAttemptsAfterPass1); // mint ran exactly once, in pass 1
+      expect(server.authCalls.length).toBe(authCallsAfterPass1); // zero additional /auth/* traffic in pass 2
     });
 
     it('key file format untouched by the sidecar: still ONLY RELAY_API_KEY=<key>', async () => {
@@ -132,10 +161,10 @@ describe('ensureKey', () => {
       expect(server.mintedScopes.length).toBe(mintsAfterFirst);
     });
 
-    it('valid key + sidecar missing a canonical scope: re-mints with the full canonical list, sidecar rewritten', async () => {
+    it('valid key + sidecar missing a canonical scope (from REQUESTED): re-mints with the full canonical list, sidecar rewritten', async () => {
       await ensureKey(deps());
       const dropped = GATEWAY_KEY_SCOPES.filter((s) => s !== 'canvas:write');
-      writeKeyScopesFileAtomic(keyFilePath, dropped);
+      writeKeyScopesFileAtomic(keyFilePath, { requested: dropped, granted: dropped });
       const mintsBefore = server.mintedScopes.length;
 
       const key = await ensureKey(deps());
@@ -143,7 +172,10 @@ describe('ensureKey', () => {
       expect(key).toBe('key-2');
       expect(server.mintedScopes.length).toBe(mintsBefore + 1);
       expect(server.mintedScopes[server.mintedScopes.length - 1]).toEqual([...GATEWAY_KEY_SCOPES]);
-      expect(readKeyScopesFile(keyFilePath)).toEqual([...GATEWAY_KEY_SCOPES]);
+      expect(readKeyScopesFile(keyFilePath)).toEqual({
+        requested: [...GATEWAY_KEY_SCOPES],
+        granted: [...GATEWAY_KEY_SCOPES],
+      });
       expect(readPersistedKey(keyFilePath)).toBe('key-2');
     });
 
@@ -154,7 +186,10 @@ describe('ensureKey', () => {
       const key = await ensureKey(deps());
 
       expect(key).toBe('key-2');
-      expect(readKeyScopesFile(keyFilePath)).toEqual([...GATEWAY_KEY_SCOPES]);
+      expect(readKeyScopesFile(keyFilePath)).toEqual({
+        requested: [...GATEWAY_KEY_SCOPES],
+        granted: [...GATEWAY_KEY_SCOPES],
+      });
     });
 
     it('valid key + corrupt sidecar JSON: re-mints', async () => {
@@ -164,7 +199,25 @@ describe('ensureKey', () => {
       const key = await ensureKey(deps());
 
       expect(key).toBe('key-2');
-      expect(readKeyScopesFile(keyFilePath)).toEqual([...GATEWAY_KEY_SCOPES]);
+      expect(readKeyScopesFile(keyFilePath)).toEqual({
+        requested: [...GATEWAY_KEY_SCOPES],
+        granted: [...GATEWAY_KEY_SCOPES],
+      });
+    });
+
+    it('valid key + old granted-only array sidecar (the just-shipped b0fca80 format): treated as unrecognized -> re-mints', async () => {
+      await ensureKey(deps());
+      // The b0fca80 shape: a bare JSON array, not {requested, granted}. Never
+      // reached an install, but readKeyScopesFile must be robust to it too.
+      writeFileSync(scopesFilePath(keyFilePath), `${JSON.stringify([...GATEWAY_KEY_SCOPES])}\n`, 'utf8');
+
+      const key = await ensureKey(deps());
+
+      expect(key).toBe('key-2');
+      expect(readKeyScopesFile(keyFilePath)).toEqual({
+        requested: [...GATEWAY_KEY_SCOPES],
+        granted: [...GATEWAY_KEY_SCOPES],
+      });
     });
   });
 });

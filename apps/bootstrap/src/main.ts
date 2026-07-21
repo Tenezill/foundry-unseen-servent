@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { RelayAuthClient, RelayAuthError } from './relay-auth.js';
 import { StatusWriter } from './status.js';
-import { ensureKey } from './provision.js';
+import { ensureKey, hasScopeDrift } from './provision.js';
 import { attemptSession, worldOnline } from './session.js';
 import { ensureModulePlaced } from './module-install.js';
 import { relaunchWorldIfIdle } from './foundry-admin.js';
@@ -77,7 +77,15 @@ export async function runConvergePass(deps: ConvergePassDeps, state: ConvergePas
     // 1. Key: steady path is probe-only (no /auth traffic, no throttle).
     let key = readPersistedKey(deps.keyFilePath);
     const probed = key !== null ? await deps.relay.probeKey(key) : 'invalid';
-    if (probed !== 'valid') {
+    // A probe-valid key can still be scope-drifted (stale/missing sidecar,
+    // or a canonical scope added since this key was minted) — the drift
+    // check must run for valid keys too (Critical review fix, finding 1:
+    // this used to short-circuit on `probed === 'valid'` and never reach
+    // ensureKey's drift check at all). `hasScopeDrift` only runs when
+    // `probed === 'valid'` (the `||` short-circuits otherwise), so it costs
+    // nothing on the invalid/unreachable paths below.
+    const needsMint = probed !== 'valid' || hasScopeDrift(deps.keyFilePath);
+    if (needsMint) {
       if (probed === 'unreachable') {
         deps.status.set('waiting-relay', 'relay not reachable yet');
         key = null;
