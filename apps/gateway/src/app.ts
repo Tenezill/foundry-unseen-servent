@@ -129,10 +129,10 @@ export interface RelayPort {
   ): Promise<void>;
   /** GET /encounters — active/all combats (M22, requires encounter:read scope). */
   getEncounters(): Promise<RelayEncounter[]>;
-  /** Active scene, null when none (or relay reported none). */
+  /** Active scene, null when none (or relay reported none). Tokens ride
+   *  along embedded on the scene document (`scene.tokens`) — there is no
+   *  separate canvas-documents route on the relay. */
   getScene(): Promise<RelayScene | null>;
-  /** Placeable docs of one type on a scene (active when sceneId omitted). */
-  getCanvasDocuments<T = Record<string, unknown>>(documentType: string, sceneId?: string): Promise<T[]>;
   /** Move a token to canvas px (top-left), animated. */
   moveToken(tokenUuid: string, x: number, y: number): Promise<void>;
 }
@@ -576,11 +576,9 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
     if (sceneOrStall === SCENE_FETCH_STALLED) return { offScene: true as const, stalled: true as const };
     const scene = sceneOrStall;
     if (!scene) return { offScene: true as const, stalled: false as const };
-    const [doc, tokens] = await Promise.all([
-      boundedMs(relay.getEntity(`Actor.${actorId}`), movementTimeoutMs),
-      boundedMs(relay.getCanvasDocuments<RelayCanvasToken>('tokens', scene._id), movementTimeoutMs),
-    ]);
-    if (doc === null || tokens === null) return null;
+    const doc = await boundedMs(relay.getEntity(`Actor.${actorId}`), movementTimeoutMs);
+    if (doc === null) return null;
+    const tokens: RelayCanvasToken[] = Array.isArray(scene.tokens) ? scene.tokens : [];
     return {
       offScene: false as const,
       ctx: buildMovementContext(scene, tokens, actorId, walkSpeedOf(doc as { system?: unknown })),

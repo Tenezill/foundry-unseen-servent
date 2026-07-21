@@ -12,7 +12,7 @@ import type {
   SystemAdapter,
 } from '@companion/adapter-sdk';
 import { clamp, IntentError } from '@companion/adapter-sdk';
-import type { RawRoll, RelayCanvasToken, RelayEncounter, RelayScene } from '@companion/foundry-client';
+import type { RawRoll, RelayEncounter, RelayScene } from '@companion/foundry-client';
 import type { PlayersPort, RelayPort } from '../src/app.js';
 import type { Player } from '../src/players.js';
 
@@ -110,23 +110,14 @@ export class FakeRelay implements RelayPort {
   // ---- token movement -------------------------------------------------------
 
   scene: RelayScene | null = null;
-  canvasTokens: RelayCanvasToken[] = [];
   moveTokenCalls: Array<{ tokenUuid: string; x: number; y: number }> = [];
   hangScene = false;
-  hangCanvas = false;
   hangMove = false;
   moveError: string | null = null;
 
   async getScene(): Promise<RelayScene | null> {
     if (this.hangScene) return new Promise<never>(() => {});
     return this.scene;
-  }
-
-  async getCanvasDocuments<T = Record<string, unknown>>(documentType: string, sceneId?: string): Promise<T[]> {
-    if (this.hangCanvas) return new Promise<never>(() => {});
-    if (documentType !== 'tokens') return [];
-    void sceneId;
-    return this.canvasTokens as unknown as T[];
   }
 
   async moveToken(tokenUuid: string, x: number, y: number): Promise<void> {

@@ -118,16 +118,25 @@ export interface RelayEncounter {
   combatants: RelayCombatant[];
 }
 
-/** Scene document subset from GET /get-scene (relay returns Scene.toObject(true)). */
+/** Scene document subset from GET /scene (relay returns Scene.toObject(true)).
+ *  Live-verified against relay 3.4.1: there is NO separate canvas-documents
+ *  HTTP route in any spelling — placeable tokens ride along embedded on the
+ *  scene document itself (Foundry's own Scene.toObject() shape), so `tokens`
+ *  is read from here, not fetched separately. */
 export interface RelayScene {
   _id: string;
   name?: string;
   /** Foundry v13 nests grid config: type 1 = square; size = px per cell. */
   grid?: { type?: number; size?: number; distance?: number; units?: string };
+  /** Embedded TokenDocument collection (Scene.toObject() nests it here — no
+   *  separate canvas route exists on the relay). */
+  tokens?: RelayCanvasToken[];
   [key: string]: unknown;
 }
 
-/** TokenDocument.toObject() subset from GET /get-canvas-documents (documentType "tokens").
+/** TokenDocument.toObject() subset — an entry of the scene's embedded `tokens`
+ *  collection (there is no separate GET /get-canvas-documents route on the
+ *  relay; tokens ride along on the scene document — see RelayScene.tokens).
  *  x/y are canvas px of the token's TOP-LEFT corner; width/height are in grid squares. */
 export interface RelayCanvasToken {
   _id: string;
@@ -332,29 +341,22 @@ export class FoundryRelayClient {
     return Array.isArray(body.encounters) ? body.encounters : [];
   }
 
-  /** GET /get-scene — the currently ACTIVE scene, or null when there is none.
-   *  The relay reports "no active scene" as an error-in-200; that maps to null
-   *  (callers treat it as "movement unavailable", not a failure). */
+  /** GET /scene — the currently ACTIVE scene, or null when there is none.
+   *  Requires the relay API key scope `scene:read` (live-verified: 403
+   *  without it). The relay reports "no active scene" as an error-in-200;
+   *  that maps to null (callers treat it as "movement unavailable", not a
+   *  failure). The response's embedded `tokens` array (see RelayScene) is
+   *  the ONLY way to read placeable tokens — no separate canvas route
+   *  exists on the relay. */
   async getScene(): Promise<RelayScene | null> {
-    const body = await this.request<{ data?: RelayScene | null; error?: string }>('GET', '/get-scene', { active: true });
+    const body = await this.request<{ data?: RelayScene | null; error?: string }>('GET', '/scene', { active: true });
     if (typeof body.error === 'string' && body.error !== '') return null;
     return body.data ?? null;
   }
 
-  /** GET /get-canvas-documents — placeable documents of one type on a scene
-   *  (active scene when sceneId is omitted). Raw toObject() docs. */
-  async getCanvasDocuments<T = Record<string, unknown>>(documentType: string, sceneId?: string): Promise<T[]> {
-    const body = await this.request<{ data?: T[] | null; error?: string }>(
-      'GET', '/get-canvas-documents', { documentType, sceneId },
-    );
-    if (typeof body.error === 'string' && body.error !== '') {
-      throw new RelayError(`relay /get-canvas-documents: ${body.error}`, 200, '/get-canvas-documents');
-    }
-    return Array.isArray(body.data) ? body.data : [];
-  }
-
-  /** POST /move-token — reposition a token (canvas px, top-left), always animated.
-   *  tokenUuid form: `Scene.<sceneId>.Token.<tokenId>`. */
+  /** POST /move-token — reposition a token (canvas px, top-left), always
+   *  animated. Requires the relay API key scope `canvas:write` (live-
+   *  verified: 403 without it). tokenUuid form: `Scene.<sceneId>.Token.<tokenId>`. */
   async moveToken(tokenUuid: string, x: number, y: number): Promise<void> {
     const body = await this.request<{ data?: unknown; error?: string }>(
       'POST', '/move-token', {}, { uuid: tokenUuid, x, y, animate: true },

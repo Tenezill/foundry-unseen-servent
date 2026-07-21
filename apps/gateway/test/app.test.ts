@@ -182,9 +182,12 @@ describe('GET /api/actors/:id/movement', () => {
     ({ app, relay } = setup({ movementTimeoutMs: 50 }));
   });
 
-  const squareScene = () => ({ _id: 's1', name: 'Crypt', grid: { type: 1, size: 100, distance: 5, units: 'ft' } });
   const tok = (id: string, actorId: string | null, x: number, y: number, extra: Record<string, unknown> = {}) =>
     ({ _id: id, name: `tok-${id}`, x, y, width: 1, height: 1, hidden: false, disposition: 0, actorId, ...extra });
+  // Tokens ride along embedded on the scene document (relay 3.4.1: no
+  // separate canvas-documents route) — squareScene() takes them directly.
+  const squareScene = (tokens: Array<ReturnType<typeof tok>> = []) =>
+    ({ _id: 's1', name: 'Crypt', grid: { type: 1, size: 100, distance: 5, units: 'ft' }, tokens });
 
   /** Anna's a1 with a walk speed merged into the fixture doc. */
   function withSpeed(r: FakeRelay, actorId: string, walk: number): void {
@@ -215,12 +218,11 @@ describe('GET /api/actors/:id/movement', () => {
 
   it('returns the full view: cells, speed, visible others; hidden stripped', async () => {
     withSpeed(relay, 'a1', 30);
-    relay.scene = squareScene();
-    relay.canvasTokens = [
+    relay.scene = squareScene([
       tok('t1', 'a1', 300, 200),
       tok('t2', 'm1', 500, 200, { disposition: -1 }),
       tok('t3', 'm2', 700, 200, { hidden: true }),
-    ];
+    ]);
     const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
@@ -232,9 +234,9 @@ describe('GET /api/actors/:id/movement', () => {
     });
   });
 
-  it('502s when the canvas-token fetch hangs after a scene resolved', async () => {
-    relay.scene = squareScene();
-    relay.hangCanvas = true;
+  it('502s when the actor entity fetch hangs after a scene resolved', async () => {
+    relay.scene = squareScene([tok('t1', 'a1', 300, 200)]);
+    relay.hangUuid = 'Actor.a1';
     const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
     expect(res.statusCode).toBe(502);
     expect(res.json().error.code).toBe('UPSTREAM');
@@ -243,8 +245,7 @@ describe('GET /api/actors/:id/movement', () => {
   describe('POST /api/actors/:id/movement', () => {
     beforeEach(() => {
       withSpeed(relay, 'a1', 30);
-      relay.scene = squareScene();
-      relay.canvasTokens = [tok('t1', 'a1', 300, 200), tok('t2', 'm1', 500, 200)];
+      relay.scene = squareScene([tok('t1', 'a1', 300, 200), tok('t2', 'm1', 500, 200)]);
     });
 
     // Explicit content-type + stringify: a bare string payload (the 'nope'
@@ -280,13 +281,13 @@ describe('GET /api/actors/:id/movement', () => {
     });
 
     it('does NOT block a cell occupied only by a hidden token (no leak)', async () => {
-      relay.canvasTokens = [tok('t1', 'a1', 300, 200), tok('t3', 'm2', 500, 200, { hidden: true })];
+      relay.scene = squareScene([tok('t1', 'a1', 300, 200), tok('t3', 'm2', 500, 200, { hidden: true })]);
       const res = await post('a1', { cx: 5, cy: 2 });
       expect(res.statusCode).toBe(200);
     });
 
     it('409s when the actor has no token on the active scene', async () => {
-      relay.canvasTokens = [];
+      relay.scene = squareScene([]);
       expect((await post('a1', { cx: 4, cy: 2 })).statusCode).toBe(409);
     });
 

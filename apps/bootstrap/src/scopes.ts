@@ -25,6 +25,10 @@
  * testing (Task 0 findings §6). The same per-scope drop-and-retry in
  * relay-auth.mintKey covers `execute-js` on any relay build too old to know
  * it, so minting never fails outright over an unknown scope.
+ *
+ * `scene:read` and `canvas:write` power token movement (Task 6 live
+ * verification against relay 3.4.1: `GET /scene` 403s without `scene:read`;
+ * `POST /move-token` 403s without `canvas:write`).
  */
 export const GATEWAY_KEY_SCOPES = [
   'entity:read',
@@ -38,6 +42,8 @@ export const GATEWAY_KEY_SCOPES = [
   'encounter:read',
   'session:manage',
   'execute-js',
+  'scene:read',
+  'canvas:write',
   'dnd5e',
   'wod5e',
 ] as const satisfies readonly string[];
