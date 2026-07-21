@@ -15,6 +15,18 @@
             </svg>
           </button>
           <button
+            v-if="movement?.onScene"
+            class="tool"
+            type="button"
+            aria-label="Move token"
+            :disabled="offline"
+            @click="openMoveSheet()"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 3v18M3 12h18M12 3l-2.5 2.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button
             class="tool"
             type="button"
             :aria-label="rollAnimOn ? 'Turn off roll animation' : 'Turn on roll animation'"
@@ -241,6 +253,14 @@
         @submit="onActionSubmit"
         @close="closeActionSheet"
       />
+      <MoveSheet
+        v-if="showMoveSheet && movement"
+        :movement="movement"
+        :busy="movementBusy"
+        @submit="onMoveSubmit"
+        @refresh="refreshMovement"
+        @close="showMoveSheet = false"
+      />
       <TargetPickerSheet
         v-if="targetPickerFor"
         :encounter="encounter"
@@ -352,6 +372,9 @@ import type {
   LibraryPreviewResponse,
   LibrarySearchEntry,
   LibrarySearchResponse,
+  MovementCell,
+  MovementResponse,
+  MovementView,
   PartyView,
   RollLogEntry,
   SheetResponse,
@@ -454,6 +477,57 @@ const detailFor = ref<{
 const showLog = ref(false)
 
 const offline = computed(() => conn.value === 'offline')
+
+/* ---- token movement (Move sheet) ---------------------------------------- */
+const movement = ref<MovementView | null>(null)
+const showMoveSheet = ref(false)
+const movementBusy = ref(false)
+
+/** Silent refresh: failure just hides/keeps the toolbar button — movement is
+ *  an optional affordance, never an error the player must see. */
+async function refreshMovement(): Promise<void> {
+  try {
+    const res = await api<MovementResponse>(`/api/actors/${actorId.value}/movement`)
+    movement.value = res.movement
+  } catch {
+    movement.value = null
+  }
+}
+
+function openMoveSheet(): void {
+  if (offline.value) return
+  showMoveSheet.value = true
+  void refreshMovement()   // stale-while-revalidate: sheet opens on cached view
+}
+
+async function onMoveSubmit(cell: MovementCell): Promise<void> {
+  if (offline.value || movementBusy.value) return
+  movementBusy.value = true
+  try {
+    const res = await api<MovementResponse>(`/api/actors/${actorId.value}/movement`, {
+      method: 'POST',
+      body: cell,
+    })
+    movement.value = res.movement
+    showMoveSheet.value = false
+    toast.show('Move sent to the table')
+  } catch (err) {
+    const status = errorStatus(err)
+    if (status === 409) {
+      toast.show('That square is taken or the scene changed — refreshed')
+      void refreshMovement()
+    } else if (status === 422) {
+      toast.show('Out of range')
+    } else if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else {
+      toast.show('Move didn’t go through. Try again.')
+    }
+  } finally {
+    movementBusy.value = false
+  }
+}
 
 /* ---- M22 encounter mirror ------------------------------------------------ */
 
@@ -935,6 +1009,7 @@ async function fetchSheet(): Promise<void> {
   try {
     const res = await api<SheetResponse>(`/api/actors/${actorId.value}/sheet`)
     applySheet(res.sheet)
+    void refreshMovement()
   } catch (err) {
     const status = errorStatus(err)
     if (status === 401) {

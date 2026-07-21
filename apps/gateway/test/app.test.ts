@@ -40,7 +40,12 @@ function makePlayers(): Player[] {
 let app: FastifyInstance | null = null;
 
 function setup(
-  overrides: { rateLimitMax?: number; customItemTimeoutMs?: number; encounters?: EncounterManagerPort } = {},
+  overrides: {
+    rateLimitMax?: number;
+    customItemTimeoutMs?: number;
+    movementTimeoutMs?: number;
+    encounters?: EncounterManagerPort;
+  } = {},
 ): { app: FastifyInstance; relay: FakeRelay } {
   const relay = new FakeRelay();
   relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
@@ -55,6 +60,7 @@ function setup(
     pingMs: 60_000,
     ...(overrides.rateLimitMax !== undefined ? { rateLimitMax: overrides.rateLimitMax } : {}),
     ...(overrides.customItemTimeoutMs !== undefined ? { customItemTimeoutMs: overrides.customItemTimeoutMs } : {}),
+    ...(overrides.movementTimeoutMs !== undefined ? { movementTimeoutMs: overrides.movementTimeoutMs } : {}),
     ...(overrides.encounters !== undefined ? { encounters: overrides.encounters } : {}),
   });
   return { app, relay };
@@ -164,6 +170,147 @@ describe('actor scoping', () => {
     const { sheet } = res.json();
     expect(sheet.actorId).toBe('a1');
     expect(sheet.resources.find((r: { id: string }) => r.id === 'hp').value).toBe(24);
+  });
+});
+
+describe('GET /api/actors/:id/movement', () => {
+  let relay: FakeRelay;
+
+  // Short movement budget so the relay-stall/hang tests degrade fast rather
+  // than waiting the 3s default (mirrors the encounter timeout tests).
+  beforeEach(() => {
+    ({ app, relay } = setup({ movementTimeoutMs: 50 }));
+  });
+
+  const tok = (id: string, actorId: string | null, x: number, y: number, extra: Record<string, unknown> = {}) =>
+    ({ _id: id, name: `tok-${id}`, x, y, width: 1, height: 1, hidden: false, disposition: 0, actorId, ...extra });
+  // Tokens ride along embedded on the scene document (relay 3.4.1: no
+  // separate canvas-documents route) — squareScene() takes them directly.
+  const squareScene = (tokens: Array<ReturnType<typeof tok>> = []) =>
+    ({ _id: 's1', name: 'Crypt', grid: { type: 1, size: 100, distance: 5, units: 'ft' }, tokens });
+
+  /** Programs the FakeRelay's getSystemDetails response so fetchMovementContext's
+   *  speed leg (relay.getSystemDetails('dnd5e', ..., ['stats'])) resolves a
+   *  walk speed — dnd5e 5.x source docs never carry movement (see
+   *  speedFromStats in movement.ts), so this is the only place speed comes from. */
+  function withSpeed(r: FakeRelay, actorId: string, walk: number): void {
+    r.systemDetails = { uuid: `Actor.${actorId}`, stats: { speed: walk } };
+  }
+
+  it('404s (not 403) on a foreign actor', async () => {
+    const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/b1/movement', headers: asAnna });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns onScene:false when there is no active scene', async () => {
+    relay.scene = null;
+    const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ movement: { onScene: false } });
+  });
+
+  it('returns onScene:false on a relay stall fetching the scene (bounded)', async () => {
+    relay.hangScene = true;
+    const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ movement: { onScene: false } });
+  });
+
+  it('returns the full view: cells, speed, visible others; hidden stripped', async () => {
+    withSpeed(relay, 'a1', 30);
+    relay.scene = squareScene([
+      tok('t1', 'a1', 300, 200),
+      tok('t2', 'm1', 500, 200, { disposition: -1 }),
+      tok('t3', 'm2', 700, 200, { hidden: true }),
+    ]);
+    const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      movement: {
+        onScene: true, sceneId: 's1', gridDistance: 5, gridUnits: 'ft', speedFt: 30,
+        token: { cx: 3, cy: 2 },
+        others: [{ cx: 5, cy: 2, disposition: -1, name: 'tok-t2' }],
+      },
+    });
+  });
+
+  it('502s when the actor details fetch hangs after a scene resolved', async () => {
+    relay.scene = squareScene([tok('t1', 'a1', 300, 200)]);
+    relay.hangSystemDetails = true;
+    const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error.code).toBe('UPSTREAM');
+  });
+
+  describe('POST /api/actors/:id/movement', () => {
+    beforeEach(() => {
+      withSpeed(relay, 'a1', 30);
+      relay.scene = squareScene([tok('t1', 'a1', 300, 200), tok('t2', 'm1', 500, 200)]);
+    });
+
+    // Explicit content-type + stringify: a bare string payload (the 'nope'
+    // malformed-body case) has no object shape for light-my-request to infer
+    // a content-type from, and would otherwise 415 before reaching the route.
+    const post = (id: string, body: unknown, headers = asAnna) =>
+      (app as FastifyInstance).inject({
+        method: 'POST',
+        url: `/api/actors/${id}/movement`,
+        headers: { ...headers, 'content-type': 'application/json' },
+        payload: JSON.stringify(body),
+      });
+
+    it('404s (not 403) on a foreign actor', async () => {
+      expect((await post('b1', { cx: 1, cy: 1 })).statusCode).toBe(404);
+    });
+
+    it('422s on a malformed body', async () => {
+      expect((await post('a1', { cx: 1.5, cy: 2 })).statusCode).toBe(422);
+      expect((await post('a1', { cx: 1 })).statusCode).toBe(422);
+      expect((await post('a1', 'nope')).statusCode).toBe(422);
+    });
+
+    it('422s when the destination is out of range', async () => {
+      const res = await post('a1', { cx: 10, cy: 2 });   // chebyshev 7 > radius 6
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error.code).toBe('INVALID_INTENT');
+    });
+
+    it('409s when the destination cell is occupied by a VISIBLE token', async () => {
+      const res = await post('a1', { cx: 5, cy: 2 });    // t2's cell
+      expect(res.statusCode).toBe(409);
+    });
+
+    it('does NOT block a cell occupied only by a hidden token (no leak)', async () => {
+      relay.scene = squareScene([tok('t1', 'a1', 300, 200), tok('t3', 'm2', 500, 200, { hidden: true })]);
+      const res = await post('a1', { cx: 5, cy: 2 });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('409s when the actor has no token on the active scene', async () => {
+      relay.scene = squareScene([]);
+      expect((await post('a1', { cx: 4, cy: 2 })).statusCode).toBe(409);
+    });
+
+    it('502s (not 409) on a relay stall fetching the scene', async () => {
+      relay.hangScene = true;
+      const res = await post('a1', { cx: 4, cy: 2 });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().error.code).toBe('UPSTREAM');
+    });
+
+    it('moves the token: relay gets Scene.<id>.Token.<id> + px, response has the new cell', async () => {
+      const res = await post('a1', { cx: 5, cy: 1 });    // chebyshev 2, free
+      expect(res.statusCode).toBe(200);
+      expect(relay.moveTokenCalls).toEqual([{ tokenUuid: 'Scene.s1.Token.t1', x: 500, y: 100 }]);
+      const movement = res.json().movement;
+      expect(movement.token).toEqual({ cx: 5, cy: 1 });
+      expect(movement.onScene).toBe(true);
+    });
+
+    it('502s when the relay move call hangs', async () => {
+      relay.hangMove = true;
+      expect((await post('a1', { cx: 5, cy: 1 })).statusCode).toBe(502);
+    });
   });
 });
 

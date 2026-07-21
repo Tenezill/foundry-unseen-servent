@@ -12,7 +12,7 @@ import type {
   SystemAdapter,
 } from '@companion/adapter-sdk';
 import { clamp, IntentError } from '@companion/adapter-sdk';
-import type { RawRoll, RelayEncounter } from '@companion/foundry-client';
+import type { RawRoll, RelayEncounter, RelayScene } from '@companion/foundry-client';
 import type { PlayersPort, RelayPort } from '../src/app.js';
 import type { Player } from '../src/players.js';
 
@@ -107,6 +107,25 @@ export class FakeRelay implements RelayPort {
     return structuredClone(this.encounters);
   }
 
+  // ---- token movement -------------------------------------------------------
+
+  scene: RelayScene | null = null;
+  moveTokenCalls: Array<{ tokenUuid: string; x: number; y: number }> = [];
+  hangScene = false;
+  hangMove = false;
+  moveError: string | null = null;
+
+  async getScene(): Promise<RelayScene | null> {
+    if (this.hangScene) return new Promise<never>(() => {});
+    return this.scene;
+  }
+
+  async moveToken(tokenUuid: string, x: number, y: number): Promise<void> {
+    if (this.hangMove) return new Promise<never>(() => {});
+    if (this.moveError) throw new Error(this.moveError);
+    this.moveTokenCalls.push({ tokenUuid, x, y });
+  }
+
   /** Enders for the currently open hooks streams (abort or failHookStreams). */
   private readonly hookStreamEnders: Array<(err?: Error) => void> = [];
 
@@ -143,9 +162,13 @@ export class FakeRelay implements RelayPort {
   /** Response for getSystemDetails; error message embeds secrets when thrown. */
   systemDetails: unknown = {};
   systemDetailsError = false;
+  /** When true, getSystemDetails never settles (movement's speed leg —
+   *  mirrors hangScene/hangMove for the relay's derived-data endpoint). */
+  hangSystemDetails = false;
 
   async getSystemDetails(systemPath: string, actorUuid: string, details: string[]): Promise<unknown> {
     this.systemDetailCalls.push([systemPath, actorUuid, [...details]]);
+    if (this.hangSystemDetails) return new Promise(() => undefined); // never settles
     if (this.systemDetailsError) {
       throw new Error(`relay ${FAKE_RELAY_URL}/${systemPath} rejected key ${FAKE_API_KEY}`);
     }

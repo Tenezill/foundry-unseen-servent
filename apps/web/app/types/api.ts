@@ -136,3 +136,31 @@ export interface EncounterHpResponse {
 export interface PartyView {
   actors: Array<{ id: string; name?: string; img?: string }>
 }
+
+// ---- token movement (M24) ---------------------------------------------------
+
+/** GET/POST /api/actors/:id/movement (docs/API.md). Coordinates are grid cells. */
+export interface MovementCell {
+  cx: number
+  cy: number
+}
+
+export interface MovementOther extends MovementCell {
+  /** -1 hostile, 0 neutral, 1 friendly, -2 secret. */
+  disposition: number
+  name?: string
+}
+
+export interface MovementView {
+  onScene: boolean
+  sceneId?: string
+  gridDistance?: number
+  gridUnits?: string
+  speedFt?: number
+  token?: MovementCell
+  others?: MovementOther[]
+}
+
+export interface MovementResponse {
+  movement: MovementView
+}
