@@ -76,6 +76,14 @@ plain `resourceIds` trackers — a box-rendered track, tri-state
 (empty/superficial/aggravated) when `aggravatedId` is set, two-state
 otherwise (wod5e health/willpower vs. hunger/stains).
 
+### `GET /api/actors/:id/movement`
+
+Movement context for the actor's token on the ACTIVE scene (square grids only).
+`{ movement: { onScene, sceneId?, gridDistance?, gridUnits?, speedFt?, token?: {cx,cy}, others?: [{cx,cy,disposition,name?}] } }`
+`onScene:false` when there is no active scene, the grid is not square, or the
+actor has no token there. Coordinates are grid cells, never pixels. GM-hidden
+tokens are stripped server-side. 404 foreign/unknown actor; 502 relay failure.
+
 ### `POST /api/actors/:id/intents`
 Body: a single `ResourceIntent`:
 

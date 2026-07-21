@@ -40,7 +40,12 @@ function makePlayers(): Player[] {
 let app: FastifyInstance | null = null;
 
 function setup(
-  overrides: { rateLimitMax?: number; customItemTimeoutMs?: number; encounters?: EncounterManagerPort } = {},
+  overrides: {
+    rateLimitMax?: number;
+    customItemTimeoutMs?: number;
+    movementTimeoutMs?: number;
+    encounters?: EncounterManagerPort;
+  } = {},
 ): { app: FastifyInstance; relay: FakeRelay } {
   const relay = new FakeRelay();
   relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
@@ -55,6 +60,7 @@ function setup(
     pingMs: 60_000,
     ...(overrides.rateLimitMax !== undefined ? { rateLimitMax: overrides.rateLimitMax } : {}),
     ...(overrides.customItemTimeoutMs !== undefined ? { customItemTimeoutMs: overrides.customItemTimeoutMs } : {}),
+    ...(overrides.movementTimeoutMs !== undefined ? { movementTimeoutMs: overrides.movementTimeoutMs } : {}),
     ...(overrides.encounters !== undefined ? { encounters: overrides.encounters } : {}),
   });
   return { app, relay };
@@ -164,6 +170,74 @@ describe('actor scoping', () => {
     const { sheet } = res.json();
     expect(sheet.actorId).toBe('a1');
     expect(sheet.resources.find((r: { id: string }) => r.id === 'hp').value).toBe(24);
+  });
+});
+
+describe('GET /api/actors/:id/movement', () => {
+  let relay: FakeRelay;
+
+  // Short movement budget so the relay-stall/hang tests degrade fast rather
+  // than waiting the 3s default (mirrors the encounter timeout tests).
+  beforeEach(() => {
+    ({ app, relay } = setup({ movementTimeoutMs: 50 }));
+  });
+
+  const squareScene = () => ({ _id: 's1', name: 'Crypt', grid: { type: 1, size: 100, distance: 5, units: 'ft' } });
+  const tok = (id: string, actorId: string | null, x: number, y: number, extra: Record<string, unknown> = {}) =>
+    ({ _id: id, name: `tok-${id}`, x, y, width: 1, height: 1, hidden: false, disposition: 0, actorId, ...extra });
+
+  /** Anna's a1 with a walk speed merged into the fixture doc. */
+  function withSpeed(r: FakeRelay, actorId: string, walk: number): void {
+    const doc = r.entities.get(`Actor.${actorId}`) as { system?: Record<string, unknown> };
+    const system = { ...(doc.system ?? {}) } as Record<string, unknown>;
+    system.attributes = { ...((system.attributes as Record<string, unknown>) ?? {}), movement: { walk } };
+    r.entities.set(`Actor.${actorId}`, { ...doc, system });
+  }
+
+  it('404s (not 403) on a foreign actor', async () => {
+    const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/b1/movement', headers: asAnna });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns onScene:false when there is no active scene', async () => {
+    relay.scene = null;
+    const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ movement: { onScene: false } });
+  });
+
+  it('returns onScene:false on a relay stall fetching the scene (bounded)', async () => {
+    relay.hangScene = true;
+    const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ movement: { onScene: false } });
+  });
+
+  it('returns the full view: cells, speed, visible others; hidden stripped', async () => {
+    withSpeed(relay, 'a1', 30);
+    relay.scene = squareScene();
+    relay.canvasTokens = [
+      tok('t1', 'a1', 300, 200),
+      tok('t2', 'm1', 500, 200, { disposition: -1 }),
+      tok('t3', 'm2', 700, 200, { hidden: true }),
+    ];
+    const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      movement: {
+        onScene: true, sceneId: 's1', gridDistance: 5, gridUnits: 'ft', speedFt: 30,
+        token: { cx: 3, cy: 2 },
+        others: [{ cx: 5, cy: 2, disposition: -1, name: 'tok-t2' }],
+      },
+    });
+  });
+
+  it('502s when the canvas-token fetch hangs after a scene resolved', async () => {
+    relay.scene = squareScene();
+    relay.hangCanvas = true;
+    const res = await (app as FastifyInstance).inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error.code).toBe('UPSTREAM');
   });
 });
 

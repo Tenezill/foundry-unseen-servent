@@ -28,7 +28,8 @@ import type {
   SystemAdapter,
 } from '@companion/adapter-sdk';
 import { IntentError } from '@companion/adapter-sdk';
-import type { RawRoll, RelayEncounter } from '@companion/foundry-client';
+import type { RawRoll, RelayCanvasToken, RelayEncounter, RelayScene } from '@companion/foundry-client';
+import { buildMovementContext, occupiedCells, validateMove, walkSpeedOf } from './movement.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { verifyToken, type Player } from './players.js';
 import { PlayerStoreError } from './player-store.js';
@@ -123,6 +124,12 @@ export interface RelayPort {
   ): Promise<void>;
   /** GET /encounters — active/all combats (M22, requires encounter:read scope). */
   getEncounters(): Promise<RelayEncounter[]>;
+  /** Active scene, null when none (or relay reported none). */
+  getScene(): Promise<RelayScene | null>;
+  /** Placeable docs of one type on a scene (active when sceneId omitted). */
+  getCanvasDocuments<T = Record<string, unknown>>(documentType: string, sceneId?: string): Promise<T[]>;
+  /** Move a token to canvas px (top-left), animated. */
+  moveToken(tokenUuid: string, x: number, y: number): Promise<void>;
 }
 
 /**
@@ -174,6 +181,9 @@ export interface GatewayDeps {
   /** M22: budget for the hp-write route's actor fetch (every relay await on
    *  the encounter path is bounded — Global Constraints). Default 3000. */
   encounterFetchTimeoutMs?: number;
+  /** Token movement: budget per relay leg (scene/tokens/actor fetch, and the
+   *  POST move) — every relay await is bounded. Default 3000. */
+  movementTimeoutMs?: number;
   /** M23: budget per relay call in the custom-item create->give->delete
    *  chain (every relay await is bounded — Global Constraints). Default 3000. */
   customItemTimeoutMs?: number;
@@ -506,6 +516,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   const livePollMs = deps.livePollMs ?? 3_000;
   const adminNameTimeoutMs = deps.adminNameTimeoutMs ?? 3_000;
   const encounterFetchTimeoutMs = deps.encounterFetchTimeoutMs ?? 3_000;
+  const movementTimeoutMs = deps.movementTimeoutMs ?? 3_000;
   const customItemTimeoutMs = deps.customItemTimeoutMs ?? 3_000;
   const healthTimeoutMs = deps.healthTimeoutMs ?? 3_000;
   const limiter = new SlidingWindowLimiter(deps.rateLimitMax ?? 30, deps.rateLimitWindowMs ?? 60_000);
@@ -537,6 +548,28 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       }
     }
     return actor;
+  };
+
+  /** M18-style bounded await: relay stall → null sentinel instead of a hang. */
+  const boundedMs = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
+    Promise.race([p, new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))]);
+
+  /** Scene + tokens + walk speed for one actor, every leg bounded.
+   *  Returns null when a leg AFTER a resolved scene fails (→ 502);
+   *  an unresolved scene is a normal offScene result, not an error. */
+  const fetchMovementContext = async (actorId: string) => {
+    const scene = await boundedMs(relay.getScene(), movementTimeoutMs);
+    if (!scene) return { offScene: true as const };
+    const [doc, tokens] = await Promise.all([
+      boundedMs(relay.getEntity(`Actor.${actorId}`), movementTimeoutMs),
+      boundedMs(relay.getCanvasDocuments<RelayCanvasToken>('tokens', scene._id), movementTimeoutMs),
+    ]);
+    if (doc === null || tokens === null) return null;
+    return {
+      offScene: false as const,
+      ctx: buildMovementContext(scene, tokens, actorId, walkSpeedOf(doc as { system?: unknown })),
+      tokens,
+    };
   };
 
   const buildSheet = (adapter: SystemAdapter, actor: FoundryActorDoc): SheetViewModel => adapter.toViewModel(actor);
@@ -945,6 +978,21 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       const adapter = adapterFor(actor);
       if (!adapter) return sendError(reply, 502, 'UPSTREAM', 'no adapter for actor system');
       return reply.code(200).send({ sheet: buildSheet(adapter, actor) });
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/actors/:id/movement',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const player = req.player as Player;
+      const { id } = req.params;
+      // Ownership (404, never 403 — do not leak actor existence).
+      if (!player.actorIds.includes(id)) return sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      const result = await fetchMovementContext(id);
+      if (result === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+      if (result.offScene) return reply.code(200).send({ movement: { onScene: false } });
+      return reply.code(200).send({ movement: result.ctx.view });
     },
   );
 
