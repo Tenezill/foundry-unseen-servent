@@ -13,7 +13,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeRelayServer } from './fake-relay-server.js';
 import { RelayAuthClient } from '../src/relay-auth.js';
 import { StatusWriter } from '../src/status.js';
-import { writeKeyFileAtomic } from '../src/key-file.js';
+import { readPersistedKey, writeKeyFileAtomic } from '../src/key-file.js';
+import { readKeyScopesFile, writeKeyScopesFileAtomic } from '../src/key-scopes-file.js';
+import { GATEWAY_KEY_SCOPES } from '../src/scopes.js';
 import { runConvergePass, type ConvergePassDeps, type ConvergePassState } from '../src/main.js';
 
 describe('runConvergePass', () => {
@@ -107,5 +109,40 @@ describe('runConvergePass', () => {
     await runConvergePass(deps({ foundryDataDir, moduleSrcDir }), freshState());
 
     expect(status.current().phase).toBe('online');
+  });
+
+  // Critical review regression (Critical 1 on b0fca80): the converge pass
+  // used to run its own probe and call ensureKey ONLY when that probe was
+  // NOT valid, so a probe-valid key with a stale/missing scopes sidecar —
+  // the exact scenario the drift check exists for — never reached it. These
+  // drive runConvergePass itself (the real production entry point), not
+  // ensureKey directly, so a regression here is caught even if a future
+  // change reintroduces main.ts's own bypassing probe logic.
+  describe('scope drift reaches the drift check via the production converge pass', () => {
+    it('valid key + missing sidecar: the pass re-mints instead of keeping the under-scoped key', async () => {
+      // beforeEach persisted 'k-test' with no scopes sidecar at all.
+      expect(readKeyScopesFile(keyFilePath)).toBeNull();
+
+      await runConvergePass(deps(), freshState());
+
+      expect(server.authCalls.length).toBeGreaterThan(0); // ensureKey ran, not skipped
+      expect(readPersistedKey(keyFilePath)).not.toBe('k-test'); // re-minted
+      expect(readKeyScopesFile(keyFilePath)).toEqual({
+        requested: [...GATEWAY_KEY_SCOPES],
+        granted: [...GATEWAY_KEY_SCOPES],
+      });
+    });
+
+    it('valid key + a sidecar already matching canonical scopes: zero /auth traffic (no needless re-mint)', async () => {
+      writeKeyScopesFileAtomic(keyFilePath, {
+        requested: [...GATEWAY_KEY_SCOPES],
+        granted: [...GATEWAY_KEY_SCOPES],
+      });
+
+      await runConvergePass(deps(), freshState());
+
+      expect(server.authCalls.length).toBe(0); // probe-valid, drift-free -> no /auth/* traffic
+      expect(readPersistedKey(keyFilePath)).toBe('k-test'); // untouched
+    });
   });
 });
