@@ -11,6 +11,14 @@
  *   { result, sheet }. Roll totals cycle 8, 15, 20 (20 = critical).
  * - SSE per actor: current sheet on connect, ping every 25s, and a random
  *   HP drift every ~20s so live updates are visible without a GM.
+ * - GET /api/encounter + GET /api/encounter/events (SSE) + POST
+ *   /api/encounter/combatants/:id/hp (2026-07-22): a permanently-active
+ *   fixture encounter (both party members + two goblins), so the Combat tab
+ *   and in-combat targeting flow are click-through testable without a live
+ *   Foundry world. A weapon attack, a save spell, and a heal spell carry
+ *   `targeting`; POSTing one with `targetTokenUuids` returns a canned
+ *   `outcome` (hit + resisted damage / per-target save results), mirroring
+ *   the real gateway's targeted-use orchestration shape 1:1.
  */
 import { createServer } from 'node:http'
 
@@ -113,7 +121,12 @@ actors.set('a-sariel', {
       // the target picker (self or another party member).
       { id: 's-bless', label: 'Bless', sub: '1st · V,S,M', level: 1, effectType: 'utility', buff: { name: 'Bless', ac: 0 }, targetable: true },
       { id: 's-mistystep', label: 'Misty Step', sub: '2nd · V', level: 2, effectType: 'utility' },
-      { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'], level: 3, effectType: 'damage', detail: '<p>A bead of glowing amber streaks from your fingertip and blooms into roaring flame.</p><p><strong>The academy warns:</strong> mind your allies, and mind the drapes.</p>' },
+      // In-combat targeting (2026-07-22): a save-vs-DC spell that can hit
+      // several combatants at once — targeting.mode 'multiple'.
+      { id: 's-fireball', label: 'Fireball', sub: '3rd · V,S,M', tags: ['prepared'], level: 3, effectType: 'damage', targeting: { mode: 'multiple', kind: 'save' }, detail: '<p>A bead of glowing amber streaks from your fingertip and blooms into roaring flame.</p><p><strong>The academy warns:</strong> mind your allies, and mind the drapes.</p>' },
+      // In-combat targeting: a single-target heal — `targeting`, never
+      // `targetable` (that flag stays reserved for buff casts).
+      { id: 's-healingword', label: 'Healing Word', sub: '1st · V · Bonus Action', level: 1, effectType: 'heal', targeting: { mode: 'single', kind: 'heal' } },
     ],
     features: [
       { id: 'f-recovery', label: 'Arcane Recovery', sub: 'Wizard 1', use: true },
@@ -165,7 +178,8 @@ actors.set('a-brakk', {
       { id: 'dex', label: 'DEX Save', value: '+1' },
     ],
     inventory: [
-      { id: 'i-sword', label: 'Longsword', sub: '1d8 slashing', attackMod: 7, equip: { equipped: true, acBonus: 0 }, detail: '<p>A well-worn blade with a leather-wrapped grip, notched from a hundred skirmishes.</p><p><em>Balanced enough to wield in one hand or two.</em></p>' },
+      // In-combat targeting (2026-07-22): a single-target weapon attack.
+      { id: 'i-sword', label: 'Longsword', sub: '1d8 slashing', attackMod: 7, targeting: { mode: 'single', kind: 'attack' }, equip: { equipped: true, acBonus: 0 }, detail: '<p>A well-worn blade with a leather-wrapped grip, notched from a hundred skirmishes.</p><p><em>Balanced enough to wield in one hand or two.</em></p>' },
       { id: 'i-bow', label: 'Longbow', sub: '1d8 piercing', attackMod: 4, equip: { equipped: false, acBonus: 0 } },
       { id: 'i-arrows', label: 'Arrows', sub: 'ammunition', resourceId: 'item.i-arrows.qty' },
       { id: 'i-javelin', label: 'Javelins', sub: '1d6 piercing', resourceId: 'item.i-javelin.qty', attackMod: 7 },
@@ -178,6 +192,79 @@ actors.set('a-brakk', {
     ],
   },
 })
+
+/* ------------------------------------------------------------------------- */
+/* Encounter mirror (M22 + 2026-07-22 in-combat targeting), fixture-only:     */
+/* always active so the Combat tab and the new targeting flow are click-     */
+/* through testable against the mock without a live Foundry world.           */
+/* ------------------------------------------------------------------------- */
+
+function deriveHealthTier(hp, max) {
+  if (hp <= 0) return 'down'
+  const pct = hp / max
+  if (pct <= 0.25) return 'bloodied'
+  if (pct <= 0.5) return 'wounded'
+  return 'healthy'
+}
+
+const encounterState = {
+  active: true,
+  round: 2,
+  turn: { combatantId: 'c-brakk' },
+  combatants: [
+    { id: 'c-sariel', actorId: 'a-sariel', name: 'Sariel Dawnwhisper', img: '/icons/portrait-caster.svg', initiative: 18, isPC: true, defeated: false, tokenUuid: 'Scene.s1.Token.tSariel' },
+    { id: 'c-brakk', actorId: 'a-brakk', name: 'Brakk Ironhide', img: '/icons/portrait-martial.svg', initiative: 14, isPC: true, defeated: false, tokenUuid: 'Scene.s1.Token.tBrakk' },
+    { id: 'c-goblin1', name: 'Goblin Skirmisher', initiative: 9, isPC: false, defeated: false, hpInternal: 5, hpMax: 10, tokenUuid: 'Scene.s1.Token.tGoblin1' },
+    { id: 'c-goblin2', name: 'Goblin Archer', initiative: 6, isPC: false, defeated: false, hpInternal: 12, hpMax: 12, tokenUuid: 'Scene.s1.Token.tGoblin2' },
+  ],
+}
+for (const c of encounterState.combatants) {
+  if (!c.isPC) c.health = deriveHealthTier(c.hpInternal, c.hpMax)
+}
+
+function buildEncounterView() {
+  return {
+    active: encounterState.active,
+    round: encounterState.round,
+    turn: encounterState.turn,
+    combatants: encounterState.combatants.map((c) => {
+      const out = { id: c.id, name: c.name, initiative: c.initiative, isPC: c.isPC, defeated: c.defeated }
+      if (c.actorId !== undefined) out.actorId = c.actorId
+      if (c.img !== undefined) out.img = c.img
+      if (c.tokenUuid !== undefined) out.tokenUuid = c.tokenUuid
+      if (c.isPC) {
+        const hp = actors.get(c.actorId)?.resources.find((x) => x.id === 'hp')
+        out.hp = hp ? { value: hp.value, max: hp.max } : { value: 0, max: 0 }
+      } else {
+        out.health = c.health
+      }
+      return out
+    }),
+  }
+}
+
+/** actorId -> Set<ServerResponse>, mirroring the per-actor `subscribers` map. */
+const encounterSubscribers = new Set()
+
+function broadcastEncounter() {
+  if (encounterSubscribers.size === 0) return
+  const payload = `event: encounter\ndata: ${JSON.stringify(buildEncounterView())}\n\n`
+  for (const res of encounterSubscribers) res.write(payload)
+}
+
+function applyEncounterHp(id, delta) {
+  const c = encounterState.combatants.find((x) => x.id === id)
+  if (!c) return null
+  if (c.isPC && c.actorId) {
+    const hp = actors.get(c.actorId)?.resources.find((x) => x.id === 'hp')
+    if (hp) hp.value = clamp(hp.value + delta, hp.min, hp.max)
+  } else {
+    c.hpInternal = clamp((c.hpInternal ?? c.hpMax ?? 10) + delta, 0, c.hpMax ?? 10)
+    c.health = deriveHealthTier(c.hpInternal, c.hpMax ?? 10)
+    c.defeated = c.hpInternal <= 0
+  }
+  return buildEncounterView()
+}
 
 /* ------------------------------------------------------------------------- */
 /* Actions (M6): ActionDescriptor[] derived from the mutable state            */
@@ -205,7 +292,9 @@ function buildActions(actor) {
   }
   for (const it of s.inventory) {
     if (it.attackMod !== undefined) {
-      actions.push({ id: `item.${it.id}.attack`, label: it.label, kind: 'attack' })
+      const attack = { id: `item.${it.id}.attack`, label: it.label, kind: 'attack' }
+      if (it.targeting) attack.targeting = it.targeting
+      actions.push(attack)
       // Companion damage roll, like the real dnd5e adapter (M14). Accepts
       // the nat-20 `critical` flag (doubled dice).
       actions.push({ id: `item.${it.id}.damage`, label: it.label, kind: 'damage' })
@@ -222,6 +311,7 @@ function buildActions(actor) {
     if (sp.effectType) a.effectType = sp.effectType
     if (sp.level > 0) a.slotLevels = availableSlotLevels(actor, sp.level)
     if (sp.targetable) a.targetable = true
+    if (sp.targeting) a.targeting = sp.targeting
     actions.push(a)
   }
   for (const f of s.features) {
@@ -508,6 +598,65 @@ function mockRoll(mode, mod) {
 
 const ACTION_KINDS = ['check', 'save', 'attack', 'damage', 'cast', 'use', 'equip', 'attune', 'rest', 'deathsave', 'endconcentration', 'endeffect']
 
+/** In-combat targeting (2026-07-22): the canned per-target outcome for a
+ *  targeted attack — mirrors the exact hit + resisted-damage fixture from
+ *  the gateway's own test (apps/gateway/test/app.test.ts). Only the FIRST
+ *  target gets that fixture; any further targets in the same call miss, so
+ *  a multi-select attack (not offered in v1, but harmless if ever wired) has
+ *  something to show too. */
+function buildAttackOutcome(targetTokenUuids, result) {
+  return {
+    attack: { total: result.total, formula: result.formula, isCritical: result.isCritical, isFumble: result.isFumble },
+    targets: targetTokenUuids.map((t, i) => {
+      const name = encounterState.combatants.find((c) => c.tokenUuid === t)?.name ?? 'Target'
+      if (i === 0) {
+        return { tokenUuid: t, name, outcome: 'hit', damage: { rolled: [{ type: 'slashing', value: 12 }], applied: 6 } }
+      }
+      return { tokenUuid: t, name, outcome: 'miss' }
+    }),
+  }
+}
+
+/** A targeted heal spell: no attack roll, every target is healed for the
+ *  full rolled amount (no resistance to healing). */
+function buildHealOutcome(targetTokenUuids) {
+  return {
+    attack: null,
+    targets: targetTokenUuids.map((t) => {
+      const name = encounterState.combatants.find((c) => c.tokenUuid === t)?.name ?? 'Target'
+      return { tokenUuid: t, name, outcome: 'applied', damage: { rolled: [{ type: 'healing', value: 8 }], applied: 8 } }
+    }),
+  }
+}
+
+/** A targeted save-vs-DC spell (e.g. Fireball): alternates failed (full
+ *  damage) / passed (half damage, so the "resisted" tag has something real
+ *  to show) across the picked targets. */
+function buildSaveOutcome(targetTokenUuids) {
+  return {
+    attack: null,
+    targets: targetTokenUuids.map((t, i) => {
+      const name = encounterState.combatants.find((c) => c.tokenUuid === t)?.name ?? 'Target'
+      if (i % 2 === 0) {
+        return {
+          tokenUuid: t,
+          name,
+          outcome: 'save-failed',
+          save: { total: 9, dc: 15 },
+          damage: { rolled: [{ type: 'fire', value: 24 }], applied: 24 },
+        }
+      }
+      return {
+        tokenUuid: t,
+        name,
+        outcome: 'save-passed',
+        save: { total: 18, dc: 15 },
+        damage: { rolled: [{ type: 'fire', value: 24 }], applied: 12 },
+      }
+    }),
+  }
+}
+
 /** Long rest fully recovers; short rest clears death saves (mock behavior). */
 function applyRest(actor, actionId) {
   const restore = (id) => {
@@ -543,7 +692,35 @@ function handleAction(actor, intent, res) {
     return sendError(res, 403, 'FORBIDDEN_RESOURCE', `no such action: ${String(actionId)}`)
   }
 
+  // In-combat targeting (2026-07-22): validate shape unconditionally on
+  // attack/cast/use (an untargetable action just ignores the field, mirrors
+  // docs/API.md); route through the targeted-use checks only when the
+  // descriptor actually carries `targeting`.
+  const targetTokenUuids = intent.targetTokenUuids
+  if (targetTokenUuids !== undefined) {
+    if (kind !== 'attack' && kind !== 'cast' && kind !== 'use') {
+      return sendError(res, 422, 'INVALID_INTENT', 'targetTokenUuids is only valid on attack/cast/use')
+    }
+    if (
+      !Array.isArray(targetTokenUuids) ||
+      targetTokenUuids.length === 0 ||
+      targetTokenUuids.length > 12 ||
+      new Set(targetTokenUuids).size !== targetTokenUuids.length ||
+      targetTokenUuids.some((t) => typeof t !== 'string')
+    ) {
+      return sendError(res, 422, 'INVALID_INTENT', 'targetTokenUuids must be 1-12 unique token uuids')
+    }
+    if (action.targeting) {
+      if (!encounterState.active) return sendError(res, 409, 'CONFLICT', 'no active encounter')
+      const roster = new Set(encounterState.combatants.map((c) => c.tokenUuid).filter(Boolean))
+      for (const t of targetTokenUuids) {
+        if (!roster.has(t)) return sendError(res, 403, 'FORBIDDEN_RESOURCE', 'target is not in the encounter')
+      }
+    }
+  }
+
   let result = null
+  let outcome = null
 
   if (kind === 'check' || kind === 'save') {
     const { mode } = intent
@@ -555,6 +732,7 @@ function handleAction(actor, intent, res) {
     const itemId = actionId.split('.')[1]
     const it = actor.staticSections.inventory.find((x) => x.id === itemId)
     result = mockRoll(undefined, it?.attackMod ?? 5)
+    if (action.targeting && targetTokenUuids) outcome = buildAttackOutcome(targetTokenUuids, result)
   } else if (kind === 'damage') {
     // Mirrors the real gateway: optional boolean `critical` doubles the dice,
     // optional integer `slotLevel` (>=1) scales dice count for upcast damage.
@@ -607,6 +785,10 @@ function handleAction(actor, intent, res) {
         }
       }
     }
+    if (action.targeting && targetTokenUuids) {
+      outcome = action.targeting.kind === 'heal' ? buildHealOutcome(targetTokenUuids) : buildSaveOutcome(targetTokenUuids)
+      result = null // no attack roll on a targeted heal/save spell -> no roll pill
+    }
   } else if (kind === 'use') {
     result = mockRoll(undefined, 3)
   } else if (kind === 'equip') {
@@ -645,8 +827,27 @@ function handleAction(actor, intent, res) {
     }
   }
 
-  sendJson(res, 200, { result, sheet: buildSheet(actor) })
+  // Make the canned outcome visibly real: apply each target's damage/heal to
+  // the fixture encounter (and the target's own actor sheet, if it's a PC),
+  // so the Combat tab / target's health tier actually reacts.
+  const affectedActorIds = new Set()
+  if (outcome) {
+    for (const t of outcome.targets) {
+      if (!t.damage) continue
+      const combatant = encounterState.combatants.find((c) => c.tokenUuid === t.tokenUuid)
+      if (!combatant) continue
+      const isHeal = t.outcome === 'applied' && action.targeting?.kind === 'heal'
+      applyEncounterHp(combatant.id, isHeal ? t.damage.applied : -t.damage.applied)
+      if (combatant.isPC && combatant.actorId) affectedActorIds.add(combatant.actorId)
+    }
+  }
+
+  sendJson(res, 200, { result, ...(outcome ? { outcome } : {}), sheet: buildSheet(actor) })
   broadcast(actor.id)
+  if (outcome) {
+    broadcastEncounter() // targeted damage/heal moved a combatant's hp
+    for (const id of affectedActorIds) if (id !== actor.id) broadcast(id)
+  }
 }
 
 const server = createServer(async (req, res) => {
@@ -694,6 +895,50 @@ const server = createServer(async (req, res) => {
         .filter(Boolean)
         .map((a) => ({ id: a.id, name: a.name, img: a.img, systemId: a.systemId })),
     })
+  }
+
+  if (req.method === 'GET' && path === '/api/encounter') {
+    return sendJson(res, 200, buildEncounterView())
+  }
+
+  if (req.method === 'GET' && path === '/api/encounter/events') {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+      'access-control-allow-origin': '*',
+    })
+    res.write(`event: encounter\ndata: ${JSON.stringify(buildEncounterView())}\n\n`)
+    const ping = setInterval(() => res.write('event: ping\ndata: {}\n\n'), 25_000)
+    encounterSubscribers.add(res)
+    req.on('close', () => {
+      clearInterval(ping)
+      encounterSubscribers.delete(res)
+    })
+    return
+  }
+
+  const hpMatch = path.match(/^\/api\/encounter\/combatants\/([^/]+)\/hp$/)
+  if (hpMatch && req.method === 'POST') {
+    const [, combatantId] = hpMatch
+    let body
+    try {
+      body = JSON.parse((await readBody(req)) || 'null')
+    } catch {
+      return sendError(res, 422, 'INVALID_INTENT', 'body is not valid JSON')
+    }
+    if (typeof body !== 'object' || body === null || typeof body.amount !== 'number' || !Number.isFinite(body.amount)) {
+      return sendError(res, 422, 'INVALID_INTENT', 'amount must be a finite number')
+    }
+    if (!encounterState.combatants.some((c) => c.id === combatantId)) {
+      return sendError(res, 404, 'NOT_FOUND', 'no such combatant')
+    }
+    const encounter = applyEncounterHp(combatantId, body.amount)
+    sendJson(res, 200, { encounter })
+    broadcastEncounter()
+    const combatant = encounterState.combatants.find((c) => c.id === combatantId)
+    if (combatant?.isPC && combatant.actorId) broadcast(combatant.actorId)
+    return
   }
 
   const match = path.match(/^\/api\/actors\/([^/]+)\/(sheet|intents|actions|events)$/)
