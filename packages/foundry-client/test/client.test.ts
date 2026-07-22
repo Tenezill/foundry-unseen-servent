@@ -763,6 +763,8 @@ describe('FoundryRelayClient.useAbilityOnTargets', () => {
     // applyDamage parts and never reference the missing helper.
     expect(script).not.toContain('aggregateDamageRolls');
     expect(script).toContain('dmgRolls.map');
+    expect(script).toContain('r.options?.type');
+    expect(script).toContain('r.options?.properties');
     expect(res.targets[0]?.outcome).toBe('hit');
     expect(res.attack?.total).toBe(19);
   });
