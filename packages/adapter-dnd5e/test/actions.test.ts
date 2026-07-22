@@ -1984,6 +1984,70 @@ describe('buildAction — self-buff spells apply their active effect', () => {
       itemId: '9FrgmKwWCYPhlZ5w',
     });
   });
+
+  // dnd5e 5.3.3 / Foundry 14.364 moved ActiveEffect changes under
+  // `effect.system.changes` with a STRING `type` ("add"/"override"); relay
+  // GET /get serializes the top-level core `changes` as null (live-verified
+  // 2026-07-23 on Morgrim's Shield + Mage Armor). selfBuffEffect must read
+  // system.changes and translate type -> numeric core mode, or buffs silently
+  // no-op (200, no effect) — the reported Shield/Mage Armor failure.
+  function withShieldSystemChanges(base = casterCaptured): FoundryActorDoc {
+    const actor = structuredClone(base);
+    (actor.items as FoundryItemDoc[]).push({
+      _id: 'spellShieldSC001',
+      name: 'Shield',
+      type: 'spell',
+      system: { level: 1, school: 'abj', prepared: 1, method: 'spell', activities: { a1: { type: 'utility' } } },
+      effects: [
+        {
+          _id: 'aeShieldSC000001',
+          name: 'Shield',
+          img: 'icons/svg/shield.svg',
+          transfer: false,
+          disabled: false,
+          duration: { seconds: 6 },
+          // No top-level `changes` (relay serializes it null); the real data.
+          system: { changes: [{ key: 'system.attributes.ac.bonus', value: '+5', type: 'add', priority: 20, phase: 'initial' }] },
+        },
+      ],
+    } as unknown as FoundryItemDoc);
+    return actor;
+  }
+
+  it('reads system.changes + maps type:"add" -> mode 2 (live dnd5e 5.3.3 Shield shape)', () => {
+    expect(build(withShieldSystemChanges(), { kind: 'cast', actionId: 'spell.spellShieldSC001.cast', slotLevel: 1 })).toMatchObject({
+      endpoint: 'cast-and-apply-effect',
+      use: 'use-spell',
+      itemId: 'spellShieldSC001',
+      effect: {
+        name: 'Shield',
+        changes: [{ key: 'system.attributes.ac.bonus', mode: 2, value: '+5' }],
+      },
+    });
+  });
+
+  it('maps type:"override" -> mode 5 (live Mage Armor: ac.calc override "mage")', () => {
+    const actor = structuredClone(casterCaptured);
+    (actor.items as FoundryItemDoc[]).push({
+      _id: 'spellMageArmr01',
+      name: 'Mage Armor',
+      type: 'spell',
+      system: { level: 1, school: 'abj', prepared: 1, method: 'spell', activities: { a1: { type: 'utility' } } },
+      effects: [
+        {
+          _id: 'aeMageArmor0001',
+          name: 'Mage Armor',
+          transfer: false,
+          disabled: false,
+          system: { changes: [{ key: 'system.attributes.ac.calc', value: 'mage', type: 'override', priority: 5, phase: 'initial' }] },
+        },
+      ],
+    } as unknown as FoundryItemDoc);
+    expect(build(actor, { kind: 'cast', actionId: 'spell.spellMageArmr01.cast', slotLevel: 1 })).toMatchObject({
+      endpoint: 'cast-and-apply-effect',
+      effect: { name: 'Mage Armor', changes: [{ key: 'system.attributes.ac.calc', mode: 5, value: 'mage' }] },
+    });
+  });
 });
 
 describe('target buffs — targetable flag + targetActorId', () => {

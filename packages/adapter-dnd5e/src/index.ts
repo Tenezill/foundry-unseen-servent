@@ -1650,6 +1650,42 @@ function targetingOf(item: FoundryItemDoc): { mode: 'single' | 'multiple'; kind:
  * shows provenance. dnd5e/DAE never applies these headless (M-buff-effects
  * findings), so the gateway creates the effect itself.
  */
+/** Foundry CONST.ACTIVE_EFFECT_MODES, keyed by the string `type` dnd5e 5.3.3
+ *  stores under `system.changes` (live-verified 2026-07-23: relay GET /get
+ *  serializes the core numeric-`mode` `changes` as null and keeps only
+ *  `system.changes` with a string `type`). The buff write path creates a core
+ *  ActiveEffect (numeric `mode`), so translate back. */
+const AE_MODE_BY_TYPE: Record<string, number> = {
+  custom: 0,
+  multiply: 1,
+  add: 2,
+  downgrade: 3,
+  upgrade: 4,
+  override: 5,
+};
+
+/** An effect's changes as {key, numeric mode, value}, read from whichever
+ *  shape the relay serialized: the core top-level `changes` (numeric `mode`,
+ *  older dnd5e / synthetic fixtures) or dnd5e 5.3.3's `system.changes` (string
+ *  `type`). Top-level wins when present; otherwise fall back to system.changes
+ *  and map `type`→`mode`. */
+function effectChanges(eff: Record<string, unknown>): Array<{ key: string; mode: number; value: string }> {
+  const top = eff.changes;
+  const sys = getPath(eff, 'system.changes');
+  const raw = Array.isArray(top) && top.length > 0 ? top : Array.isArray(sys) ? sys : [];
+  return raw
+    .map(rec)
+    .filter((c) => typeof c.key === 'string' && c.key !== '')
+    .map((c) => ({
+      key: c.key as string,
+      mode:
+        typeof c.mode === 'number'
+          ? c.mode
+          : (typeof c.type === 'string' ? AE_MODE_BY_TYPE[c.type] : undefined) ?? 0,
+      value: typeof c.value === 'string' ? c.value : String(c.value ?? ''),
+    }));
+}
+
 function selfBuffEffect(actor: FoundryActorDoc, item: FoundryItemDoc): EffectPayload | undefined {
   if (item.type !== 'spell') return undefined;
   if (effectTypeOf(item) !== 'utility') return undefined; // heals/damage handled elsewhere
@@ -1664,16 +1700,7 @@ function selfBuffEffect(actor: FoundryActorDoc, item: FoundryItemDoc): EffectPay
     // Real dnd5e 5.3.3 activity-applied item effects are stored disabled:true
     // on the source spell (enabled only when copied onto a target); the copy
     // we build below (EffectPayload) is created enabled regardless.
-    const changes = Array.isArray(eff.changes)
-      ? eff.changes
-          .map(rec)
-          .filter((c) => typeof c.key === 'string' && c.key !== '')
-          .map((c) => ({
-            key: c.key as string,
-            mode: typeof c.mode === 'number' ? c.mode : 0,
-            value: typeof c.value === 'string' ? c.value : String(c.value ?? ''),
-          }))
-      : [];
+    const changes = effectChanges(eff);
     if (changes.length === 0) continue;
     const name = typeof eff.name === 'string' && eff.name !== '' ? eff.name : item.name;
     return {
