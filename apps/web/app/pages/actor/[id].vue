@@ -1962,10 +1962,17 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
       void fetchSheet()
     } else if (status === 429) {
       toast.show('Slow down — too many actions at once')
-    } else if (status === 502) {
+    } else if (
+      status === 502 &&
+      'targetTokenUuids' in intent &&
+      intent.targetTokenUuids &&
+      intent.targetTokenUuids.length > 0
+    ) {
       // A targeted orchestration's relay timeout is never retried — Foundry
       // may already have applied damage — so the gateway's message must
       // reach the player verbatim rather than the usual generic copy.
+      // Untargeted 502s (e.g. remove-effect, generic upstream errors) fall
+      // through to the pre-existing generic copy below.
       const msg = errorData<ApiErrorBody>(err)?.error?.message
       toast.show(msg ?? 'The table didn’t respond. Try again.')
     } else {
