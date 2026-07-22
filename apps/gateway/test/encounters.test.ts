@@ -13,7 +13,7 @@ import { buildApp } from '../src/app.js';
 import { EncounterManager } from '../src/encounters.js';
 import { sha256Hex, type Player } from '../src/players.js';
 import { createRegistry } from '../src/registry.js';
-import { FakeRelay, memoryPlayers } from './fakes.js';
+import { actorDoc, FakeRelay, memoryPlayers } from './fakes.js';
 
 /** Minimal structural type for the injected SSE response stream (mirrors app.test.ts). */
 interface EventStream {
@@ -1005,5 +1005,135 @@ describe('SSE /api/encounter/events', () => {
     assertHpPrivacy(lastActive);
 
     stream.destroy();
+  });
+});
+
+describe('tokenUuid plumbing + turn accessors', () => {
+  it('carries tokenUuid from REST combatants into the view', async () => {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Hero', 10, 10));
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'comb1', name: 'Hero', actorUuid: 'Actor.a1', tokenUuid: 'Scene.s1.Token.t1', initiative: 15 },
+          { id: 'comb2', name: 'Skeleton', tokenUuid: 'Scene.s1.Token.t2', initiative: 10 },
+        ],
+      },
+    ];
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await manager.start();
+    const view = manager.view();
+    expect(view.combatants?.[0]?.tokenUuid).toBe('Scene.s1.Token.t1');
+    expect(view.combatants?.[1]?.tokenUuid).toBe('Scene.s1.Token.t2');
+    manager.stop();
+  });
+
+  it('drops a tokenUuid that is not a full Scene.*.Token.* uuid', async () => {
+    const relay = new FakeRelay();
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: [{ id: 'comb1', name: 'X', tokenUuid: 't1-bare-id', initiative: 5 }],
+      },
+    ];
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await manager.start();
+    expect(manager.view().combatants?.[0]?.tokenUuid).toBeUndefined();
+    manager.stop();
+  });
+
+  it('builds tokenUuid from hook-frame tokenId + the combat doc scene', async () => {
+    const relay = new FakeRelay();
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await manager.start();
+    relay.emitUpdateCombat({
+      _id: 'c1',
+      round: 1,
+      turn: 0,
+      scene: 's1',
+      combatants: [{ _id: 'comb1', name: 'Hero', actorId: 'a1', tokenId: 't1', initiative: 12 }],
+    });
+    expect(manager.view().combatants?.[0]?.tokenUuid).toBe('Scene.s1.Token.t1');
+    manager.stop();
+  });
+
+  it('current() returns the acting combatant; combatantByActorId finds by actor', async () => {
+    const relay = new FakeRelay();
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 2,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'comb1', name: 'Hero', actorUuid: 'Actor.a1', initiative: 15 },
+          { id: 'comb2', name: 'Skel', initiative: 10 },
+        ],
+      },
+    ];
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await manager.start();
+    expect(manager.current()).toEqual({ combatId: 'c1', round: 2, combatantId: 'comb1', actorId: 'a1' });
+    expect(manager.combatantByActorId('a1')?.id).toBe('comb1');
+    expect(manager.combatantByActorId('nope')).toBeUndefined();
+    manager.stop();
+  });
+
+  it('current() is null when inactive', () => {
+    const manager = new EncounterManager({ relay: new FakeRelay(), fetchTimeoutMs: 50 });
+    expect(manager.current()).toBeNull();
+  });
+
+  // Final-review Fix 1 (c): current() must apply the same visibility rule as
+  // view().turn — a hidden acting combatant means "no visible acting
+  // combatant", not "combat inactive".
+  it('current() returns null when the acting combatant is hidden', async () => {
+    const relay = new FakeRelay();
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 2,
+        turn: 0, // sorted desc -> idx 0 is the hidden combatant (initiative 15)
+        current: true,
+        combatants: [
+          { id: 'hidden1', name: 'Hidden NPC', actorUuid: 'Actor.npc1', initiative: 15, hidden: true },
+          { id: 'comb2', name: 'Hero', actorUuid: 'Actor.a1', initiative: 10 },
+        ],
+      },
+    ];
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await manager.start();
+    expect(manager.current()).toBeNull();
+    manager.stop();
+  });
+
+  // Final-review Fix 1 (d): combatantByActorId must skip a hidden combatant
+  // to find a later visible one sharing the same actorId (e.g. a stealthed
+  // duplicate token doesn't shadow the player's own visible combatant).
+  it('combatantByActorId skips a hidden combatant to find a later visible one with the same actorId', async () => {
+    const relay = new FakeRelay();
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'hiddenDupe', name: 'Hidden Dupe', actorUuid: 'Actor.a1', initiative: 20, hidden: true },
+          { id: 'comb1', name: 'Hero', actorUuid: 'Actor.a1', initiative: 10 },
+        ],
+      },
+    ];
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await manager.start();
+    expect(manager.combatantByActorId('a1')?.id).toBe('comb1');
+    manager.stop();
   });
 });

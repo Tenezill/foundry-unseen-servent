@@ -292,18 +292,23 @@ export interface ActionDescriptor {
   /** pool only: default attribute/skill pairing the PWA preselects (M23);
    *  the player may repick either before rolling. Ids match Stat.id. */
   pool?: { attribute?: string; skill?: string };
+  /** In-combat targeting capability (2026-07-22): absent = untargetable (the
+   *  action keeps today's untargeted flow). mode 'multiple' only for
+   *  save-vs-DC actions (Fireball can hit several combatants, friends
+   *  included); attacks and heals are single-target in v1. */
+  targeting?: { mode: 'single' | 'multiple'; kind: 'attack' | 'save' | 'heal' };
 }
 
 export type ActionIntent =
   | { kind: 'check' | 'save'; actionId: string; mode?: 'advantage' | 'disadvantage' }
-  | { kind: 'attack'; actionId: string; mode?: 'advantage' | 'disadvantage' }
-  | { kind: 'use'; actionId: string }
+  | { kind: 'attack'; actionId: string; mode?: 'advantage' | 'disadvantage'; targetTokenUuids?: string[] }
+  | { kind: 'use'; actionId: string; targetTokenUuids?: string[] }
   /** `critical` (5e nat 20): the damage roll doubles its dice, keeping
    *  static bonuses — armed by the PWA when the preceding attack/cast
    *  roll came back `isCritical`. `slotLevel` is the level the spell was
    *  last cast at (upcasting) so the display roll scales its dice. */
   | { kind: 'damage'; actionId: string; critical?: boolean; slotLevel?: number }
-  | { kind: 'cast'; actionId: string; slotLevel?: number; targetActorId?: string }
+  | { kind: 'cast'; actionId: string; slotLevel?: number; targetActorId?: string; targetTokenUuids?: string[] }
   | { kind: 'equip'; actionId: string; equipped: boolean }
   | { kind: 'prepare'; actionId: string; prepared: boolean }
   | { kind: 'attune'; actionId: string; attuned: boolean }
@@ -394,7 +399,18 @@ export type RelayAction =
   /** Delete an app-applied active effect off the actor (buff removal); the
    *  gateway resolves `Actor.<id>.ActiveEffect.<effectId>` via deleteEntity. */
   | { endpoint: 'remove-effect'; effectId: string }
-  | { endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration' };
+  | { endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration' }
+  /** Targeted use (2026-07-22): one execute-js orchestration — target →
+   *  activity.use → attack/save resolution → damage roll → dnd5e applyDamage
+   *  per target. Foundry owns ALL rules; the gateway validates targets
+   *  against the visible encounter roster and never retries (side effects). */
+  | {
+      endpoint: 'use-on-targets';
+      itemId: string;
+      targetTokenUuids: string[];
+      slotKey?: string;
+      mode?: 'advantage' | 'disadvantage';
+    };
 
 /**
  * IO handed to `SystemAdapter.enrich`: lets the adapter pull extra derived
@@ -404,6 +420,13 @@ export type RelayAction =
 export interface AdapterIO {
   /** relay GET /<systemId>/get-actor-details?details=[…] for this actor. */
   getSystemDetails(details: string[]): Promise<unknown>;
+  /** The enriched actor's OWN live derived AC (execute-js read of the
+   *  prepared document). Used by enrich to display correct AC when an
+   *  Active Effect (e.g. Mage Armor's ac.calc override) makes the relay's
+   *  get-actor-details stats.ac stale. Attack resolution never uses this —
+   *  the orchestration script reads target AC inside Foundry. Bounded +
+   *  null-degrading (a stale AC beats no sheet). */
+  getDerivedAc?(): Promise<number | null>;
 }
 
 /**

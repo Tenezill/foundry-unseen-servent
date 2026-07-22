@@ -28,8 +28,15 @@ import type {
   SystemAdapter,
 } from '@companion/adapter-sdk';
 import { IntentError } from '@companion/adapter-sdk';
-import type { RawRoll, RelayCanvasToken, RelayEncounter, RelayScene } from '@companion/foundry-client';
-import { buildMovementContext, occupiedCells, speedFromStats, validateMove } from './movement.js';
+import type {
+  RawRoll,
+  RelayCanvasToken,
+  RelayEncounter,
+  RelayScene,
+  TargetedUseResult,
+} from '@companion/foundry-client';
+import { buildMovementContext, chebyshev, occupiedCells, speedFromStats, validateMove } from './movement.js';
+import { MovementBudgetTracker } from './movement-budget.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { verifyToken, type Player } from './players.js';
 import { PlayerStoreError } from './player-store.js';
@@ -135,6 +142,25 @@ export interface RelayPort {
   getScene(): Promise<RelayScene | null>;
   /** Move a token to canvas px (top-left), animated. */
   moveToken(tokenUuid: string, x: number, y: number): Promise<void>;
+  /** POST /execute-js via foundry-client useAbilityOnTargets — one
+   *  orchestration: target -> activity.use -> attack/save resolution ->
+   *  damage roll -> dnd5e applyDamage per target (2026-07-22). Never
+   *  retried on failure (side-effecting — see the route's 408 handling). */
+  useAbilityOnTargets(
+    actorUuid: string,
+    itemUuid: string,
+    opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' },
+  ): Promise<TargetedUseResult>;
+  /** POST /execute-js via foundry-client endCombatTurn — advance the combat
+   *  turn IFF the expected combatant is still acting (race-guard, 2026-07-22). */
+  endCombatTurn(expectedCombatantId: string): Promise<{ advanced: boolean; reason?: string; round?: number; turn?: number }>;
+  /** POST /execute-js via foundry-client postChatNote — a plain chat card
+   *  speaking as the actor (Dash's GM-visibility note, 2026-07-22). */
+  postChatNote(actorUuid: string, text: string): Promise<void>;
+  /** POST /execute-js via foundry-client getDerivedAc — the PREPARED actor's
+   *  live system.attributes.ac.value (Task 8: AC display fix under active
+   *  effects). Null on any failure; never throws. */
+  getDerivedAc(actorUuid: string): Promise<number | null>;
 }
 
 /**
@@ -151,6 +177,15 @@ export interface EncounterManagerPort {
   /** Re-fetch one actor (bounded) and refresh cached hp/type before the
    *  caller re-reads view() — used right after an hp write. */
   refreshActor(actorId: string): Promise<void>;
+  /** The acting combatant (2026-07-22 turn flow): null when inactive or when
+   *  the acting combatant is hidden. */
+  current(): { combatId: string; round: number; combatantId: string; actorId?: string } | null;
+  /** First non-hidden combatant linked to this actor (movement budget /
+   *  End turn both key on it, 2026-07-22). */
+  combatantByActorId(actorId: string): { id: string; actorId?: string } | undefined;
+  /** Active combat's id + round regardless of the acting combatant's
+   *  visibility (final-review Fix 1) — null only when inactive. */
+  activeRound(): { combatId: string; round: number } | null;
 }
 
 export interface GatewayDeps {
@@ -186,6 +221,13 @@ export interface GatewayDeps {
   /** M22: budget for the hp-write route's actor fetch (every relay await on
    *  the encounter path is bounded — Global Constraints). Default 3000. */
   encounterFetchTimeoutMs?: number;
+  /** Budget for POST /api/encounter/turn/end's relay call (final-review Fix
+   *  4). Deliberately longer than encounterFetchTimeoutMs: that budget is
+   *  sized for plain REST fetches (getScene, getEntity), but endCombatTurn
+   *  runs a script through execute-js in the GM's browser — a slower path —
+   *  so the 3s REST bound was firing spurious 502s while the turn was still
+   *  genuinely advancing. Default 15000. */
+  turnEndTimeoutMs?: number;
   /** Token movement: budget per relay leg (scene/tokens/actor fetch, and the
    *  POST move) — every relay await is bounded. Default 3000. */
   movementTimeoutMs?: number;
@@ -283,6 +325,22 @@ function parseIntent(body: Record<string, unknown>, resourceId: string): Resourc
  * Validate the per-kind extras of an action body. `kind` is the descriptor's
  * kind (already confirmed to equal `body.kind` by the allow-list check).
  */
+/** Full REST-scoped token uuid, e.g. `Scene.abc123.Token.def456` — the shape
+ *  the roster (EncounterView combatants) and use-on-targets both deal in. */
+const TARGET_TOKEN_UUID_RE = /^Scene\.[A-Za-z0-9]{1,32}\.Token\.[A-Za-z0-9]{1,32}$/;
+
+/** undefined = field absent; null = malformed (422). 1-12 unique full uuids. */
+function parseTargetTokenUuids(raw: unknown): string[] | null | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 12) return null;
+  const out: string[] = [];
+  for (const t of raw) {
+    if (typeof t !== 'string' || !TARGET_TOKEN_UUID_RE.test(t) || out.includes(t)) return null;
+    out.push(t);
+  }
+  return out;
+}
+
 function parseActionIntent(
   body: Record<string, unknown>,
   actionId: string,
@@ -291,11 +349,24 @@ function parseActionIntent(
   switch (kind) {
     case 'check':
     case 'save':
-    case 'attack':
       if (body.mode !== undefined && body.mode !== 'advantage' && body.mode !== 'disadvantage') return null;
       return body.mode === undefined ? { kind, actionId } : { kind, actionId, mode: body.mode };
-    case 'use':
-      return { kind, actionId };
+    case 'attack': {
+      if (body.mode !== undefined && body.mode !== 'advantage' && body.mode !== 'disadvantage') return null;
+      const targetTokenUuids = parseTargetTokenUuids(body.targetTokenUuids);
+      if (targetTokenUuids === null) return null;
+      return {
+        kind,
+        actionId,
+        ...(body.mode !== undefined ? { mode: body.mode as 'advantage' | 'disadvantage' } : {}),
+        ...(targetTokenUuids !== undefined ? { targetTokenUuids } : {}),
+      };
+    }
+    case 'use': {
+      const targetTokenUuids = parseTargetTokenUuids(body.targetTokenUuids);
+      if (targetTokenUuids === null) return null;
+      return { kind, actionId, ...(targetTokenUuids !== undefined ? { targetTokenUuids } : {}) };
+    }
     case 'damage':
       // Optional nat-20 flag: the adapter doubles the damage dice (5e crit).
       if (body.critical !== undefined && typeof body.critical !== 'boolean') return null;
@@ -326,12 +397,17 @@ function parseActionIntent(
       ) {
         return null;
       }
-      return {
-        kind,
-        actionId,
-        ...(body.slotLevel !== undefined ? { slotLevel: body.slotLevel } : {}),
-        ...(body.targetActorId !== undefined ? { targetActorId: body.targetActorId } : {}),
-      };
+      {
+        const targetTokenUuids = parseTargetTokenUuids(body.targetTokenUuids);
+        if (targetTokenUuids === null) return null;
+        return {
+          kind,
+          actionId,
+          ...(body.slotLevel !== undefined ? { slotLevel: body.slotLevel } : {}),
+          ...(body.targetActorId !== undefined ? { targetActorId: body.targetActorId } : {}),
+          ...(targetTokenUuids !== undefined ? { targetTokenUuids } : {}),
+        };
+      }
     case 'equip':
       if (typeof body.equipped !== 'boolean') return null;
       return { kind, actionId, equipped: body.equipped };
@@ -490,6 +566,27 @@ function buffTargetAllowed(targetId: string, casterId: string, deps: GatewayDeps
   return combatIds.has(targetId);
 }
 
+/** Per-actor combat movement budget context (2026-07-22 §F4) — see
+ *  combatMoveContext inside buildApp. `key` is the MovementBudgetTracker key
+ *  for this actor's combatant this round; absent when out of combat. */
+interface CombatMoveContext {
+  inCombat: boolean;
+  yourTurn: boolean;
+  key?: string;
+  remainingFt?: number;
+  dashed?: boolean;
+}
+
+/** The `{inCombat, yourTurn, remainingFt, dashed}` fields spread onto a
+ *  movement response (GET/POST /api/actors/:id/movement, the dash route) —
+ *  `{}` out of combat, so the shape stays absent (not undefined-valued) on
+ *  the wire exactly as before. */
+function budgetFields(cc: CombatMoveContext): Record<string, unknown> {
+  return cc.inCombat
+    ? { inCombat: true, yourTurn: cc.yourTurn, remainingFt: cc.remainingFt, dashed: cc.dashed }
+    : {};
+}
+
 /**
  * Whitelist for the manual dice tray: only `NdM` dice terms and integer
  * modifiers joined by + / - (e.g. "2d6 + 1d8 + 3"). Keeps the endpoint a dice
@@ -521,10 +618,12 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   const livePollMs = deps.livePollMs ?? 3_000;
   const adminNameTimeoutMs = deps.adminNameTimeoutMs ?? 3_000;
   const encounterFetchTimeoutMs = deps.encounterFetchTimeoutMs ?? 3_000;
+  const turnEndTimeoutMs = deps.turnEndTimeoutMs ?? 15_000;
   const movementTimeoutMs = deps.movementTimeoutMs ?? 3_000;
   const customItemTimeoutMs = deps.customItemTimeoutMs ?? 3_000;
   const healthTimeoutMs = deps.healthTimeoutMs ?? 3_000;
   const limiter = new SlidingWindowLimiter(deps.rateLimitMax ?? 30, deps.rateLimitWindowMs ?? 60_000);
+  const movementBudget = new MovementBudgetTracker();
   const { relay, players, registry } = deps;
 
   const app = Fastify({ logger: deps.logger ?? false });
@@ -547,6 +646,8 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       try {
         actor = await adapter.enrich(actor, {
           getSystemDetails: (details) => relay.getSystemDetails(adapter.systemId, `Actor.${actorId}`, details),
+          getDerivedAc: () =>
+            boundedMs(relay.getDerivedAc(`Actor.${actorId}`), encounterFetchTimeoutMs).then((v) => v ?? null),
         });
       } catch (err) {
         app.log.warn({ err, actorId }, 'adapter enrich failed; serving unenriched document');
@@ -589,6 +690,41 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       tokens,
     };
   };
+
+  /** Budget context for this actor (2026-07-22 §F4). Not a combatant (or no
+   *  live encounter) -> free movement, exactly like out-of-combat today.
+   *
+   *  Final-review Fix 1: `mgr.current()` is null BOTH when combat is
+   *  inactive AND when combat is active but the acting combatant is hidden
+   *  (same visibility rule as view().turn — current()'s doc comment). Those
+   *  are not the same thing: during a hidden NPC's turn, a player with a
+   *  visible combatant must still be blocked (off-turn), not granted free
+   *  movement. So `mine` (this player's own visible combatant) is resolved
+   *  first and gates the free-movement fallback; the round/combatId needed
+   *  to key the budget then comes from `current()` when the acting
+   *  combatant is visible, or from `activeRound()` (visibility-independent)
+   *  when it's hidden — `yourTurn` is false in that case since a hidden
+   *  combatant can never be `mine` (combatantByActorId only returns visible
+   *  ones). */
+  function combatMoveContext(actorId: string, speedFt: number): CombatMoveContext {
+    const mgr = deps.encounters;
+    if (!mgr || !mgr.isActive()) return { inCombat: false, yourTurn: false };
+    const mine = mgr.combatantByActorId(actorId);
+    if (!mine) return { inCombat: false, yourTurn: false };
+    const cur = mgr.current();
+    const round = cur ?? mgr.activeRound();
+    if (!round) return { inCombat: false, yourTurn: false }; // defensive: isActive() implies activeRound() non-null
+    movementBudget.prune(round.combatId, round.round);
+    const key = MovementBudgetTracker.key(round.combatId, round.round, mine.id);
+    const st = movementBudget.state(key);
+    return {
+      inCombat: true,
+      yourTurn: cur !== null && mine.id === cur.combatantId,
+      key,
+      remainingFt: Math.max(0, speedFt * (st.dashed ? 2 : 1) - st.movedFt),
+      dashed: st.dashed,
+    };
+  }
 
   const buildSheet = (adapter: SystemAdapter, actor: FoundryActorDoc): SheetViewModel => adapter.toViewModel(actor);
 
@@ -1010,7 +1146,13 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       const result = await fetchMovementContext(id);
       if (result === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       if (result.offScene) return reply.code(200).send({ movement: { onScene: false } });
-      return reply.code(200).send({ movement: result.ctx.view });
+      const cc = combatMoveContext(id, result.ctx.view.speedFt ?? 0);
+      return reply.code(200).send({
+        movement: {
+          ...result.ctx.view,
+          ...budgetFields(cc),
+        },
+      });
     },
   );
 
@@ -1045,8 +1187,18 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
         return sendError(reply, 409, 'CONFLICT', 'no token on the active scene');
       }
 
+      // Accepted TOCTOU: the budget check here and the spend below (after
+      // relay.moveToken) straddle the relay await — two overlapping POSTs
+      // can both validate against the same remaining budget. Accepted:
+      // soft-cap philosophy (spec 2026-07-22 §F4), table-scale traffic, and
+      // the write rate limiter narrow the window; the GM sees every token
+      // move. Do NOT add locking.
+      const cc = combatMoveContext(id, ctx.view.speedFt ?? 0);
+      if (cc.inCombat && !cc.yourTurn) return sendError(reply, 409, 'CONFLICT', 'not your turn');
+      const effView = cc.inCombat ? { ...ctx.view, speedFt: cc.remainingFt } : ctx.view;
+
       const occupied = occupiedCells(tokens, ctx.gridSize, ctx.own._id);
-      const verdict = validateMove(ctx.view, target, occupied);
+      const verdict = validateMove(effView, target, occupied);
       if (!verdict.ok) return sendError(reply, verdict.status, verdict.code, verdict.message);
 
       const tokenUuid = `Scene.${ctx.view.sceneId}.Token.${ctx.own._id}`;
@@ -1056,9 +1208,57 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       );
       if (moved === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
 
+      if (cc.inCombat && cc.key !== undefined && ctx.view.token) {
+        movementBudget.addMove(cc.key, chebyshev(ctx.view.token, target) * (ctx.view.gridDistance ?? 5));
+      }
+
       // Confirmed view: same context with the token at its new cell (no refetch —
       // the relay echoed the destination; a fresh GET runs on the next sheet open).
-      return reply.code(200).send({ movement: { ...ctx.view, token: target } });
+      const fresh = combatMoveContext(id, ctx.view.speedFt ?? 0);
+      return reply.code(200).send({
+        movement: {
+          ...ctx.view,
+          token: target,
+          ...budgetFields(fresh),
+        },
+      });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/actors/:id/movement/dash',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const player = req.player as Player;
+      const { id } = req.params;
+      if (!player.actorIds.includes(id)) return sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      if (!limiter.allow(player.tokenHash)) return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
+      const result = await fetchMovementContext(id);
+      if (result === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+      if (result.offScene) return sendError(reply, 409, 'CONFLICT', 'no token on the active scene');
+      const speedFt = result.ctx.view.speedFt ?? 0;
+      const cc = combatMoveContext(id, speedFt);
+      if (!cc.inCombat) return sendError(reply, 409, 'CONFLICT', 'not in combat');
+      if (!cc.yourTurn) return sendError(reply, 409, 'CONFLICT', 'not your turn');
+      if (cc.key === undefined || !movementBudget.markDashed(cc.key)) {
+        return sendError(reply, 409, 'CONFLICT', 'already dashed this turn');
+      }
+      // Best-effort GM visibility — a failed note never fails the dash. The
+      // `.catch` is required, not decorative: without it a rejecting
+      // postChatNote rejects the raced promise, and since the result is
+      // never awaited (fire-and-forget), that becomes an unhandled promise
+      // rejection that can crash the process.
+      const name = typeof result.ctx.own?.name === 'string' ? result.ctx.own.name : 'A player';
+      void boundedMs(relay.postChatNote(`Actor.${id}`, `${name} dashes!`).then(() => true), movementTimeoutMs).catch(
+        (err) => req.log.warn({ err }, 'dash: chat note failed; continuing'),
+      );
+      const fresh = combatMoveContext(id, speedFt);
+      return reply.code(200).send({
+        movement: {
+          ...result.ctx.view,
+          ...budgetFields(fresh),
+        },
+      });
     },
   );
 
@@ -1207,6 +1407,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       // 5. Execute via the relay (Foundry rolls, posts cards, consumes
       // slots/uses itself). Relay failures throw -> 502 via setErrorHandler.
       let result: ActionRollResult | null = null;
+      let outcome: unknown = null;
       switch (action.endpoint) {
         case 'roll':
           result = extractRoll(await relay.rollFormula(`Actor.${id}`, action.formula, action.flavor));
@@ -1363,12 +1564,46 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           // card and carry no roll total -> extractRoll yields null.
           result = extractRoll(await relay.actorCommand(action.endpoint, `Actor.${id}`));
           break;
+        case 'use-on-targets': {
+          // Targets are only meaningful during a live encounter; the visible
+          // roster is the whole legal target surface (hidden combatants never
+          // reach the view, so they are untargetable by construction —
+          // Global Constraints).
+          const mgr = deps.encounters;
+          if (!mgr || !mgr.isActive()) return sendError(reply, 409, 'CONFLICT', 'no active encounter');
+          const roster = new Set(
+            (mgr.view().combatants ?? []).map((c) => c.tokenUuid).filter((t): t is string => typeof t === 'string'),
+          );
+          for (const t of action.targetTokenUuids) {
+            if (!roster.has(t)) return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'target is not in the encounter');
+          }
+          try {
+            const res = await relay.useAbilityOnTargets(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {
+              targetTokenUuids: action.targetTokenUuids,
+              ...(action.slotKey !== undefined ? { slotKey: action.slotKey } : {}),
+              ...(action.mode !== undefined ? { mode: action.mode } : {}),
+            });
+            outcome = res;
+            result = res.attack !== null ? extractRoll(res.attack) : null;
+          } catch (err) {
+            // SIDE-EFFECTING — never retried. A relay 408 means the
+            // orchestration may have already applied damage in Foundry;
+            // retrying could double it.
+            if (isRelayTimeout(err)) {
+              return sendError(reply, 502, 'UPSTREAM', 'Timed out — check the Foundry chat before retrying.');
+            }
+            throw err;
+          }
+          break;
+        }
       }
 
       const fresh = await fetchActor(id);
       if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const freshAdapter = adapterFor(fresh) ?? adapter;
-      return reply.code(200).send({ result, sheet: buildSheet(freshAdapter, fresh) });
+      return reply
+        .code(200)
+        .send({ result, ...(outcome !== null ? { outcome } : {}), sheet: buildSheet(freshAdapter, fresh) });
     },
   );
 
@@ -1819,6 +2054,23 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
         return reply.code(200).send({ encounter: encounterManager.view() });
       },
     );
+
+    app.post('/api/encounter/turn/end', { preHandler: auth(false) }, async (req, reply) => {
+      const player = req.player as Player;
+      if (!limiter.allow(player.tokenHash)) {
+        return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
+      }
+      const cur = encounterManager.current();
+      if (!cur) return sendError(reply, 409, 'CONFLICT', 'no active encounter');
+      // Only the acting combatant's owner may advance — GM keeps NPC turns in Foundry.
+      if (cur.actorId === undefined || !player.actorIds.includes(cur.actorId)) {
+        return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'not your turn');
+      }
+      const res = await boundedMs(relay.endCombatTurn(cur.combatantId), turnEndTimeoutMs);
+      if (res === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+      if (!res.advanced) return sendError(reply, 409, 'CONFLICT', 'turn already advanced');
+      return reply.code(200).send({ ok: true });
+    });
   }
 
   return app;

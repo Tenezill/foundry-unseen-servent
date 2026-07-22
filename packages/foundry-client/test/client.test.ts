@@ -727,3 +727,133 @@ describe('FoundryRelayClient movement wrappers', () => {
     await expect(client.moveToken('Scene.s1.Token.tX', 0, 0)).rejects.toThrow('Token not found');
   });
 });
+
+describe('FoundryRelayClient.useAbilityOnTargets', () => {
+  let client: FoundryRelayClient;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new FoundryRelayClient({ baseUrl: 'http://relay:3010', apiKey: 'k', clientId: 'fvtt_x' });
+  });
+
+  function okExec(result: unknown) {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, text: vi.fn(),
+      json: vi.fn().mockResolvedValueOnce({ success: true, result }),
+    });
+  }
+
+  const RESULT = { attack: { total: 19, formula: '1d20+7', isCritical: false, isFumble: false },
+    targets: [{ tokenUuid: 'Scene.s1.Token.t1', name: 'Skeleton', outcome: 'hit',
+      damage: { rolled: [{ type: 'slashing', value: 12 }], applied: 6 } }] };
+
+  it('POSTs /execute-js with a script interpolating only JSON.stringified ids', async () => {
+    okExec(RESULT);
+    const res = await client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Scene.s1.Token.t1'] });
+    const [url, init] = mockFetch.mock.calls[0] as [string, { body: string; method: string }];
+    expect(url).toContain('/execute-js');
+    expect(init.method).toBe('POST');
+    const script = (JSON.parse(init.body) as { script: string }).script;
+    expect(script).toContain('"Actor.a1.Item.i1"');
+    expect(script).toContain('["Scene.s1.Token.t1"]');
+    expect(script).toContain('applyDamage');
+    expect(script).toContain('measuredTemplate: false');
+    // dnd5e 5.3.x has no dnd5e.dice.aggregateDamageRolls (live-verified
+    // 2026-07-22); the damage path must map rollDamage rolls straight to
+    // applyDamage parts and never reference the missing helper.
+    expect(script).not.toContain('aggregateDamageRolls');
+    expect(script).toContain('dmgRolls.map');
+    expect(script).toContain('r.options?.type');
+    expect(script).toContain('r.options?.properties');
+    expect(res.targets[0]?.outcome).toBe('hit');
+    expect(res.attack?.total).toBe(19);
+  });
+
+  it('threads slotKey and advantage mode into the script', async () => {
+    okExec({ attack: null, targets: [] });
+    await client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Scene.s1.Token.t1'], slotKey: 'spell3', mode: 'advantage' });
+    const [, init] = mockFetch.mock.calls[0] as [string, { body: string }];
+    const script = (JSON.parse(init.body) as { script: string }).script;
+    expect(script).toContain('"spell3"');
+    expect(script).toContain('advantage: true');
+  });
+
+  it('rejects bad target uuids, bad slot keys, and >12 targets without any fetch', async () => {
+    await expect(client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Token.t1'] })).rejects.toThrow(/invalid target/);
+    await expect(client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Scene.s1.Token.t1'], slotKey: 'spell1' })).rejects.toThrow(/slotKey/);
+    await expect(client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: Array.from({ length: 13 }, (_, i) => `Scene.s1.Token.t${i}`) }))
+      .rejects.toThrow(/1-12/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('script injection is impossible via a crafted-looking (but invalid) uuid', async () => {
+    await expect(client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Scene.s1.Token.t1"); game.deleteAll(); ("'] })).rejects.toThrow(/invalid target/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('normalizes a missing/garbled result to an empty target list', async () => {
+    okExec({ nonsense: true });
+    const res = await client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Scene.s1.Token.t1'] });
+    expect(res.attack).toBeNull();
+    expect(res.targets).toEqual([]);
+  });
+});
+
+describe('FoundryRelayClient combat/turn helpers', () => {
+  let client: FoundryRelayClient;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new FoundryRelayClient({ baseUrl: 'http://relay:3010', apiKey: 'k', clientId: 'fvtt_x' });
+  });
+  function okExec(result: unknown) {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, text: vi.fn(),
+      json: vi.fn().mockResolvedValueOnce({ success: true, result }),
+    });
+  }
+
+  it('endCombatTurn guards on the expected combatant inside the script', async () => {
+    okExec({ advanced: true, round: 2, turn: 1 });
+    const res = await client.endCombatTurn('comb1');
+    const [, init] = mockFetch.mock.calls[0] as [string, { body: string }];
+    const script = (JSON.parse(init.body) as { script: string }).script;
+    expect(script).toContain('"comb1"');
+    expect(script).toContain('nextTurn');
+    expect(res.advanced).toBe(true);
+    expect(res.round).toBe(2);
+    expect(res.turn).toBe(1);
+  });
+
+  it('endCombatTurn rejects a bad combatant id without fetching', async () => {
+    await expect(client.endCombatTurn('bad id!')).rejects.toThrow(/invalid combatantId/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('postChatNote strips angle brackets and truncates to 100 chars', async () => {
+    okExec({ ok: true });
+    await client.postChatNote('Actor.a1', `<b>Dash!</b>${'x'.repeat(200)}`);
+    const [, init] = mockFetch.mock.calls[0] as [string, { body: string }];
+    const script = (JSON.parse(init.body) as { script: string }).script;
+    expect(script).not.toContain('<b>');
+    expect(script).toContain('ChatMessage.create');
+    const m = /ChatMessage\.create\(\{ content: (".*?"), speaker/.exec(script);
+    expect(m).toBeTruthy();
+    if (m) {
+      const content = JSON.parse(m[1]!) as string;
+      expect(content.length).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it('getDerivedAc returns the number and null on failure', async () => {
+    okExec({ ac: 14 });
+    expect(await client.getDerivedAc('Actor.a1')).toBe(14);
+    mockFetch.mockRejectedValueOnce(new Error('boom'));
+    expect(await client.getDerivedAc('Actor.a1')).toBeNull();
+  });
+});

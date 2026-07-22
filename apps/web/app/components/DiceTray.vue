@@ -1,5 +1,5 @@
 <template>
-  <div class="dice-tray">
+  <div class="dice-tray" :class="{ raised }">
     <transition name="tray">
       <div v-if="open" class="panel card" role="dialog" aria-label="Roll dice">
         <div class="head">
@@ -49,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-const props = defineProps<{ actorId: string; readonly?: boolean }>()
+const props = defineProps<{ actorId: string; readonly?: boolean; raised?: boolean }>()
 const emit = defineEmits<{
   (e: 'roll', entry: { formula: string; total: number }): void
   /** Fired when a roll request leaves; lets the page start its suspense
@@ -125,6 +125,16 @@ async function roll(): Promise<void> {
   left: 14px;
   bottom: calc(84px + env(safe-area-inset-bottom, 0px));
   z-index: 60;
+  transition: bottom 200ms ease;
+}
+
+/* Combat active (2026-07-22): clears the carousel dock (bottom: 68px + its
+ * own height) so the FAB never overlaps the turn-order strip. Measured
+ * against the dock's actual rendered height (avatar + init + name + hp-cap
+ * stacked in each slot, ~146px, at bottom:68px -> its top edge sits ~214px
+ * up) plus a small gap — not the dock's avatar size alone. */
+.dice-tray.raised {
+  bottom: calc(230px + env(safe-area-inset-bottom, 0px));
 }
 
 .fab {
