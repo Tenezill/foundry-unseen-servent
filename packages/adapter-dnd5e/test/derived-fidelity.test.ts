@@ -8,12 +8,24 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { dnd5eAdapter } from '../src/index.js';
 import type { FoundryActorDoc } from '@companion/adapter-sdk';
+import casterJson from './fixtures/caster.json' with { type: 'json' };
 
 function fixture(name: string): FoundryActorDoc {
   const path = fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
   return JSON.parse(readFileSync(path, 'utf8')) as FoundryActorDoc;
 }
 const martialCaptured = fixture('martial-captured.json');
+const caster = casterJson as unknown as FoundryActorDoc;
+
+/** Read a numeric value at a dotted path off a system record (e.g. 'attributes.ac.value'). */
+function numAtPath(system: Record<string, unknown>, path: string): number | undefined {
+  let cur: unknown = system;
+  for (const part of path.split('.')) {
+    if (cur === null || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return typeof cur === 'number' ? cur : undefined;
+}
 
 async function enrichWith(actor: FoundryActorDoc, response: unknown, calls?: string[][]) {
   if (!dnd5eAdapter.enrich) throw new Error('adapter must expose enrich()');
@@ -112,5 +124,41 @@ describe('enrich — derived ability mods + saves', () => {
     });
     const sys = enriched.system as { abilities: Record<string, { mod?: unknown }> };
     expect(sys.abilities.dex?.mod).not.toBe('x');
+  });
+});
+
+describe('enrich AC override under active effects (2026-07-22 Mage Armor)', () => {
+  function acEffectActor(): FoundryActorDoc {
+    const actor = structuredClone(caster); // any captured fixture
+    (actor as Record<string, unknown>).effects = [{
+      _id: 'ae1', name: 'Mage Armor', disabled: false,
+      changes: [{ key: 'system.attributes.ac.calc', mode: 5, value: 'mage' }],
+    }];
+    return actor;
+  }
+
+  it('prefers io.getDerivedAc when an AC effect is active', async () => {
+    const enriched = await dnd5eAdapter.enrich!(acEffectActor(), {
+      getSystemDetails: async () => ({ stats: { ac: 11 } }), // relay's stale value
+      getDerivedAc: async () => 14,
+    });
+    expect(numAtPath(enriched.system, 'attributes.ac.value')).toBe(14);
+  });
+
+  it('keeps the get-actor-details value when getDerivedAc degrades to null', async () => {
+    const enriched = await dnd5eAdapter.enrich!(acEffectActor(), {
+      getSystemDetails: async () => ({ stats: { ac: 11 } }),
+      getDerivedAc: async () => null,
+    });
+    expect(numAtPath(enriched.system, 'attributes.ac.value')).toBe(11);
+  });
+
+  it('does not call getDerivedAc when no AC effect is active', async () => {
+    let called = false;
+    await dnd5eAdapter.enrich!(structuredClone(caster), {
+      getSystemDetails: async () => ({ stats: { ac: 11 } }),
+      getDerivedAc: async () => { called = true; return 99; },
+    });
+    expect(called).toBe(false);
   });
 });

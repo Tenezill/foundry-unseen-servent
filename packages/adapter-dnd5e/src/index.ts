@@ -1206,6 +1206,22 @@ function normalizeStatuses(raw: unknown): string[] {
   return [];
 }
 
+/** True when an enabled Active Effect changes any system.attributes.ac*
+ *  path (Mage Armor's ac.calc OVERRIDE, Shield's ac.bonus…). Gate for the
+ *  extra execute-js AC read — rare enough to keep sheet loads cheap. */
+function hasAcEffect(actor: FoundryActorDoc): boolean {
+  const effects = Array.isArray(actor.effects) ? actor.effects : [];
+  return effects.some((e) => {
+    const eff = rec(e);
+    if (eff.disabled === true) return false;
+    const changes = Array.isArray(eff.changes) ? eff.changes : [];
+    return changes.some((c) => {
+      const key = rec(c).key;
+      return typeof key === 'string' && key.startsWith('system.attributes.ac');
+    });
+  });
+}
+
 function parseEffects(actor: FoundryActorDoc): EffectSummary {
   const rawEffects = getPath(actor, 'effects');
   const effects = Array.isArray(rawEffects) ? rawEffects : [];
@@ -2729,6 +2745,24 @@ async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryAct
     }
     base.abilities = abilities;
     merged = base;
+  }
+
+  // 2026-07-22 Mage Armor: the relay's get-actor-details stats.ac does not
+  // recompute ac.calc overrides. When an AC-touching effect is active, read
+  // the live prepared AC (execute-js) and let it win; null degrades to the
+  // stats.ac merge above.
+  if (hasAcEffect(actor) && io.getDerivedAc !== undefined) {
+    try {
+      const liveAc = await io.getDerivedAc();
+      if (liveAc !== null) {
+        const base = merged ?? { ...system };
+        const attributes = rec(base.attributes);
+        base.attributes = { ...attributes, ac: { ...rec(attributes.ac), value: liveAc } };
+        merged = base;
+      }
+    } catch {
+      /* keep the stats.ac merge */
+    }
   }
 
   return merged === undefined ? actor : { ...actor, system: merged };

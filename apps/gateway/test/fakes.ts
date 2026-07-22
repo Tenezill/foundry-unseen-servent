@@ -325,6 +325,16 @@ export class FakeRelay implements RelayPort {
     this.chatNoteCalls.push({ actorUuid, text });
   }
 
+  // ---- derived AC (Task 8, 2026-07-22) ---------------------------------
+  /** Response for getDerivedAc; null simulates a failed/degraded read. */
+  derivedAc: number | null = null;
+  readonly getDerivedAcCalls: string[] = [];
+
+  async getDerivedAc(actorUuid: string): Promise<number | null> {
+    this.getDerivedAcCalls.push(actorUuid);
+    return this.derivedAc;
+  }
+
   readonly actorCommandCalls: Array<{
     endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration';
     actorUuid: string;

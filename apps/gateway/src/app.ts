@@ -157,6 +157,10 @@ export interface RelayPort {
   /** POST /execute-js via foundry-client postChatNote — a plain chat card
    *  speaking as the actor (Dash's GM-visibility note, 2026-07-22). */
   postChatNote(actorUuid: string, text: string): Promise<void>;
+  /** POST /execute-js via foundry-client getDerivedAc — the PREPARED actor's
+   *  live system.attributes.ac.value (Task 8: AC display fix under active
+   *  effects). Null on any failure; never throws. */
+  getDerivedAc(actorUuid: string): Promise<number | null>;
 }
 
 /**
@@ -631,6 +635,8 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       try {
         actor = await adapter.enrich(actor, {
           getSystemDetails: (details) => relay.getSystemDetails(adapter.systemId, `Actor.${actorId}`, details),
+          getDerivedAc: () =>
+            boundedMs(relay.getDerivedAc(`Actor.${actorId}`), encounterFetchTimeoutMs).then((v) => v ?? null),
         });
       } catch (err) {
         app.log.warn({ err, actorId }, 'adapter enrich failed; serving unenriched document');

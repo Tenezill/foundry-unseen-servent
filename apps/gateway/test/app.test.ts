@@ -1889,6 +1889,51 @@ describe('adapter enrichment', () => {
     expect(res.body).not.toContain(FAKE_API_KEY);
     expect(res.body).not.toContain(FAKE_RELAY_URL);
   });
+
+  // 2026-07-22 Mage Armor (Task 8): the io object handed to enrich() carries
+  // getDerivedAc, wired to relay.getDerivedAc bounded by encounterFetchTimeoutMs.
+  // fakeAdapter itself has no enrich (registry test double), so this proves the
+  // wiring reaches an adapter that opts in, using a locally-scoped adapter like
+  // the hp-override test above.
+  it('passes getDerivedAc through to enrich() and lets it override the AC resource', async () => {
+    const relay = new FakeRelay();
+    const doc = actorDoc('a1', 'Sariel', 24, 30);
+    (doc as Record<string, unknown>).effects = [{
+      _id: 'ae1', name: 'Mage Armor', disabled: false,
+      changes: [{ key: 'system.attributes.ac.calc', mode: 5, value: 'mage' }],
+    }];
+    relay.entities.set('Actor.a1', doc);
+    relay.derivedAc = 14;
+    const acAwareAdapter = {
+      ...fakeAdapter,
+      async enrich(
+        actor: Parameters<typeof fakeAdapter.toViewModel>[0],
+        io: { getSystemDetails(d: string[]): Promise<unknown>; getDerivedAc?(): Promise<number | null> },
+      ) {
+        const effects = Array.isArray((actor as Record<string, unknown>).effects)
+          ? ((actor as Record<string, unknown>).effects as unknown[])
+          : [];
+        if (effects.length === 0 || io.getDerivedAc === undefined) return actor;
+        const live = await io.getDerivedAc();
+        if (live === null) return actor;
+        const system = actor.system as { ac: number };
+        return { ...actor, system: { ...system, ac: live } };
+      },
+    };
+    app = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([acAwareAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+    });
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/sheet', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    const ac = res.json().sheet.resources.find((r: { id: string }) => r.id === 'ac');
+    expect(ac.value).toBe(14);
+    expect(relay.getDerivedAcCalls).toEqual(['Actor.a1']);
+  });
 });
 
 describe('library endpoints', () => {
