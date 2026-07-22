@@ -522,19 +522,29 @@ function normalizeRestCombatant(c: RelayCombatant): CombatantRecord {
 
 function normalizeHookCombat(raw: Record<string, unknown>): CombatRecord {
   const rawCombatants = Array.isArray(raw.combatants) ? raw.combatants : [];
-  const sceneId = typeof raw.scene === 'string' && raw.scene !== '' ? raw.scene : undefined;
+  // The Combat document's OWN `scene` field is null on a real relay
+  // (live-verified 2026-07-23, round-5 dragon fight: combat `scene:null` while
+  // every combatant carried `sceneId:"O3dm2tzBnPZCNSG3"`). The authoritative
+  // scene id rides on each combatant's own `sceneId` (task0 §2b shows the field
+  // on every hook-frame combatant); this combat-level value is only a fallback
+  // for shapes that carry it (synthetic/older frames).
+  const combatSceneId = typeof raw.scene === 'string' && raw.scene !== '' ? raw.scene : undefined;
   return {
     id: typeof raw._id === 'string' ? raw._id : '',
     round: typeof raw.round === 'number' ? raw.round : 0,
     turn: typeof raw.turn === 'number' ? raw.turn : null,
     combatants: rawCombatants
       .filter((c): c is Record<string, unknown> => c !== null && typeof c === 'object')
-      .map((c) => normalizeHookCombatant(c, sceneId)),
+      .map((c) => normalizeHookCombatant(c, combatSceneId)),
   };
 }
 
-function normalizeHookCombatant(raw: Record<string, unknown>, sceneId?: string): CombatantRecord {
+function normalizeHookCombatant(raw: Record<string, unknown>, combatSceneId?: string): CombatantRecord {
   const actorId = typeof raw.actorId === 'string' && raw.actorId !== '' ? raw.actorId : undefined;
+  // Prefer the combatant's own sceneId (populated live); fall back to the
+  // combat-level scene. Without this the token picker disables every row once
+  // a turn-advance hook frame replaces the REST-seeded view.
+  const sceneId = typeof raw.sceneId === 'string' && raw.sceneId !== '' ? raw.sceneId : combatSceneId;
   const tokenUuid =
     sceneId !== undefined && typeof raw.tokenId === 'string' && raw.tokenId !== ''
       ? normalizeTokenUuid(`Scene.${sceneId}.Token.${raw.tokenId}`)

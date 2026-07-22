@@ -1064,6 +1064,33 @@ describe('tokenUuid plumbing + turn accessors', () => {
     manager.stop();
   });
 
+  // Live relay shape (task0 §2b + live dump 2026-07-23): the Combat document's
+  // OWN `scene` field is `null` — the authoritative scene id lives on each
+  // combatant's `sceneId`. A turn-advance `updateCombat` frame must still
+  // yield a full tokenUuid, or the combat target picker (rows disabled without
+  // one) goes inert after the first turn advances. Regression guard: casting
+  // worked on the first attack (REST-seeded view) then broke once a hook frame
+  // replaced it — because the reconstruction keyed only on the null combat scene.
+  it('rebuilds tokenUuid from the per-combatant sceneId when the combat doc scene is null', async () => {
+    const relay = new FakeRelay();
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await manager.start();
+    relay.emitUpdateCombat({
+      _id: 'c1',
+      round: 5,
+      turn: 0,
+      scene: null,
+      combatants: [
+        { _id: 'comb1', name: 'Hero', actorId: 'a1', tokenId: 't1', sceneId: 's9', initiative: 12 },
+        { _id: 'comb2', name: 'Dragon', actorId: 'a2', tokenId: 't2', sceneId: 's9', initiative: 8 },
+      ],
+    });
+    const combatants = manager.view().combatants ?? [];
+    expect(combatants.find((c) => c.id === 'comb1')?.tokenUuid).toBe('Scene.s9.Token.t1');
+    expect(combatants.find((c) => c.id === 'comb2')?.tokenUuid).toBe('Scene.s9.Token.t2');
+    manager.stop();
+  });
+
   it('current() returns the acting combatant; combatantByActorId finds by actor', async () => {
     const relay = new FakeRelay();
     relay.encounters = [
