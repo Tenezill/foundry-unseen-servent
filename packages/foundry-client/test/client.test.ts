@@ -727,3 +727,73 @@ describe('FoundryRelayClient movement wrappers', () => {
     await expect(client.moveToken('Scene.s1.Token.tX', 0, 0)).rejects.toThrow('Token not found');
   });
 });
+
+describe('FoundryRelayClient.useAbilityOnTargets', () => {
+  let client: FoundryRelayClient;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new FoundryRelayClient({ baseUrl: 'http://relay:3010', apiKey: 'k', clientId: 'fvtt_x' });
+  });
+
+  function okExec(result: unknown) {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, text: vi.fn(),
+      json: vi.fn().mockResolvedValueOnce({ success: true, result }),
+    });
+  }
+
+  const RESULT = { attack: { total: 19, formula: '1d20+7', isCritical: false, isFumble: false },
+    targets: [{ tokenUuid: 'Scene.s1.Token.t1', name: 'Skeleton', outcome: 'hit',
+      damage: { rolled: [{ type: 'slashing', value: 12 }], applied: 6 } }] };
+
+  it('POSTs /execute-js with a script interpolating only JSON.stringified ids', async () => {
+    okExec(RESULT);
+    const res = await client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Scene.s1.Token.t1'] });
+    const [url, init] = mockFetch.mock.calls[0] as [string, { body: string; method: string }];
+    expect(url).toContain('/execute-js');
+    expect(init.method).toBe('POST');
+    const script = (JSON.parse(init.body) as { script: string }).script;
+    expect(script).toContain('"Actor.a1.Item.i1"');
+    expect(script).toContain('["Scene.s1.Token.t1"]');
+    expect(script).toContain('applyDamage');
+    expect(script).toContain('measuredTemplate: false');
+    expect(res.targets[0]?.outcome).toBe('hit');
+    expect(res.attack?.total).toBe(19);
+  });
+
+  it('threads slotKey and advantage mode into the script', async () => {
+    okExec({ attack: null, targets: [] });
+    await client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Scene.s1.Token.t1'], slotKey: 'spell3', mode: 'advantage' });
+    const [, init] = mockFetch.mock.calls[0] as [string, { body: string }];
+    const script = (JSON.parse(init.body) as { script: string }).script;
+    expect(script).toContain('"spell3"');
+    expect(script).toContain('advantage: true');
+  });
+
+  it('rejects bad target uuids, bad slot keys, and >12 targets without any fetch', async () => {
+    await expect(client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Token.t1'] })).rejects.toThrow(/invalid target/);
+    await expect(client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Scene.s1.Token.t1'], slotKey: 'spell1' })).rejects.toThrow(/slotKey/);
+    await expect(client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: Array.from({ length: 13 }, (_, i) => `Scene.s1.Token.t${i}`) }))
+      .rejects.toThrow(/1-12/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('script injection is impossible via a crafted-looking (but invalid) uuid', async () => {
+    await expect(client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Scene.s1.Token.t1"); game.deleteAll(); ("'] })).rejects.toThrow(/invalid target/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('normalizes a missing/garbled result to an empty target list', async () => {
+    okExec({ nonsense: true });
+    const res = await client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
+      { targetTokenUuids: ['Scene.s1.Token.t1'] });
+    expect(res.attack).toBeNull();
+    expect(res.targets).toEqual([]);
+  });
+});

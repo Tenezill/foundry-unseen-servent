@@ -90,6 +90,30 @@ export interface RollResult {
   [key: string]: unknown;
 }
 
+export interface TargetedUseOptions {
+  targetTokenUuids: string[];
+  slotKey?: string;
+  mode?: 'advantage' | 'disadvantage';
+}
+
+export interface TargetedDamagePart {
+  type: string;
+  value: number;
+}
+
+export interface TargetedUseTargetResult {
+  tokenUuid: string;
+  name: string;
+  outcome: 'hit' | 'miss' | 'save-failed' | 'save-passed' | 'applied' | 'gone';
+  save?: { total: number; dc: number };
+  damage?: { rolled: TargetedDamagePart[]; applied: number };
+}
+
+export interface TargetedUseResult {
+  attack: { total: number; formula: string; isCritical: boolean; isFumble: boolean } | null;
+  targets: TargetedUseTargetResult[];
+}
+
 /** A named SSE event from the relay hooks stream. */
 export interface HookEvent {
   /** SSE event name, e.g. "updateActor", "connected" */
@@ -188,6 +212,122 @@ function activationScript(itemUuid: string, slotKey?: string): string {
     `  if (hasAttack) await activity.rollAttack({}, { configure: false }, {});`,
     `} finally { Hooks.off('dnd5e.rollAttackV2', hookId); }`,
     `return attackRoll ? { roll: { total: attackRoll.total, formula: attackRoll.formula, isCritical: attackRoll.isCritical ?? false, isFumble: attackRoll.isFumble ?? false } } : {};`,
+  ].join('\n');
+}
+
+/**
+ * The execute-js orchestration for targeted attacks/saves/heals (2026-07-22
+ * combat-targeting spec): set user targets (best-effort, chat-card cosmetics
+ * only) → activity.use() (Foundry consumes slots/uses/ammo, template
+ * placement suppressed) → attack roll (dnd5e.rollAttackV2 hook, same as
+ * activationScript) or per-target saving throws → ONE damage roll →
+ * dnd5e's own actor.applyDamage per target (resistances/immunities/
+ * vulnerabilities and temp-HP-first live in dnd5e, never here). Damage
+ * descriptions come from dnd5e.dice.aggregateDamageRolls — the exact shape
+ * dnd5e's own chat-card apply button uses. `applied` is the true HP+temp
+ * delta (snapshot before/after), so resistance halving is visible to the
+ * caller. Only validated ids are interpolated, via JSON.stringify.
+ */
+function targetedUseScript(
+  itemUuid: string,
+  targetTokenUuids: string[],
+  slotKey?: string,
+  mode?: 'advantage' | 'disadvantage',
+): string {
+  const usage =
+    slotKey !== undefined
+      ? `{ subsequentActions: false, consume: { spellSlot: true }, spell: { slot: ${JSON.stringify(slotKey)} }, create: { measuredTemplate: false } }`
+      : `{ subsequentActions: false, create: { measuredTemplate: false } }`;
+  const attackConfig =
+    mode === 'advantage' ? '{ advantage: true }' : mode === 'disadvantage' ? '{ disadvantage: true }' : '{}';
+  return [
+    `const item = await fromUuid(${JSON.stringify(itemUuid)});`,
+    `if (!item) throw new Error('item not found');`,
+    `const activities = item.system?.activities;`,
+    `const activity = activities?.size > 0 ? [...activities.values()][0] : null;`,
+    `if (!activity) throw new Error('item has no activity');`,
+    `const kind = activity.type;`,
+    `const wanted = ${JSON.stringify(targetTokenUuids)};`,
+    `const targets = [];`,
+    `for (const uuid of wanted) {`,
+    `  const tok = await fromUuid(uuid);`,
+    `  targets.push({ uuid, doc: tok?.actor ? tok : null });`,
+    `}`,
+    `try { game.user.updateTokenTargets(targets.filter((t) => t.doc).map((t) => t.doc.id)); } catch (e) {}`,
+    `let attackRoll = null;`,
+    `const hookId = Hooks.once('dnd5e.rollAttackV2', (rolls) => { if (rolls?.length) attackRoll = rolls[0]; });`,
+    `try {`,
+    `  const useResult = await activity.use(${usage}, { configure: false }, {});`,
+    `  if (!useResult) throw new Error('use could not be performed');`,
+    `  if (kind === 'attack') await activity.rollAttack(${attackConfig}, { configure: false }, {});`,
+    `} finally { Hooks.off('dnd5e.rollAttackV2', hookId); }`,
+    `const attack = attackRoll ? { total: attackRoll.total, formula: attackRoll.formula, isCritical: attackRoll.isCritical ?? false, isFumble: attackRoll.isFumble ?? false } : null;`,
+    `const isCrit = attack?.isCritical === true;`,
+    `for (const t of targets) {`,
+    `  if (!t.doc) continue;`,
+    `  if (kind === 'attack') {`,
+    `    const ac = Number(t.doc.actor.system?.attributes?.ac?.value ?? 10);`,
+    `    t.hit = isCrit || (attack !== null && attack.isFumble !== true && attack.total >= ac);`,
+    `  }`,
+    `}`,
+    `const saveCfg = kind === 'save' ? activity.save : null;`,
+    `const dc = Number(saveCfg?.dc?.value ?? 0);`,
+    `const ability = saveCfg ? (saveCfg.ability?.first?.() ?? [...(saveCfg.ability ?? [])][0] ?? 'dex') : null;`,
+    `const onSave = String(activity.damage?.onSave ?? 'half');`,
+    `if (kind === 'save') {`,
+    `  for (const t of targets) {`,
+    `    if (!t.doc) continue;`,
+    `    try {`,
+    `      const rolls = await t.doc.actor.rollSavingThrow({ ability, target: dc }, { configure: false }, {});`,
+    `      const total = rolls?.[0]?.total;`,
+    `      t.saveTotal = typeof total === 'number' ? total : null;`,
+    `      t.passed = t.saveTotal !== null && t.saveTotal >= dc;`,
+    `    } catch (e) { t.saveTotal = null; t.passed = false; }`,
+    `  }`,
+    `}`,
+    `const needsDamage = (kind === 'attack' && targets.some((t) => t.hit)) || kind === 'save' || kind === 'heal';`,
+    `let damages = [];`,
+    `let rolledParts = [];`,
+    `if (needsDamage && typeof activity.rollDamage === 'function') {`,
+    `  let dmgRolls = null;`,
+    `  const dmgHook = Hooks.once('dnd5e.rollDamageV2', (rolls) => { dmgRolls = rolls; });`,
+    `  try {`,
+    `    const returned = await activity.rollDamage({ isCritical: isCrit }, { configure: false }, {});`,
+    `    if (Array.isArray(returned) && returned.length) dmgRolls = returned;`,
+    `  } finally { Hooks.off('dnd5e.rollDamageV2', dmgHook); }`,
+    `  if (Array.isArray(dmgRolls) && dmgRolls.length) {`,
+    `    const agg = dnd5e.dice.aggregateDamageRolls(dmgRolls, { respectProperties: true });`,
+    `    damages = agg.map((r) => ({ value: r.total, type: r.options.type, properties: new Set(r.options.properties ?? []) }));`,
+    `    rolledParts = damages.map((d) => ({ type: String(d.type ?? ''), value: d.value }));`,
+    `  }`,
+    `}`,
+    `const results = [];`,
+    `for (const t of targets) {`,
+    `  if (!t.doc) { results.push({ tokenUuid: t.uuid, name: '', outcome: 'gone' }); continue; }`,
+    `  const name = t.doc.name ?? t.doc.actor.name;`,
+    `  let outcome = 'applied';`,
+    `  let multiplier = 1;`,
+    `  if (kind === 'attack') { outcome = t.hit ? 'hit' : 'miss'; if (!t.hit) multiplier = 0; }`,
+    `  else if (kind === 'save') {`,
+    `    outcome = t.passed ? 'save-passed' : 'save-failed';`,
+    `    if (t.passed) multiplier = onSave === 'none' ? 0 : onSave === 'half' ? 0.5 : 1;`,
+    `  }`,
+    `  const entry = { tokenUuid: t.uuid, name, outcome };`,
+    `  if (t.saveTotal !== undefined && t.saveTotal !== null) entry.save = { total: t.saveTotal, dc };`,
+    `  if (damages.length && multiplier > 0) {`,
+    `    const hp = t.doc.actor.system?.attributes?.hp ?? {};`,
+    `    const before = (hp.value ?? 0) + (hp.temp ?? 0);`,
+    `    await t.doc.actor.applyDamage(damages, { multiplier });`,
+    `    const hpAfter = t.doc.actor.system?.attributes?.hp ?? {};`,
+    `    const after = (hpAfter.value ?? 0) + (hpAfter.temp ?? 0);`,
+    `    entry.damage = { rolled: rolledParts, applied: Math.abs(before - after) };`,
+    `  } else if (damages.length) {`,
+    `    entry.damage = { rolled: rolledParts, applied: 0 };`,
+    `  }`,
+    `  results.push(entry);`,
+    `}`,
+    `try { game.user.updateTokenTargets([]); } catch (e) {}`,
+    `return { attack, targets: results };`,
   ].join('\n');
 }
 
@@ -448,6 +588,49 @@ export class FoundryRelayClient {
       throw new Error(`useWithoutTemplate: invalid itemUuid "${itemUuid}"`);
     }
     return this.executeActivation(activationScript(itemUuid));
+  }
+
+  /**
+   * POST /execute-js — targeted use (2026-07-22 combat-targeting): the
+   * orchestration in targetedUseScript. SIDE-EFFECTING (damage applied in
+   * Foundry) — callers must never auto-retry; a relay 408 means "check the
+   * Foundry chat". Same scope/setting requirements as castAtSlot.
+   */
+  async useAbilityOnTargets(
+    actorUuid: string,
+    itemUuid: string,
+    opts: TargetedUseOptions,
+  ): Promise<TargetedUseResult> {
+    if (!/^Actor\.[A-Za-z0-9]{1,32}$/.test(actorUuid)) {
+      throw new Error(`useAbilityOnTargets: invalid actorUuid "${actorUuid}"`);
+    }
+    if (!/^Actor\.[A-Za-z0-9]{1,32}\.Item\.[A-Za-z0-9]{1,32}$/.test(itemUuid)) {
+      throw new Error(`useAbilityOnTargets: invalid itemUuid "${itemUuid}"`);
+    }
+    const targets = opts.targetTokenUuids;
+    if (!Array.isArray(targets) || targets.length < 1 || targets.length > 12) {
+      throw new Error('useAbilityOnTargets: 1-12 targets required');
+    }
+    for (const t of targets) {
+      if (!/^Scene\.[A-Za-z0-9]{1,32}\.Token\.[A-Za-z0-9]{1,32}$/.test(t)) {
+        throw new Error(`useAbilityOnTargets: invalid target "${t}"`);
+      }
+    }
+    if (opts.slotKey !== undefined && !/^spell[2-9]$/.test(opts.slotKey)) {
+      throw new Error(`useAbilityOnTargets: invalid slotKey "${opts.slotKey}"`);
+    }
+    if (opts.mode !== undefined && opts.mode !== 'advantage' && opts.mode !== 'disadvantage') {
+      throw new Error(`useAbilityOnTargets: invalid mode "${String(opts.mode)}"`);
+    }
+    const body = await this.executeActivation(targetedUseScript(itemUuid, targets, opts.slotKey, opts.mode));
+    const rawAttack = (body as { attack?: unknown }).attack;
+    const attack =
+      rawAttack !== null && typeof rawAttack === 'object' &&
+      typeof (rawAttack as { total?: unknown }).total === 'number'
+        ? (rawAttack as TargetedUseResult['attack'])
+        : null;
+    const rawTargets = (body as { targets?: unknown }).targets;
+    return { attack, targets: Array.isArray(rawTargets) ? (rawTargets as TargetedUseTargetResult[]) : [] };
   }
 
   /** Shared POST + error-normalization for the execute-js activations. */
