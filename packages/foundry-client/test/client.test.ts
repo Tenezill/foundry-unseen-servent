@@ -819,6 +819,8 @@ describe('FoundryRelayClient combat/turn helpers', () => {
     expect(script).toContain('"comb1"');
     expect(script).toContain('nextTurn');
     expect(res.advanced).toBe(true);
+    expect(res.round).toBe(2);
+    expect(res.turn).toBe(1);
   });
 
   it('endCombatTurn rejects a bad combatant id without fetching', async () => {
@@ -833,6 +835,12 @@ describe('FoundryRelayClient combat/turn helpers', () => {
     const script = (JSON.parse(init.body) as { script: string }).script;
     expect(script).not.toContain('<b>');
     expect(script).toContain('ChatMessage.create');
+    const m = /ChatMessage\.create\(\{ content: (".*?"), speaker/.exec(script);
+    expect(m).toBeTruthy();
+    if (m) {
+      const content = JSON.parse(m[1]!) as string;
+      expect(content.length).toBeLessThanOrEqual(100);
+    }
   });
 
   it('getDerivedAc returns the number and null on failure', async () => {

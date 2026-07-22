@@ -666,7 +666,9 @@ export class FoundryRelayClient {
     const body = await this.executeActivation(script);
     const advanced = (body as { advanced?: unknown }).advanced === true;
     const reason = typeof (body as { reason?: unknown }).reason === 'string' ? String((body as { reason?: unknown }).reason) : undefined;
-    return { advanced, ...(reason !== undefined ? { reason } : {}) };
+    const round = typeof (body as { round?: unknown }).round === 'number' ? (body as { round: number }).round : undefined;
+    const turn = typeof (body as { turn?: unknown }).turn === 'number' ? (body as { turn: number }).turn : undefined;
+    return { advanced, ...(reason !== undefined ? { reason } : {}), ...(round !== undefined ? { round } : {}), ...(turn !== undefined ? { turn } : {}) };
   }
 
   /** POST /execute-js — a plain chat note speaking as the actor (Dash etc.).
