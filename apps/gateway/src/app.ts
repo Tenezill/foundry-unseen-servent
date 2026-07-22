@@ -35,7 +35,8 @@ import type {
   RelayScene,
   TargetedUseResult,
 } from '@companion/foundry-client';
-import { buildMovementContext, occupiedCells, speedFromStats, validateMove } from './movement.js';
+import { buildMovementContext, chebyshev, occupiedCells, speedFromStats, validateMove } from './movement.js';
+import { MovementBudgetTracker } from './movement-budget.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { verifyToken, type Player } from './players.js';
 import { PlayerStoreError } from './player-store.js';
@@ -153,6 +154,9 @@ export interface RelayPort {
   /** POST /execute-js via foundry-client endCombatTurn — advance the combat
    *  turn IFF the expected combatant is still acting (race-guard, 2026-07-22). */
   endCombatTurn(expectedCombatantId: string): Promise<{ advanced: boolean; reason?: string; round?: number; turn?: number }>;
+  /** POST /execute-js via foundry-client postChatNote — a plain chat card
+   *  speaking as the actor (Dash's GM-visibility note, 2026-07-22). */
+  postChatNote(actorUuid: string, text: string): Promise<void>;
 }
 
 /**
@@ -172,6 +176,9 @@ export interface EncounterManagerPort {
   /** The acting combatant (2026-07-22 turn flow): null when inactive or when
    *  the acting combatant is hidden. */
   current(): { combatId: string; round: number; combatantId: string; actorId?: string } | null;
+  /** First non-hidden combatant linked to this actor (movement budget /
+   *  End turn both key on it, 2026-07-22). */
+  combatantByActorId(actorId: string): { id: string; actorId?: string } | undefined;
 }
 
 export interface GatewayDeps {
@@ -545,6 +552,17 @@ function buffTargetAllowed(targetId: string, casterId: string, deps: GatewayDeps
   return combatIds.has(targetId);
 }
 
+/** Per-actor combat movement budget context (2026-07-22 §F4) — see
+ *  combatMoveContext inside buildApp. `key` is the MovementBudgetTracker key
+ *  for this actor's combatant this round; absent when out of combat. */
+interface CombatMoveContext {
+  inCombat: boolean;
+  yourTurn: boolean;
+  key?: string;
+  remainingFt?: number;
+  dashed?: boolean;
+}
+
 /**
  * Whitelist for the manual dice tray: only `NdM` dice terms and integer
  * modifiers joined by + / - (e.g. "2d6 + 1d8 + 3"). Keeps the endpoint a dice
@@ -580,6 +598,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   const customItemTimeoutMs = deps.customItemTimeoutMs ?? 3_000;
   const healthTimeoutMs = deps.healthTimeoutMs ?? 3_000;
   const limiter = new SlidingWindowLimiter(deps.rateLimitMax ?? 30, deps.rateLimitWindowMs ?? 60_000);
+  const movementBudget = new MovementBudgetTracker();
   const { relay, players, registry } = deps;
 
   const app = Fastify({ logger: deps.logger ?? false });
@@ -644,6 +663,26 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       tokens,
     };
   };
+
+  /** Budget context for this actor (2026-07-22 §F4). Not a combatant (or no
+   *  live encounter) -> free movement, exactly like out-of-combat today. */
+  function combatMoveContext(actorId: string, speedFt: number): CombatMoveContext {
+    const mgr = deps.encounters;
+    if (!mgr || !mgr.isActive()) return { inCombat: false, yourTurn: false };
+    const cur = mgr.current();
+    const mine = mgr.combatantByActorId(actorId);
+    if (!cur || !mine) return { inCombat: false, yourTurn: false };
+    movementBudget.prune(cur.combatId, cur.round);
+    const key = MovementBudgetTracker.key(cur.combatId, cur.round, mine.id);
+    const st = movementBudget.state(key);
+    return {
+      inCombat: true,
+      yourTurn: mine.id === cur.combatantId,
+      key,
+      remainingFt: Math.max(0, speedFt * (st.dashed ? 2 : 1) - st.movedFt),
+      dashed: st.dashed,
+    };
+  }
 
   const buildSheet = (adapter: SystemAdapter, actor: FoundryActorDoc): SheetViewModel => adapter.toViewModel(actor);
 
@@ -1065,7 +1104,15 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       const result = await fetchMovementContext(id);
       if (result === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       if (result.offScene) return reply.code(200).send({ movement: { onScene: false } });
-      return reply.code(200).send({ movement: result.ctx.view });
+      const cc = combatMoveContext(id, result.ctx.view.speedFt ?? 0);
+      return reply.code(200).send({
+        movement: {
+          ...result.ctx.view,
+          ...(cc.inCombat
+            ? { inCombat: true, yourTurn: cc.yourTurn, remainingFt: cc.remainingFt, dashed: cc.dashed }
+            : {}),
+        },
+      });
     },
   );
 
@@ -1100,8 +1147,12 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
         return sendError(reply, 409, 'CONFLICT', 'no token on the active scene');
       }
 
+      const cc = combatMoveContext(id, ctx.view.speedFt ?? 0);
+      if (cc.inCombat && !cc.yourTurn) return sendError(reply, 409, 'CONFLICT', 'not your turn');
+      const effView = cc.inCombat ? { ...ctx.view, speedFt: cc.remainingFt } : ctx.view;
+
       const occupied = occupiedCells(tokens, ctx.gridSize, ctx.own._id);
-      const verdict = validateMove(ctx.view, target, occupied);
+      const verdict = validateMove(effView, target, occupied);
       if (!verdict.ok) return sendError(reply, verdict.status, verdict.code, verdict.message);
 
       const tokenUuid = `Scene.${ctx.view.sceneId}.Token.${ctx.own._id}`;
@@ -1111,9 +1162,56 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       );
       if (moved === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
 
+      if (cc.inCombat && cc.key !== undefined && ctx.view.token) {
+        movementBudget.addMove(cc.key, chebyshev(ctx.view.token, target) * (ctx.view.gridDistance ?? 5));
+      }
+
       // Confirmed view: same context with the token at its new cell (no refetch —
       // the relay echoed the destination; a fresh GET runs on the next sheet open).
-      return reply.code(200).send({ movement: { ...ctx.view, token: target } });
+      const fresh = combatMoveContext(id, ctx.view.speedFt ?? 0);
+      return reply.code(200).send({
+        movement: {
+          ...ctx.view,
+          token: target,
+          ...(fresh.inCombat
+            ? { inCombat: true, yourTurn: fresh.yourTurn, remainingFt: fresh.remainingFt, dashed: fresh.dashed }
+            : {}),
+        },
+      });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/actors/:id/movement/dash',
+    { preHandler: auth(false) },
+    async (req, reply) => {
+      const player = req.player as Player;
+      const { id } = req.params;
+      if (!player.actorIds.includes(id)) return sendError(reply, 404, 'NOT_FOUND', 'actor not found');
+      if (!limiter.allow(player.tokenHash)) return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
+      const result = await fetchMovementContext(id);
+      if (result === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+      if (result.offScene) return sendError(reply, 409, 'CONFLICT', 'no token on the active scene');
+      const speedFt = result.ctx.view.speedFt ?? 0;
+      const cc = combatMoveContext(id, speedFt);
+      if (!cc.inCombat) return sendError(reply, 409, 'CONFLICT', 'not in combat');
+      if (!cc.yourTurn) return sendError(reply, 409, 'CONFLICT', 'not your turn');
+      if (cc.key === undefined || !movementBudget.markDashed(cc.key)) {
+        return sendError(reply, 409, 'CONFLICT', 'already dashed this turn');
+      }
+      // Best-effort GM visibility — a failed note never fails the dash.
+      const name = typeof result.ctx.own?.name === 'string' ? result.ctx.own.name : 'A player';
+      void boundedMs(relay.postChatNote(`Actor.${id}`, `${name} dashes!`).then(() => true), movementTimeoutMs);
+      const fresh = combatMoveContext(id, speedFt);
+      return reply.code(200).send({
+        movement: {
+          ...result.ctx.view,
+          inCombat: true,
+          yourTurn: fresh.yourTurn,
+          remainingFt: fresh.remainingFt,
+          dashed: fresh.dashed,
+        },
+      });
     },
   );
 

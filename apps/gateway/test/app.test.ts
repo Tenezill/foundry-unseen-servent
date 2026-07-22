@@ -1479,6 +1479,145 @@ describe('turn flow (POST /api/encounter/turn/end)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 2026-07-22 combat-targeting §F4: per-turn movement budget, dash, and
+// own-turn move gating. Combines the movement-route scene/token harness
+// (GET/POST /api/actors/:id/movement above) with the EncounterManager-over-
+// FakeRelay harness (turn flow above) — actor a1 is combatant comb1, acting
+// first (initiative 15 > comb2's 10), token at grid cell (3,2), speed 30ft.
+describe('movement budget + dash (in combat)', () => {
+  let mgr: EncounterManager | null = null;
+
+  afterEach(() => {
+    if (mgr) mgr.stop();
+    mgr = null;
+  });
+
+  const tok = (id: string, actorId: string | null, x: number, y: number, extra: Record<string, unknown> = {}) =>
+    ({ _id: id, name: `tok-${id}`, x, y, width: 1, height: 1, hidden: false, disposition: 0, actorId, ...extra });
+  const squareScene = (tokens: Array<ReturnType<typeof tok>>) =>
+    ({ _id: 's1', name: 'Crypt', grid: { type: 1, size: 100, distance: 5, units: 'ft' }, tokens });
+
+  /** Raw Foundry Combat doc combatant shape for updateCombat hook frames
+   *  (bare actorId — see encounters.ts normalizeHookCombatant). */
+  const combatant = (id: string, actorId: string | undefined, initiative: number) =>
+    ({ _id: id, actorId, initiative, hidden: false, defeated: false, img: null, tokenId: null });
+
+  async function setupWithEncounter(): Promise<{ app: FastifyInstance; relay: FakeRelay }> {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
+    relay.systemDetails = { stats: { speed: 30 } };
+    relay.scene = squareScene([tok('t1', 'a1', 300, 200), tok('t2', 'm1', 500, 200)]);
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'comb1', name: 'Hero', actorUuid: 'Actor.a1', tokenUuid: 'Scene.s1.Token.t1', initiative: 15 },
+          { id: 'comb2', name: 'Skeleton', tokenUuid: 'Scene.s1.Token.t2', initiative: 10 },
+        ],
+      },
+    ];
+    mgr = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await mgr.start();
+    const encApp = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([fakeAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+      movementTimeoutMs: 50,
+      encounters: mgr,
+    });
+    return { app: encApp, relay };
+  }
+
+  const post = (appInst: FastifyInstance, id: string, body: unknown) =>
+    appInst.inject({
+      method: 'POST',
+      url: `/api/actors/${id}/movement`,
+      headers: { ...asAnna, 'content-type': 'application/json' },
+      payload: JSON.stringify(body),
+    });
+
+  it('GET movement reports combat budget fields', async () => {
+    const { app: encApp } = await setupWithEncounter();
+    const res = await encApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    const mv = (res.json() as { movement: Record<string, unknown> }).movement;
+    expect(mv.inCombat).toBe(true);
+    expect(mv.yourTurn).toBe(true);
+    expect(mv.remainingFt).toBe(30);
+    expect(mv.dashed).toBe(false);
+  });
+
+  it('moves consume the budget; beyond remaining -> 422', async () => {
+    const { app: encApp } = await setupWithEncounter();
+    // token at (3,2): move 4 cells (20ft) then attempt 3 more (15ft > 10 remaining)
+    const moved = await post(encApp, 'a1', { cx: 7, cy: 2 });
+    expect(moved.statusCode).toBe(200);
+    const after = await encApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect((after.json() as { movement: { remainingFt: number } }).movement.remainingFt).toBe(10);
+    const tooFar = await post(encApp, 'a1', { cx: 10, cy: 2 });
+    expect(tooFar.statusCode).toBe(422);
+  });
+
+  it('moving off-turn in combat -> 409', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    // flip the turn to comb2 (Skeleton) — Anna's actor a1/comb1 is no longer acting.
+    relay.emitUpdateCombat({
+      _id: 'c1',
+      round: 1,
+      turn: 1,
+      scene: 's1',
+      combatants: [combatant('comb1', 'a1', 15), combatant('comb2', undefined, 10)],
+    });
+    const res = await post(encApp, 'a1', { cx: 4, cy: 2 });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('dash doubles the budget once and posts a chat note', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    const res = await encApp.inject({ method: 'POST', url: '/api/actors/a1/movement/dash', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { movement: { remainingFt: number; dashed: boolean } }).movement)
+      .toMatchObject({ remainingFt: 60, dashed: true });
+    expect(relay.chatNoteCalls).toHaveLength(1);
+    const again = await encApp.inject({ method: 'POST', url: '/api/actors/a1/movement/dash', headers: asAnna });
+    expect(again.statusCode).toBe(409);
+  });
+
+  it('a new round refills the budget (lazy reset)', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    await post(encApp, 'a1', { cx: 7, cy: 2 });
+    relay.emitUpdateCombat({
+      _id: 'c1',
+      round: 2,
+      turn: 0,
+      scene: 's1',
+      combatants: [combatant('comb1', 'a1', 15), combatant('comb2', undefined, 10)],
+    });
+    const res = await encApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect((res.json() as { movement: { remainingFt: number } }).movement.remainingFt).toBe(30);
+  });
+
+  it('out of combat the movement view carries no budget fields', async () => {
+    const { app: plainApp, relay } = setup({ movementTimeoutMs: 50 });
+    relay.systemDetails = { stats: { speed: 30 } };
+    relay.scene = squareScene([tok('t1', 'a1', 300, 200)]);
+    const res = await plainApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    const mv = (res.json() as { movement: Record<string, unknown> }).movement;
+    expect(mv).toEqual({
+      onScene: true, sceneId: 's1', gridDistance: 5, gridUnits: 'ft', speedFt: 30,
+      token: { cx: 3, cy: 2 }, others: [],
+    });
+    expect(mv.inCombat).toBeUndefined();
+    expect(mv.remainingFt).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // M23 review fix: parseActionIntent had no 'pool'/'rouse' cases, so the real
 // wod5e adapter's pool rolls and rouse checks 422'd at the gateway before
 // ever reaching buildAction. Uses the REAL wod5eAdapter (not fakeAdapter)

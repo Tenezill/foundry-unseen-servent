@@ -79,7 +79,7 @@ otherwise (wod5e health/willpower vs. hunger/stains).
 ### `GET /api/actors/:id/movement`
 
 Movement context for the actor's token on the ACTIVE scene (square grids only).
-`{ movement: { onScene, sceneId?, gridDistance?, gridUnits?, speedFt?, token?: {cx,cy}, others?: [{cx,cy,disposition,name?}] } }`
+`{ movement: { onScene, sceneId?, gridDistance?, gridUnits?, speedFt?, token?: {cx,cy}, others?: [{cx,cy,disposition,name?}], inCombat?, yourTurn?, remainingFt?, dashed? } }`
 `onScene:false` when there is no active scene, the grid is not square, or the
 actor has no token there. Coordinates are grid cells, never pixels. GM-hidden
 tokens are stripped server-side. Multi-square tokens contribute one `others`
@@ -87,15 +87,39 @@ entry per covered cell (same `disposition`/`name` on each), so a 2×2 monster
 occupies all 4 of its cells, not just its anchor. 404 foreign/unknown actor;
 502 relay failure.
 
+**In combat** (2026-07-22 §F4): when the actor is a live combatant, the flat
+fields `inCombat: true`, `yourTurn`, `remainingFt`, and `dashed` are added.
+`remainingFt` is the actor's per-turn movement budget still available this
+round (`speedFt`, doubled once `dashed`, minus feet already spent this turn —
+see `POST .../movement` and `.../movement/dash` below). Out of combat (no
+live encounter, or the actor isn't a combatant) these fields are entirely
+absent — the response is byte-for-byte the pre-combat shape.
+
 ### `POST /api/actors/:id/movement`
 
 Body `{ cx, cy }` (grid cell). Validates ownership (404), range (422
-INVALID_INTENT, Chebyshev ≤ floor(speed/gridDistance)), occupancy by visible
-tokens (409 CONFLICT), token-on-scene (409). On success moves the token in
-Foundry (animated, straight line) and returns `{ movement }` with the token at
-the new cell. 429 rate-limited; 502 relay failure/stall, including a stall
+INVALID_INTENT, Chebyshev ≤ floor(speed/gridDistance) — in combat, "speed"
+here is the remaining per-turn budget, not the full walk speed), occupancy by
+visible tokens (409 CONFLICT), token-on-scene (409). In combat, moving when
+it isn't the actor's turn is `409 CONFLICT` ("not your turn") — checked before
+range/occupancy. On success moves the token in Foundry (animated, straight
+line), deducts the Chebyshev distance moved (×`gridDistance`, in feet) from
+the per-turn budget, and returns `{ movement }` with the token at the new
+cell (plus the refreshed `inCombat`/`yourTurn`/`remainingFt`/`dashed` fields
+when in combat). 429 rate-limited; 502 relay failure/stall, including a stall
 while fetching the active scene (distinct from the relay answering "no active
 scene", which is the 409 above).
+
+### `POST /api/actors/:id/movement/dash` (2026-07-22 §F4)
+
+Doubles the actor's per-turn movement budget for the current round (once per
+turn) and posts a best-effort "`<name>` dashes!" chat note in Foundry for GM
+visibility (a failed/slow note never fails the dash). Returns `200
+{ movement }` — same shape as the GET/POST movement routes, with
+`remainingFt` reflecting the doubled budget and `dashed: true`. `409
+CONFLICT` when the actor isn't in combat, it isn't their turn, or they've
+already dashed this turn. 404 foreign/unknown actor; 429 rate-limited; 502
+relay failure/stall fetching the scene.
 
 ### `POST /api/actors/:id/intents`
 Body: a single `ResourceIntent`:

@@ -314,6 +314,13 @@ export class FakeRelay implements RelayPort {
     return structuredClone(this.endTurnResult);
   }
 
+  // ---- chat note (Dash, 2026-07-22) ------------------------------------
+  readonly chatNoteCalls: Array<{ actorUuid: string; text: string }> = [];
+
+  async postChatNote(actorUuid: string, text: string): Promise<void> {
+    this.chatNoteCalls.push({ actorUuid, text });
+  }
+
   readonly actorCommandCalls: Array<{
     endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration';
     actorUuid: string;
