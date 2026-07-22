@@ -563,6 +563,16 @@ interface CombatMoveContext {
   dashed?: boolean;
 }
 
+/** The `{inCombat, yourTurn, remainingFt, dashed}` fields spread onto a
+ *  movement response (GET/POST /api/actors/:id/movement, the dash route) —
+ *  `{}` out of combat, so the shape stays absent (not undefined-valued) on
+ *  the wire exactly as before. */
+function budgetFields(cc: CombatMoveContext): Record<string, unknown> {
+  return cc.inCombat
+    ? { inCombat: true, yourTurn: cc.yourTurn, remainingFt: cc.remainingFt, dashed: cc.dashed }
+    : {};
+}
+
 /**
  * Whitelist for the manual dice tray: only `NdM` dice terms and integer
  * modifiers joined by + / - (e.g. "2d6 + 1d8 + 3"). Keeps the endpoint a dice
@@ -1108,9 +1118,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       return reply.code(200).send({
         movement: {
           ...result.ctx.view,
-          ...(cc.inCombat
-            ? { inCombat: true, yourTurn: cc.yourTurn, remainingFt: cc.remainingFt, dashed: cc.dashed }
-            : {}),
+          ...budgetFields(cc),
         },
       });
     },
@@ -1147,6 +1155,12 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
         return sendError(reply, 409, 'CONFLICT', 'no token on the active scene');
       }
 
+      // Accepted TOCTOU: the budget check here and the spend below (after
+      // relay.moveToken) straddle the relay await — two overlapping POSTs
+      // can both validate against the same remaining budget. Accepted:
+      // soft-cap philosophy (spec 2026-07-22 §F4), table-scale traffic, and
+      // the write rate limiter narrow the window; the GM sees every token
+      // move. Do NOT add locking.
       const cc = combatMoveContext(id, ctx.view.speedFt ?? 0);
       if (cc.inCombat && !cc.yourTurn) return sendError(reply, 409, 'CONFLICT', 'not your turn');
       const effView = cc.inCombat ? { ...ctx.view, speedFt: cc.remainingFt } : ctx.view;
@@ -1173,9 +1187,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
         movement: {
           ...ctx.view,
           token: target,
-          ...(fresh.inCombat
-            ? { inCombat: true, yourTurn: fresh.yourTurn, remainingFt: fresh.remainingFt, dashed: fresh.dashed }
-            : {}),
+          ...budgetFields(fresh),
         },
       });
     },
@@ -1199,17 +1211,20 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       if (cc.key === undefined || !movementBudget.markDashed(cc.key)) {
         return sendError(reply, 409, 'CONFLICT', 'already dashed this turn');
       }
-      // Best-effort GM visibility — a failed note never fails the dash.
+      // Best-effort GM visibility — a failed note never fails the dash. The
+      // `.catch` is required, not decorative: without it a rejecting
+      // postChatNote rejects the raced promise, and since the result is
+      // never awaited (fire-and-forget), that becomes an unhandled promise
+      // rejection that can crash the process.
       const name = typeof result.ctx.own?.name === 'string' ? result.ctx.own.name : 'A player';
-      void boundedMs(relay.postChatNote(`Actor.${id}`, `${name} dashes!`).then(() => true), movementTimeoutMs);
+      void boundedMs(relay.postChatNote(`Actor.${id}`, `${name} dashes!`).then(() => true), movementTimeoutMs).catch(
+        (err) => req.log.warn({ err }, 'dash: chat note failed; continuing'),
+      );
       const fresh = combatMoveContext(id, speedFt);
       return reply.code(200).send({
         movement: {
           ...result.ctx.view,
-          inCombat: true,
-          yourTurn: fresh.yourTurn,
-          remainingFt: fresh.remainingFt,
-          dashed: fresh.dashed,
+          ...budgetFields(fresh),
         },
       });
     },

@@ -316,8 +316,12 @@ export class FakeRelay implements RelayPort {
 
   // ---- chat note (Dash, 2026-07-22) ------------------------------------
   readonly chatNoteCalls: Array<{ actorUuid: string; text: string }> = [];
+  /** When true, postChatNote rejects instead of recording the note (dash
+   *  chat-note rejection safety, 2026-07-22). */
+  chatNoteError = false;
 
   async postChatNote(actorUuid: string, text: string): Promise<void> {
+    if (this.chatNoteError) throw new Error('relay postChatNote failed');
     this.chatNoteCalls.push({ actorUuid, text });
   }
 

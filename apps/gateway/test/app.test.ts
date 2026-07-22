@@ -1552,15 +1552,25 @@ describe('movement budget + dash (in combat)', () => {
     expect(mv.dashed).toBe(false);
   });
 
-  it('moves consume the budget; beyond remaining -> 422', async () => {
+  it('moves consume the budget; beyond remaining -> 422, exactly-remaining -> 200', async () => {
     const { app: encApp } = await setupWithEncounter();
-    // token at (3,2): move 4 cells (20ft) then attempt 3 more (15ft > 10 remaining)
+    // FakeRelay.moveToken never mutates relay.scene, so the token's cell as
+    // read back by fetchMovementContext stays at its original (3,2) for every
+    // POST in this test — only the budget tracker's spend advances. First
+    // move: 4 cells (20ft) from (3,2) to (7,2), leaving 10ft (2 cells) of the
+    // 30ft budget.
     const moved = await post(encApp, 'a1', { cx: 7, cy: 2 });
     expect(moved.statusCode).toBe(200);
     const after = await encApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
     expect((after.json() as { movement: { remainingFt: number } }).movement.remainingFt).toBe(10);
-    const tooFar = await post(encApp, 'a1', { cx: 10, cy: 2 });
+    // Every subsequent move is still measured from the same origin (3,2) —
+    // moving along cy avoids the occupied (5,2) cell (tok t2). A 3-cell move
+    // (15ft) exceeds the 10ft (2-cell) remaining budget -> 422.
+    const tooFar = await post(encApp, 'a1', { cx: 3, cy: 5 });
     expect(tooFar.statusCode).toBe(422);
+    // A 2-cell move (10ft) exactly consumes what's left -> 200 (tight boundary).
+    const exact = await post(encApp, 'a1', { cx: 3, cy: 4 });
+    expect(exact.statusCode).toBe(200);
   });
 
   it('moving off-turn in combat -> 409', async () => {
@@ -1586,6 +1596,15 @@ describe('movement budget + dash (in combat)', () => {
     expect(relay.chatNoteCalls).toHaveLength(1);
     const again = await encApp.inject({ method: 'POST', url: '/api/actors/a1/movement/dash', headers: asAnna });
     expect(again.statusCode).toBe(409);
+  });
+
+  it('dash still succeeds when the best-effort chat note rejects', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    relay.chatNoteError = true;
+    const res = await encApp.inject({ method: 'POST', url: '/api/actors/a1/movement/dash', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { movement: { remainingFt: number; dashed: boolean } }).movement)
+      .toMatchObject({ remainingFt: 60, dashed: true });
   });
 
   it('a new round refills the budget (lazy reset)', async () => {
