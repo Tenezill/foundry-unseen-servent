@@ -1593,6 +1593,23 @@ function effectTypeOf(item: FoundryItemDoc): 'damage' | 'heal' | 'utility' {
 }
 
 /**
+ * In-combat targeting capability (2026-07-22): attack-roll damage → single
+ * target; save-vs-DC damage → multiple (Fireball can catch several
+ * combatants, friends included); heals → single. Utility-roll damage items
+ * (Bead of Force's split activities) stay untargeted in v1 — their damage
+ * has no per-target resolution rule to apply.
+ */
+function targetingOf(item: FoundryItemDoc): { mode: 'single' | 'multiple'; kind: 'attack' | 'save' | 'heal' } | undefined {
+  const et = effectTypeOf(item);
+  if (et === 'heal') return { mode: 'single', kind: 'heal' };
+  if (et !== 'damage') return undefined;
+  const acts = allActivities(item);
+  if (acts.some((a) => a.type === 'attack')) return { mode: 'single', kind: 'attack' };
+  if (acts.some((a) => a.type === 'save')) return { mode: 'multiple', kind: 'save' };
+  return undefined;
+}
+
+/**
  * The Active Effect a self-buff spell should apply to the caster on cast, or
  * undefined. Data-shape only (no rules engine): the spell item carries an
  * effect that is applied on use — `transfer: false` (not a passive/always-on
@@ -1943,7 +1960,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     if (item.type === 'weapon' && getPath(item.system, 'equipped') === true) {
       // Stowed weapons keep their row + equip toggle but offer no rolls —
       // equipping brings Attack/Dmg back (2026-07-18 design).
-      out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack' });
+      out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack', targeting: { mode: 'single', kind: 'attack' } });
       if (weaponDamageFormula(actor, item) !== undefined) {
         out.push({ id: `item.${item._id}.damage`, label: item.name, kind: 'damage' });
       }
@@ -1951,7 +1968,15 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     if (isUsableInventoryItem(item)) {
       // Offered even at 0 uses/quantity — Foundry owns the rules and refuses
       // when empty (same philosophy as unprepared spells).
-      out.push({ id: `item.${item._id}.use`, label: item.name, kind: 'use', group: 'items', effectType: effectTypeOf(item) });
+      const itemTargeting = targetingOf(item);
+      out.push({
+        id: `item.${item._id}.use`,
+        label: item.name,
+        kind: 'use',
+        group: 'items',
+        effectType: effectTypeOf(item),
+        ...(itemTargeting !== undefined ? { targeting: itemTargeting } : {}),
+      });
     }
     if (isEquippable(item)) {
       out.push({
@@ -1986,6 +2011,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       // own Prepare toggle below — so the player can ready it; cluttering the
       // Actions tab with spells that Foundry would just refuse was confusing.
       if (level === 0 || isPrepared || freeUse !== undefined) {
+        const spellTargeting = targetingOf(item);
         out.push({
           id: `spell.${item._id}.cast`,
           label: freeUse !== undefined ? `${item.name} (free use)` : item.name,
@@ -1994,6 +2020,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
           // (Cantrips / 1st Level / …), same split as the Spells tab.
           level: Math.max(0, Math.min(9, level)),
           effectType: effectTypeOf(item),
+          ...(spellTargeting !== undefined ? { targeting: spellTargeting } : {}),
           ...(selfBuffEffect(actor, item) !== undefined && !buffTargetIsSelf(item) ? { targetable: true } : {}),
           // slotLevels semantics (2026-07-19 spec): absent = direct cast, no
           // picker (cantrips, free-use, pact-payable); otherwise the payable
@@ -2028,7 +2055,14 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       }
     }
     if (isUsableFeature(item)) {
-      out.push({ id: `feature.${item._id}.use`, label: item.name, kind: 'use', effectType: effectTypeOf(item) });
+      const featureTargeting = targetingOf(item);
+      out.push({
+        id: `feature.${item._id}.use`,
+        label: item.name,
+        kind: 'use',
+        effectType: effectTypeOf(item),
+        ...(featureTargeting !== undefined ? { targeting: featureTargeting } : {}),
+      });
     }
   }
 
@@ -2099,6 +2133,22 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
     );
   }
 
+  // In-combat targeting (2026-07-22): validated once here, shared by the
+  // attack/use/cast cases below — Foundry owns resolution, this only checks
+  // the descriptor's own targeting capability and single/multiple arity.
+  const targeted =
+    'targetTokenUuids' in intent && Array.isArray(intent.targetTokenUuids) && intent.targetTokenUuids.length > 0
+      ? intent.targetTokenUuids
+      : undefined;
+  if (targeted !== undefined) {
+    if (descriptor.targeting === undefined) {
+      throw new IntentError(`action "${intent.actionId}" does not support targets`, 'INVALID');
+    }
+    if (descriptor.targeting.mode === 'single' && targeted.length !== 1) {
+      throw new IntentError(`action "${intent.actionId}" takes a single target`, 'INVALID');
+    }
+  }
+
   switch (intent.kind) {
     case 'check':
     case 'save': {
@@ -2114,6 +2164,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         throw new IntentError(`unknown roll mode "${String(mode)}"`, 'INVALID');
       }
       const itemId = intent.actionId.slice('item.'.length, -'.attack'.length);
+      if (targeted !== undefined) {
+        return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted, ...(mode !== undefined ? { mode } : {}) };
+      }
       // Plain Roll: Foundry-native item use (consumes ammo/uses, rolls to hit).
       if (mode === undefined) return { endpoint: 'use-item', itemId };
       // Advantage/disadvantage: companion-built to-hit (the relay's use-item
@@ -2176,6 +2229,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         if (item && requiresAttunement(item) && !isAttuned(item)) {
           throw new IntentError(`"${item.name}" requires attunement`, 'INVALID');
         }
+        if (targeted !== undefined) {
+          return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted };
+        }
         if (item) {
           const effect = effectTypeOf(item);
           if (effect === 'heal') {
@@ -2201,6 +2257,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       }
       const itemId = intent.actionId.slice('feature.'.length, -'.use'.length);
       const item = (actor.items ?? []).find((i) => i._id === itemId);
+      if (targeted !== undefined) {
+        return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted };
+      }
       if (item && activityType(item) === 'heal') {
         return buildHealAction(actor, item, intent.actionId);
       }
@@ -2224,6 +2283,14 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         }
       }
       const upcast = descriptor.slotLevels !== undefined && chosen > baseLevel;
+      if (targeted !== undefined) {
+        return {
+          endpoint: 'use-on-targets',
+          itemId,
+          targetTokenUuids: targeted,
+          ...(upcast ? { slotKey: `spell${chosen}` } : {}),
+        };
+      }
       const buff = item ? selfBuffEffect(actor, item) : undefined;
       if (buff) {
         return {

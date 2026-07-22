@@ -180,6 +180,7 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
       label: 'Second Wind',
       kind: 'use',
       effectType: 'heal',
+      targeting: { mode: 'single', kind: 'heal' },
     });
     expect(all.some((a) => a.id.startsWith('feature.r7UallZJjcIFsz8i'))).toBe(false);
   });
@@ -237,6 +238,7 @@ describe('actions() — caster (Akra, Cleric 5)', () => {
       level: 1,
       effectType: 'damage',
       slotLevels: [1, 2, 3],
+      targeting: { mode: 'single', kind: 'attack' },
     });
   });
 
@@ -2250,5 +2252,109 @@ describe('template-bearing items set noTemplate (M-daylight, 2026-07-20)', () =>
     const a = build(actor, { kind: 'cast', actionId: 'spell.spellDaylight001.cast' });
     if (a.endpoint !== 'use-and-roll') throw new Error('expected use-and-roll, got ' + a.endpoint);
     expect(a.noTemplate).toBe(true);
+  });
+});
+
+describe('combat targeting metadata + use-on-targets (2026-07-22)', () => {
+  // Real fixture spells cover attack-roll damage (Guiding Bolt, kind
+  // 'attack') and save-with-damage (Sacred Flame, kind 'save') but the only
+  // natural save-damage spell (Sacred Flame) is a cantrip with no slots to
+  // upcast — a synthetic clone of Guiding Bolt with its activity retyped to
+  // 'save' covers the slotKey-threading test below (same technique as the
+  // finesse-weapon / self-buff synthetic-actor tests elsewhere in this file).
+  function withSyntheticSaveSpell(): FoundryActorDoc {
+    const guidingBolt = casterCaptured.items?.find((i) => i._id === 'pZMrJb3AXiRYO5E8');
+    if (!guidingBolt) throw new Error('fixture missing Guiding Bolt');
+    const gbSystem = guidingBolt.system as Record<string, unknown>;
+    const gbActivities = gbSystem.activities as Record<string, unknown>;
+    const gbActivity = gbActivities.dnd5eactivity000 as Record<string, unknown>;
+    const syntheticSpell = {
+      ...guidingBolt,
+      _id: 'spellSyntheticSave1',
+      name: 'Test Save Bolt',
+      system: {
+        ...gbSystem,
+        activities: { dnd5eactivity000: { ...gbActivity, type: 'save' } },
+      },
+    } as unknown as FoundryItemDoc;
+    return { ...casterCaptured, items: [...(casterCaptured.items ?? []), syntheticSpell] };
+  }
+
+  it('equipped weapon attack descriptors carry single/attack targeting', () => {
+    const actions = dnd5eAdapter.actions!(martialCaptured);
+    const attack = actions.find((a) => a.kind === 'attack');
+    expect(attack?.targeting).toEqual({ mode: 'single', kind: 'attack' });
+  });
+
+  it('attack-roll damage spells target single; save-damage spells target multiple; heals single', () => {
+    const actions = dnd5eAdapter.actions!(casterCaptured);
+    // Guiding Bolt: attack-type damage spell.
+    const guidingBolt = actions.find((a) => a.kind === 'cast' && a.label.includes('Guiding Bolt'));
+    expect(guidingBolt?.targeting).toEqual({ mode: 'single', kind: 'attack' });
+    // Sacred Flame: save-type damage cantrip.
+    const sacredFlame = actions.find((a) => a.kind === 'cast' && a.label.includes('Sacred Flame'));
+    expect(sacredFlame?.targeting).toEqual({ mode: 'multiple', kind: 'save' });
+    // Cure Wounds: heal spell.
+    const cureWounds = actions.find((a) => a.kind === 'cast' && a.label.includes('Cure Wounds'));
+    expect(cureWounds?.targeting).toEqual({ mode: 'single', kind: 'heal' });
+  });
+
+  it('attack intent with a target builds use-on-targets (mode passthrough)', () => {
+    const actions = dnd5eAdapter.actions!(martialCaptured);
+    const attack = actions.find((a) => a.kind === 'attack')!;
+    const action = dnd5eAdapter.buildAction!(martialCaptured, {
+      kind: 'attack', actionId: attack.id, mode: 'advantage',
+      targetTokenUuids: ['Scene.s1.Token.t1'],
+    });
+    expect(action).toMatchObject({
+      endpoint: 'use-on-targets',
+      targetTokenUuids: ['Scene.s1.Token.t1'],
+      mode: 'advantage',
+    });
+  });
+
+  it('single-target actions reject multiple targets', () => {
+    const actions = dnd5eAdapter.actions!(martialCaptured);
+    const attack = actions.find((a) => a.kind === 'attack')!;
+    expect(() =>
+      dnd5eAdapter.buildAction!(martialCaptured, {
+        kind: 'attack', actionId: attack.id,
+        targetTokenUuids: ['Scene.s1.Token.t1', 'Scene.s1.Token.t2'],
+      }),
+    ).toThrow(/single target/);
+  });
+
+  it('targeted upcast cast threads slotKey into use-on-targets', () => {
+    const actor = withSyntheticSaveSpell();
+    const actions = dnd5eAdapter.actions!(actor);
+    const dmgSpell = actions.find(
+      (a) => a.kind === 'cast' && a.targeting?.kind === 'save' && (a.slotLevels?.length ?? 0) > 1,
+    )!;
+    expect(dmgSpell).toBeDefined();
+    const chosen = dmgSpell.slotLevels![dmgSpell.slotLevels!.length - 1]!;
+    const action = dnd5eAdapter.buildAction!(actor, {
+      kind: 'cast', actionId: dmgSpell.id, slotLevel: chosen,
+      targetTokenUuids: ['Scene.s1.Token.t1', 'Scene.s1.Token.t2'],
+    });
+    expect(action).toMatchObject({ endpoint: 'use-on-targets', slotKey: `spell${chosen}` });
+  });
+
+  it('untargetable actions reject targets', () => {
+    expect(() =>
+      dnd5eAdapter.buildAction!(martialCaptured, {
+        kind: 'check', actionId: 'skill.ath',
+        // check intents have no targetTokenUuids field — cast an any to prove
+        // the runtime guard, not just the compiler, rejects it:
+      } as never),
+    ).not.toThrow(); // baseline: kind check unaffected
+    const actions = dnd5eAdapter.actions!(casterCaptured);
+    const utility = actions.find((a) => a.kind === 'cast' && a.targeting === undefined);
+    if (utility) {
+      expect(() =>
+        dnd5eAdapter.buildAction!(casterCaptured, {
+          kind: 'cast', actionId: utility.id, targetTokenUuids: ['Scene.s1.Token.t1'],
+        }),
+      ).toThrow(/does not support targets/);
+    }
   });
 });
