@@ -296,8 +296,13 @@ function targetedUseScript(
     `    if (Array.isArray(returned) && returned.length) dmgRolls = returned;`,
     `  } finally { Hooks.off('dnd5e.rollDamageV2', dmgHook); }`,
     `  if (Array.isArray(dmgRolls) && dmgRolls.length) {`,
-    `    const agg = dnd5e.dice.aggregateDamageRolls(dmgRolls, { respectProperties: true });`,
-    `    damages = agg.map((r) => ({ value: r.total, type: r.options.type, properties: new Set(r.options.properties ?? []) }));`,
+    // dnd5e 5.3.x exposes no dnd5e.dice.aggregateDamageRolls (live-verified
+    // 2026-07-22: dnd5e.dice is empty on 5.3.3) — each rollDamage() Roll is
+    // already one damage part carrying its type/properties on roll.options,
+    // and actor.applyDamage accepts that array of parts directly (resistances/
+    // immunities/vulnerabilities still resolved inside dnd5e). Map the rolls
+    // straight to parts; no aggregation helper needed.
+    `    damages = dmgRolls.map((r) => ({ value: r.total, type: r.options?.type, properties: new Set(r.options?.properties ?? []) }));`,
     `    rolledParts = damages.map((d) => ({ type: String(d.type ?? ''), value: d.value }));`,
     `  }`,
     `}`,

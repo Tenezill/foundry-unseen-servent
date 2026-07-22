@@ -758,6 +758,11 @@ describe('FoundryRelayClient.useAbilityOnTargets', () => {
     expect(script).toContain('["Scene.s1.Token.t1"]');
     expect(script).toContain('applyDamage');
     expect(script).toContain('measuredTemplate: false');
+    // dnd5e 5.3.x has no dnd5e.dice.aggregateDamageRolls (live-verified
+    // 2026-07-22); the damage path must map rollDamage rolls straight to
+    // applyDamage parts and never reference the missing helper.
+    expect(script).not.toContain('aggregateDamageRolls');
+    expect(script).toContain('dmgRolls.map');
     expect(res.targets[0]?.outcome).toBe('hit');
     expect(res.attack?.total).toBe(19);
   });
