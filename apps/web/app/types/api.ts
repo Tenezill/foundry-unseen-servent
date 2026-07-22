@@ -182,6 +182,12 @@ export interface MovementView {
   speedFt?: number
   token?: MovementCell
   others?: MovementOther[]
+  /** Present only when the actor is a combatant in a live encounter
+   *  (2026-07-22 §F4 turn-flow UI). */
+  inCombat?: boolean
+  yourTurn?: boolean
+  remainingFt?: number
+  dashed?: boolean
 }
 
 export interface MovementResponse {

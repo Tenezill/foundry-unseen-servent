@@ -20,6 +20,10 @@
         <span v-if="c.isPC && c.hp" class="hp-cap tabular">{{ c.hp.value }}/{{ c.hp.max }}</span>
       </div>
     </div>
+
+    <button v-if="canEndTurn" type="button" class="end-turn" @click="emit('endTurn')">
+      End turn <span aria-hidden="true">▸</span>
+    </button>
   </div>
 </template>
 
@@ -31,6 +35,13 @@ const props = defineProps<{
   round?: number
   turnCombatantId: string | null
   actorId: string
+  /** True when the viewing actor is the acting combatant (2026-07-22 turn
+   *  flow) — shows the compact "End turn" button at the carousel's edge. */
+  canEndTurn: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'endTurn'): void
 }>()
 
 const config = useRuntimeConfig()
@@ -141,5 +152,29 @@ const windowCombatants = computed(() => {
 .hp-cap {
   font-size: 0.6rem;
   color: var(--ink-faint);
+}
+
+/* ---- end-turn button (2026-07-22) ---- */
+
+.end-turn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  border: 1px solid var(--gold-deep);
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  color: var(--accent-ink);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--gold) 30%, transparent);
+}
+
+.end-turn:active {
+  transform: scale(0.95);
 }
 </style>

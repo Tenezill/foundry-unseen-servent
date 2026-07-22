@@ -5,6 +5,19 @@
         <div class="head-text">
           <span class="title">Move</span>
           <span class="note">{{ speedFt }} {{ units }} speed · tap a square</span>
+          <div v-if="inCombat" class="budget-row">
+            <span class="budget-chip tabular">{{ remainingFt }} / {{ speedFt * (dashed ? 2 : 1) }} {{ units }}</span>
+            <button
+              v-if="!dashed"
+              type="button"
+              class="dash-pill"
+              :disabled="busy || !yourTurn"
+              @click="emit('dash')"
+            >
+              Dash
+            </button>
+          </div>
+          <span v-if="inCombat && !yourTurn" class="not-your-turn">Not your turn</span>
         </div>
         <button class="refresh" type="button" aria-label="Refresh positions" :disabled="busy" @click="emit('refresh')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -21,7 +34,7 @@
             type="button"
             class="cell"
             :class="cellClass(cell)"
-            :disabled="!cell.selectable || busy"
+            :disabled="!cell.selectable || busy || (inCombat && !yourTurn)"
             :aria-label="cellAria(cell)"
             @click="select(cell)"
           >
@@ -33,7 +46,12 @@
 
       <div class="foot">
         <span class="dist">{{ selected ? `${distanceOf(selected)} ${units}` : '—' }}</span>
-        <button class="move-btn" type="button" :disabled="!selected || busy" @click="confirm()">
+        <button
+          class="move-btn"
+          type="button"
+          :disabled="!selected || busy || (inCombat && !yourTurn)"
+          @click="confirm()"
+        >
           Move
         </button>
       </div>
@@ -51,6 +69,7 @@ const emit = defineEmits<{
   (e: 'submit', cell: MovementCell): void
   (e: 'refresh'): void
   (e: 'close'): void
+  (e: 'dash'): void
 }>()
 
 interface GridCell extends MovementCell {
@@ -62,8 +81,20 @@ interface GridCell extends MovementCell {
 const speedFt = computed(() => props.movement.speedFt ?? 0)
 const gridDistance = computed(() => props.movement.gridDistance ?? 5)
 const units = computed(() => props.movement.gridUnits ?? 'ft')
+
+/** In-combat turn-flow fields (2026-07-22 §F4) — absent entirely outside a
+ *  live encounter, so `yourTurn` defaults true (nothing blocks movement) and
+ *  `dashed` defaults false. */
+const inCombat = computed(() => props.movement.inCombat === true)
+const yourTurn = computed(() => props.movement.yourTurn ?? true)
+const dashed = computed(() => props.movement.dashed ?? false)
+const remainingFt = computed(() => props.movement.remainingFt ?? 0)
+
+/** Reachable range in feet: the per-turn budget while in combat, else the
+ *  full walk speed. */
+const rangeFt = computed(() => (inCombat.value ? remainingFt.value : speedFt.value))
 /** Reachable radius in cells; the grid is (2r+1)². */
-const radius = computed(() => Math.floor(speedFt.value / gridDistance.value))
+const radius = computed(() => Math.floor(rangeFt.value / gridDistance.value))
 const side = computed(() => radius.value * 2 + 1)
 
 const selected = ref<MovementCell | null>(null)
@@ -134,6 +165,36 @@ function cellAria(cell: GridCell): string {
 .refresh svg { width: 18px; height: 18px; }
 .title { font-weight: 700; font-size: 1.05rem; }
 .note { color: var(--text-dim); font-size: 0.8rem; }
+
+/* ---- in-combat movement budget (2026-07-22 §F4) ---- */
+.budget-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.budget-chip {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--gold-bright);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gold) 14%, var(--panel-2));
+  border: 1px solid var(--gold-deep);
+}
+.dash-pill {
+  min-height: 26px;
+  padding: 2px 12px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink);
+}
+.dash-pill:disabled { opacity: 0.5; }
+.dash-pill:active:not(:disabled) { transform: scale(0.95); }
+.not-your-turn {
+  margin-top: 4px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--garnet);
+}
 
 .grid-wrap { overflow: auto; max-height: 55vh; }
 .grid { display: grid; gap: 2px; }

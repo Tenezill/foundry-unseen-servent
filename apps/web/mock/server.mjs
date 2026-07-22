@@ -19,6 +19,11 @@
  *   `targeting`; POSTing one with `targetTokenUuids` returns a canned
  *   `outcome` (hit + resisted damage / per-target save results), mirroring
  *   the real gateway's targeted-use orchestration shape 1:1.
+ * - POST /api/encounter/turn/end + GET/POST /api/actors/:id/movement +
+ *   POST .../movement/dash (2026-07-22 §F4): the fixture encounter's turn
+ *   advances round-robin through its 4 combatants; both fixture PCs sit on
+ *   one fixture scene with a flat 30ft speed and a per-turn movement budget
+ *   (round:combatantId keyed, mirrors apps/gateway/src/movement-budget.ts).
  */
 import { createServer } from 'node:http'
 
@@ -212,10 +217,12 @@ const encounterState = {
   round: 2,
   turn: { combatantId: 'c-brakk' },
   combatants: [
-    { id: 'c-sariel', actorId: 'a-sariel', name: 'Sariel Dawnwhisper', img: '/icons/portrait-caster.svg', initiative: 18, isPC: true, defeated: false, tokenUuid: 'Scene.s1.Token.tSariel' },
-    { id: 'c-brakk', actorId: 'a-brakk', name: 'Brakk Ironhide', img: '/icons/portrait-martial.svg', initiative: 14, isPC: true, defeated: false, tokenUuid: 'Scene.s1.Token.tBrakk' },
-    { id: 'c-goblin1', name: 'Goblin Skirmisher', initiative: 9, isPC: false, defeated: false, hpInternal: 5, hpMax: 10, tokenUuid: 'Scene.s1.Token.tGoblin1' },
-    { id: 'c-goblin2', name: 'Goblin Archer', initiative: 6, isPC: false, defeated: false, hpInternal: 12, hpMax: 12, tokenUuid: 'Scene.s1.Token.tGoblin2' },
+    // cx/cy: fixture token positions on the movement grid (2026-07-22 §F4) —
+    // internal-only, never surfaced by buildEncounterView.
+    { id: 'c-sariel', actorId: 'a-sariel', name: 'Sariel Dawnwhisper', img: '/icons/portrait-caster.svg', initiative: 18, isPC: true, defeated: false, tokenUuid: 'Scene.s1.Token.tSariel', cx: 10, cy: 10 },
+    { id: 'c-brakk', actorId: 'a-brakk', name: 'Brakk Ironhide', img: '/icons/portrait-martial.svg', initiative: 14, isPC: true, defeated: false, tokenUuid: 'Scene.s1.Token.tBrakk', cx: 12, cy: 10 },
+    { id: 'c-goblin1', name: 'Goblin Skirmisher', initiative: 9, isPC: false, defeated: false, hpInternal: 5, hpMax: 10, tokenUuid: 'Scene.s1.Token.tGoblin1', cx: 15, cy: 10 },
+    { id: 'c-goblin2', name: 'Goblin Archer', initiative: 6, isPC: false, defeated: false, hpInternal: 12, hpMax: 12, tokenUuid: 'Scene.s1.Token.tGoblin2', cx: 16, cy: 12 },
   ],
 }
 for (const c of encounterState.combatants) {
@@ -264,6 +271,69 @@ function applyEncounterHp(id, delta) {
     c.defeated = c.hpInternal <= 0
   }
   return buildEncounterView()
+}
+
+/* ------------------------------------------------------------------------- */
+/* Token movement (2026-07-22 §F4) — GET/POST /api/actors/:id/movement,       */
+/* POST .../movement/dash, POST /api/encounter/turn/end. Both fixture PCs     */
+/* sit on the one fixture scene alongside the goblins (cx/cy on the          */
+/* combatant fixtures above); walk speed is a flat 30ft (matches both        */
+/* actors' "30 ft" headline). Per-turn budget is pure in-memory state keyed  */
+/* `round:combatantId`, mirroring apps/gateway/src/movement-budget.ts.       */
+/* ------------------------------------------------------------------------- */
+
+const MOVEMENT_SCENE_ID = 's1'
+const GRID_DISTANCE = 5
+const GRID_UNITS = 'ft'
+const SPEED_FT = 30
+
+/** `${round}:${combatantId}` -> { movedFt, dashed } */
+const movementBudget = new Map()
+
+function budgetKey(combatantId) {
+  return `${encounterState.round}:${combatantId}`
+}
+
+function getBudget(combatantId) {
+  return movementBudget.get(budgetKey(combatantId)) ?? { movedFt: 0, dashed: false }
+}
+
+function setBudget(combatantId, state) {
+  movementBudget.set(budgetKey(combatantId), state)
+}
+
+function combatantForActor(actorId) {
+  return encounterState.combatants.find((c) => c.actorId === actorId)
+}
+
+/** Builds the GET/POST/dash response body's `movement` value for one actor —
+ *  the fixture PCs are always on-scene and always a live combatant, so the
+ *  in-combat fields are always present here (byte-for-byte the docs/API.md
+ *  shape either way). */
+function buildMovementView(actor) {
+  const combatant = combatantForActor(actor.id)
+  if (!combatant) return { onScene: false }
+  const others = encounterState.combatants
+    .filter((c) => c.id !== combatant.id)
+    .map((c) => ({ cx: c.cx, cy: c.cy, disposition: c.isPC ? 1 : -1, name: c.name }))
+  const view = {
+    onScene: true,
+    sceneId: MOVEMENT_SCENE_ID,
+    gridDistance: GRID_DISTANCE,
+    gridUnits: GRID_UNITS,
+    speedFt: SPEED_FT,
+    token: { cx: combatant.cx, cy: combatant.cy },
+    others,
+  }
+  if (encounterState.active) {
+    const budget = getBudget(combatant.id)
+    const cap = SPEED_FT * (budget.dashed ? 2 : 1)
+    view.inCombat = true
+    view.yourTurn = combatant.id === encounterState.turn.combatantId
+    view.remainingFt = Math.max(0, cap - budget.movedFt)
+    view.dashed = budget.dashed
+  }
+  return view
 }
 
 /* ------------------------------------------------------------------------- */
@@ -918,6 +988,21 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  if (req.method === 'POST' && path === '/api/encounter/turn/end') {
+    if (!encounterState.active) return sendError(res, 409, 'CONFLICT', 'no active encounter')
+    const acting = encounterState.combatants.find((c) => c.id === encounterState.turn.combatantId)
+    if (!acting || acting.actorId === undefined || !PLAYER.actorIds.includes(acting.actorId)) {
+      return sendError(res, 403, 'FORBIDDEN_RESOURCE', 'not your turn')
+    }
+    const idx = encounterState.combatants.findIndex((c) => c.id === acting.id)
+    const nextIdx = (idx + 1) % encounterState.combatants.length
+    if (nextIdx === 0) encounterState.round += 1
+    encounterState.turn = { combatantId: encounterState.combatants[nextIdx].id }
+    sendJson(res, 200, { ok: true })
+    broadcastEncounter()
+    return
+  }
+
   const hpMatch = path.match(/^\/api\/encounter\/combatants\/([^/]+)\/hp$/)
   if (hpMatch && req.method === 'POST') {
     const [, combatantId] = hpMatch
@@ -939,6 +1024,74 @@ const server = createServer(async (req, res) => {
     const combatant = encounterState.combatants.find((c) => c.id === combatantId)
     if (combatant?.isPC && combatant.actorId) broadcast(combatant.actorId)
     return
+  }
+
+  const movementMatch = path.match(/^\/api\/actors\/([^/]+)\/movement(?:\/(dash))?$/)
+  if (movementMatch) {
+    const [, mvActorId, dashTail] = movementMatch
+    const actor = PLAYER.actorIds.includes(mvActorId) ? actors.get(mvActorId) : undefined
+    if (!actor) return sendError(res, 404, 'NOT_FOUND', 'no such actor')
+
+    if (dashTail === 'dash' && req.method === 'POST') {
+      const combatant = combatantForActor(actor.id)
+      if (!encounterState.active || !combatant) {
+        return sendError(res, 409, 'CONFLICT', 'not in combat')
+      }
+      if (combatant.id !== encounterState.turn.combatantId) {
+        return sendError(res, 409, 'CONFLICT', 'not your turn')
+      }
+      const budget = getBudget(combatant.id)
+      if (budget.dashed) {
+        return sendError(res, 409, 'CONFLICT', 'already dashed this turn')
+      }
+      setBudget(combatant.id, { ...budget, dashed: true })
+      return sendJson(res, 200, { movement: buildMovementView(actor) })
+    }
+
+    if (dashTail === undefined && req.method === 'GET') {
+      return sendJson(res, 200, { movement: buildMovementView(actor) })
+    }
+
+    if (dashTail === undefined && req.method === 'POST') {
+      let body
+      try {
+        body = JSON.parse((await readBody(req)) || 'null')
+      } catch {
+        return sendError(res, 422, 'INVALID_INTENT', 'body is not valid JSON')
+      }
+      if (
+        typeof body !== 'object' ||
+        body === null ||
+        typeof body.cx !== 'number' ||
+        typeof body.cy !== 'number' ||
+        !Number.isFinite(body.cx) ||
+        !Number.isFinite(body.cy)
+      ) {
+        return sendError(res, 422, 'INVALID_INTENT', 'cx/cy must be finite numbers')
+      }
+      const combatant = combatantForActor(actor.id)
+      if (!combatant) return sendError(res, 409, 'CONFLICT', 'token not on scene')
+      if (encounterState.active && combatant.id !== encounterState.turn.combatantId) {
+        return sendError(res, 409, 'CONFLICT', 'not your turn')
+      }
+      const budget = getBudget(combatant.id)
+      const cap = encounterState.active ? SPEED_FT * (budget.dashed ? 2 : 1) - budget.movedFt : SPEED_FT
+      const distance =
+        Math.max(Math.abs(body.cx - combatant.cx), Math.abs(body.cy - combatant.cy)) * GRID_DISTANCE
+      if (distance > Math.max(0, cap)) {
+        return sendError(res, 422, 'INVALID_INTENT', 'out of range')
+      }
+      const occupied = encounterState.combatants.some(
+        (c) => c.id !== combatant.id && c.cx === body.cx && c.cy === body.cy,
+      )
+      if (occupied) {
+        return sendError(res, 409, 'CONFLICT', 'cell is occupied')
+      }
+      combatant.cx = body.cx
+      combatant.cy = body.cy
+      if (encounterState.active) setBudget(combatant.id, { ...budget, movedFt: budget.movedFt + distance })
+      return sendJson(res, 200, { movement: buildMovementView(actor) })
+    }
   }
 
   const match = path.match(/^\/api\/actors\/([^/]+)\/(sheet|intents|actions|events)$/)

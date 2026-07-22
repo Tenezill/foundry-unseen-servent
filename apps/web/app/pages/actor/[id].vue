@@ -212,6 +212,8 @@
           :round="encounter.round"
           :turn-combatant-id="encounter.turn?.combatantId ?? null"
           :actor-id="actorId"
+          :can-end-turn="canEndTurn"
+          @end-turn="onEndTurn"
         />
       </div>
 
@@ -259,6 +261,7 @@
         :busy="movementBusy"
         @submit="onMoveSubmit"
         @refresh="refreshMovement"
+        @dash="onDash"
         @close="showMoveSheet = false"
       />
       <TargetPickerSheet
@@ -359,6 +362,7 @@
     <DiceTray
       v-if="sheet"
       :actor-id="actorId"
+      :raised="showCarousel"
       :readonly="conn === 'offline'"
       @rolling="startRollAnim('Dice roll')"
       @roll="onDiceRoll"
@@ -545,6 +549,32 @@ async function onMoveSubmit(cell: MovementCell): Promise<void> {
   }
 }
 
+/** Dash (2026-07-22 §F4): doubles the per-turn movement budget once per
+ *  turn; the response IS the fresh movement view, same as a move/refresh. */
+async function onDash(): Promise<void> {
+  if (offline.value || movementBusy.value) return
+  movementBusy.value = true
+  try {
+    const res = await api<MovementResponse>(`/api/actors/${actorId.value}/movement/dash`, {
+      method: 'POST',
+    })
+    movement.value = res.movement
+  } catch (err) {
+    const status = errorStatus(err)
+    if (status === 409) {
+      toast.show('Can’t dash right now — refreshed')
+      void refreshMovement()
+    } else if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else {
+      toast.show('Dash didn’t go through. Try again.')
+    }
+  } finally {
+    movementBusy.value = false
+  }
+}
+
 /* ---- M22 encounter mirror ------------------------------------------------ */
 
 const encounter = ref<EncounterView>({ active: false })
@@ -555,6 +585,44 @@ const encounterActive = computed(() => encounter.value.active === true)
  *  follows the app's usual offline idiom instead: it keeps showing the last
  *  known roster, read-only, rather than vanishing on every reconnect blip. */
 const showCarousel = computed(() => encounterActive.value && combatConn.value === 'live')
+
+/** End-turn button gate (2026-07-22 §F4): only the acting combatant's OWN
+ *  player, viewing THAT actor's sheet, sees the button — and only while the
+ *  combat mirror is confirmed live (a stale/reconnecting mirror could be
+ *  wrong about whose turn it is). */
+const canEndTurn = computed(() => {
+  if (combatConn.value !== 'live') return false
+  const turnId = encounter.value.turn?.combatantId
+  if (!turnId) return false
+  const acting = encounter.value.combatants?.find((c) => c.id === turnId)
+  return acting?.actorId === actorId.value
+})
+
+const turnEndBusy = ref(false)
+
+/** Single tap, no confirm (spec). 409 ("no active encounter" / "turn already
+ *  advanced") is a race the combat SSE mirror self-heals from — refresh
+ *  silently; everything else gets the standard error toast. */
+async function onEndTurn(): Promise<void> {
+  if (offline.value || turnEndBusy.value) return
+  turnEndBusy.value = true
+  try {
+    await api<{ ok: true }>('/api/encounter/turn/end', { method: 'POST' })
+  } catch (err) {
+    const status = errorStatus(err)
+    if (status === 409) {
+      /* self-heals via connectCombatEvents — nothing to show */
+    } else if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else {
+      toast.show('Couldn’t end your turn. Try again.')
+    }
+  } finally {
+    turnEndBusy.value = false
+  }
+}
+
 const combatantForId = ref<string | null>(null)
 const combatantHpBusy = ref(false)
 const combatantFor = computed(() => encounter.value.combatants?.find((c) => c.id === combatantForId.value) ?? null)
