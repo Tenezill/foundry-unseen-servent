@@ -12,7 +12,7 @@ import type {
   SystemAdapter,
 } from '@companion/adapter-sdk';
 import { clamp, IntentError } from '@companion/adapter-sdk';
-import type { RawRoll, RelayEncounter, RelayScene } from '@companion/foundry-client';
+import type { RawRoll, RelayEncounter, RelayScene, TargetedUseResult } from '@companion/foundry-client';
 import type { PlayersPort, RelayPort } from '../src/app.js';
 import type { Player } from '../src/players.js';
 
@@ -278,6 +278,31 @@ export class FakeRelay implements RelayPort {
     if (this.actionError) this.throwActionError('dnd5e/attune-item');
   }
 
+  // ---- targeted use (2026-07-22) --------------------------------------------
+  readonly useOnTargetsCalls: Array<{
+    actorUuid: string; itemUuid: string;
+    opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' };
+  }> = [];
+  useOnTargetsResult: TargetedUseResult = { attack: null, targets: [] };
+  /** RelayError-shaped 408, mirrors useAbilityTimeout. */
+  useOnTargetsTimeout = false;
+
+  async useAbilityOnTargets(
+    actorUuid: string,
+    itemUuid: string,
+    opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' },
+  ): Promise<TargetedUseResult> {
+    this.useOnTargetsCalls.push({ actorUuid, itemUuid, opts: structuredClone(opts) });
+    if (this.useOnTargetsTimeout) {
+      const err = new Error('relay /execute-js -> 408: request timed out') as Error & { status: number };
+      err.name = 'RelayError';
+      err.status = 408;
+      throw err;
+    }
+    if (this.actionError) this.throwActionError('execute-js');
+    return structuredClone(this.useOnTargetsResult);
+  }
+
   readonly actorCommandCalls: Array<{
     endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration';
     actorUuid: string;
@@ -501,6 +526,11 @@ function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
     // adapter's Shield-shaped detection.
     { id: 'spell.b1.cast', label: 'Shield', kind: 'cast', level: 1, slotLevels: [1, 2], effectType: 'utility' },
     { id: 'effect.aeFake0000000001.remove', label: 'End Shield', kind: 'endeffect' },
+    // 2026-07-22 in-combat targeting: a single-target attack item and a
+    // multi-target leveled save spell, both routing through use-on-targets.
+    { id: 'item.i1.tattack', label: 'Sword', kind: 'attack', targeting: { mode: 'single', kind: 'attack' } },
+    { id: 'spell.f1.cast', label: 'Fireball', kind: 'cast', slotLevels: [3, 4], effectType: 'damage',
+      targeting: { mode: 'multiple', kind: 'save' } },
   ];
 }
 
@@ -571,6 +601,20 @@ export const fakeAdapter: SystemAdapter = {
       case 'save':
         return { endpoint: 'roll', formula: '1d20 + 6', flavor: desc.label };
       case 'attack': {
+        // 2026-07-22 in-combat targeting: item.i1.tattack is single-target —
+        // mirrors the real adapter's IntentError('INVALID') when the PWA
+        // (a bug, or a stale roster) sends more than one target.
+        if (intent.actionId === 'item.i1.tattack' && intent.targetTokenUuids?.length) {
+          if (intent.targetTokenUuids.length > 1) {
+            throw new IntentError('item.i1.tattack takes a single target', 'INVALID');
+          }
+          return {
+            endpoint: 'use-on-targets',
+            itemId: 'i1',
+            targetTokenUuids: intent.targetTokenUuids,
+            ...(intent.mode !== undefined ? { mode: intent.mode } : {}),
+          };
+        }
         // Mirrors the real dnd5e adapter (packages/adapter-dnd5e buildAction
         // 'attack' case): no mode -> Foundry-native use-item; advantage/
         // disadvantage -> an explicit 2d20kh1/kl1 roll instead, so gateway
@@ -598,6 +642,15 @@ export const fakeAdapter: SystemAdapter = {
       case 'cast':
         if (intent.slotLevel !== undefined && !(desc.slotLevels ?? []).includes(intent.slotLevel)) {
           throw new IntentError(`illegal slot level ${intent.slotLevel}`, 'INVALID');
+        }
+        if (intent.actionId === 'spell.f1.cast' && intent.targetTokenUuids?.length) {
+          // 2026-07-22 in-combat targeting: multi-target save spell.
+          return {
+            endpoint: 'use-on-targets',
+            itemId: 'f1',
+            targetTokenUuids: intent.targetTokenUuids,
+            ...(intent.slotLevel === 4 ? { slotKey: 'spell4' } : {}),
+          };
         }
         if (intent.actionId === 'spell.b1.cast') {
           // 2026-07-19 buff effects: a self-buff cast — activate then apply

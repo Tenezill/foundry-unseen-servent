@@ -127,6 +127,8 @@ lists everything legal; `actionId` must reference one of them.
 { "kind": "attack", "actionId": "item.X3ab9.attack" }
 { "kind": "cast",   "actionId": "spell.k9Q2f.cast" }
 { "kind": "cast",   "actionId": "spell.k9Q2f.cast", "targetActorId": "kbXH9…" }
+{ "kind": "attack", "actionId": "item.X3ab9.attack", "targetTokenUuids": ["Scene.abc123.Token.def456"] }
+{ "kind": "cast",   "actionId": "spell.k9Q2f.cast", "slotLevel": 4, "targetTokenUuids": ["Scene.abc123.Token.def456", "Scene.abc123.Token.ghi789"] }
 { "kind": "use",    "actionId": "feature.p0Wm1.use" }
 { "kind": "equip",  "actionId": "item.X3ab9.equip", "equipped": false }
 { "kind": "move",   "actionId": "item.X3ab9.move", "containerId": "wYUZWMKa6FntpIvv" }
@@ -155,6 +157,27 @@ applies the buff to the caster, unchanged from the pre-target-buffs
 behavior. Self-only buffs (e.g. Shield) never carry `targetable` on their
 descriptor and are unaffected.
 
+`attack`, `use`, and `cast` also accept an optional `targetTokenUuids`
+(in-combat targeting, 2026-07-22): full REST-scoped token uuids
+(`Scene.<id>.Token.<id>`, 1-12 entries, no duplicates — anything else →
+`422 INVALID_INTENT`). Only meaningful for actions whose descriptor carries a
+`targeting` block (`{ mode: "single" | "multiple", kind: "attack" | "save" |
+"heal" }`); an untargetable action ignores the field. When present, the
+gateway routes the action through one relay orchestration
+(target → activity use → attack/save resolution → damage roll → apply
+damage per target — Foundry owns all the rules) instead of the plain
+`use-item`/`use-spell`/roll paths, and the response gains an `outcome` field
+(see below). Requires a **currently active encounter**: with none running →
+`409 CONFLICT`. Every target must appear in the active encounter's visible
+roster (`GET /api/encounter`'s combatants, keyed by `tokenUuid`) — hidden
+combatants never reach that roster and so can never be targeted; any target
+outside it → `403 FORBIDDEN_RESOURCE`, checked *before* the relay call (no
+slot/use is burned). This leg is side-effecting and **never retried**: a
+relay timeout (408) — Foundry's orchestration may already have applied
+damage — maps to `502 UPSTREAM` with the message "Timed out — check the
+Foundry chat before retrying." rather than the usual null-result 200
+tolerance other cast/use paths give a 408.
+
 `move` (M19) relocates an item to a container or to carried; `containerId` is
 the container item's `_id` (a bare item id, not an action id) or `null`
 (carried). No roll or chat card. `pool` (M23, wod5e) rolls an
@@ -180,10 +203,20 @@ Semantics (server-enforced, in this order):
    same actor, or `null` → else `422`. No cycles: an item cannot move into
    itself, and a container cannot move into its own (transitive) contents →
    else `422`.
-5. Execute via the relay (Foundry rolls, posts chat cards as the character,
+5. For a targeted `attack`/`use`/`cast` (`targetTokenUuids` present and the
+   adapter routes it through the targeted-use orchestration): an active
+   encounter is required → else `409 CONFLICT`; every target must be in the
+   active encounter's visible roster → else `403 FORBIDDEN_RESOURCE`. Both
+   checks run before the relay call.
+6. Execute via the relay (Foundry rolls, posts chat cards as the character,
    consumes slots/uses itself), then:
-   `200 { "result": { "total": 14, "formula": "1d20 + 5", "isCritical": false, "isFumble": false } | null, "sheet": SheetViewModel }`
-   (`result` is null for actions without a roll, e.g. equip or move.)
+   `200 { "result": { "total": 14, "formula": "1d20 + 5", "isCritical": false, "isFumble": false } | null, "outcome"?: TargetedUseResult, "sheet": SheetViewModel }`
+   (`result` is null for actions without a roll, e.g. equip or move.
+   `outcome` is present only for the targeted orchestration above — the
+   per-target attack/save/damage detail
+   (`{ attack: {...} | null, targets: [{ tokenUuid, name, outcome, save?,
+   damage? }] }`); `result` still carries the attack roll total for the roll
+   pill when `outcome.attack` is non-null.)
 
 Shares the write rate limit with intents (30/min per token).
 

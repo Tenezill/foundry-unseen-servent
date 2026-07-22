@@ -28,7 +28,13 @@ import type {
   SystemAdapter,
 } from '@companion/adapter-sdk';
 import { IntentError } from '@companion/adapter-sdk';
-import type { RawRoll, RelayCanvasToken, RelayEncounter, RelayScene } from '@companion/foundry-client';
+import type {
+  RawRoll,
+  RelayCanvasToken,
+  RelayEncounter,
+  RelayScene,
+  TargetedUseResult,
+} from '@companion/foundry-client';
 import { buildMovementContext, occupiedCells, speedFromStats, validateMove } from './movement.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { verifyToken, type Player } from './players.js';
@@ -135,6 +141,15 @@ export interface RelayPort {
   getScene(): Promise<RelayScene | null>;
   /** Move a token to canvas px (top-left), animated. */
   moveToken(tokenUuid: string, x: number, y: number): Promise<void>;
+  /** POST /execute-js via foundry-client useAbilityOnTargets — one
+   *  orchestration: target -> activity.use -> attack/save resolution ->
+   *  damage roll -> dnd5e applyDamage per target (2026-07-22). Never
+   *  retried on failure (side-effecting — see the route's 408 handling). */
+  useAbilityOnTargets(
+    actorUuid: string,
+    itemUuid: string,
+    opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' },
+  ): Promise<TargetedUseResult>;
 }
 
 /**
@@ -283,6 +298,22 @@ function parseIntent(body: Record<string, unknown>, resourceId: string): Resourc
  * Validate the per-kind extras of an action body. `kind` is the descriptor's
  * kind (already confirmed to equal `body.kind` by the allow-list check).
  */
+/** Full REST-scoped token uuid, e.g. `Scene.abc123.Token.def456` — the shape
+ *  the roster (EncounterView combatants) and use-on-targets both deal in. */
+const TARGET_TOKEN_UUID_RE = /^Scene\.[A-Za-z0-9]{1,32}\.Token\.[A-Za-z0-9]{1,32}$/;
+
+/** undefined = field absent; null = malformed (422). 1-12 unique full uuids. */
+function parseTargetTokenUuids(raw: unknown): string[] | null | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 12) return null;
+  const out: string[] = [];
+  for (const t of raw) {
+    if (typeof t !== 'string' || !TARGET_TOKEN_UUID_RE.test(t) || out.includes(t)) return null;
+    out.push(t);
+  }
+  return out;
+}
+
 function parseActionIntent(
   body: Record<string, unknown>,
   actionId: string,
@@ -291,11 +322,24 @@ function parseActionIntent(
   switch (kind) {
     case 'check':
     case 'save':
-    case 'attack':
       if (body.mode !== undefined && body.mode !== 'advantage' && body.mode !== 'disadvantage') return null;
       return body.mode === undefined ? { kind, actionId } : { kind, actionId, mode: body.mode };
-    case 'use':
-      return { kind, actionId };
+    case 'attack': {
+      if (body.mode !== undefined && body.mode !== 'advantage' && body.mode !== 'disadvantage') return null;
+      const targetTokenUuids = parseTargetTokenUuids(body.targetTokenUuids);
+      if (targetTokenUuids === null) return null;
+      return {
+        kind,
+        actionId,
+        ...(body.mode !== undefined ? { mode: body.mode as 'advantage' | 'disadvantage' } : {}),
+        ...(targetTokenUuids !== undefined ? { targetTokenUuids } : {}),
+      };
+    }
+    case 'use': {
+      const targetTokenUuids = parseTargetTokenUuids(body.targetTokenUuids);
+      if (targetTokenUuids === null) return null;
+      return { kind, actionId, ...(targetTokenUuids !== undefined ? { targetTokenUuids } : {}) };
+    }
     case 'damage':
       // Optional nat-20 flag: the adapter doubles the damage dice (5e crit).
       if (body.critical !== undefined && typeof body.critical !== 'boolean') return null;
@@ -326,12 +370,17 @@ function parseActionIntent(
       ) {
         return null;
       }
-      return {
-        kind,
-        actionId,
-        ...(body.slotLevel !== undefined ? { slotLevel: body.slotLevel } : {}),
-        ...(body.targetActorId !== undefined ? { targetActorId: body.targetActorId } : {}),
-      };
+      {
+        const targetTokenUuids = parseTargetTokenUuids(body.targetTokenUuids);
+        if (targetTokenUuids === null) return null;
+        return {
+          kind,
+          actionId,
+          ...(body.slotLevel !== undefined ? { slotLevel: body.slotLevel } : {}),
+          ...(body.targetActorId !== undefined ? { targetActorId: body.targetActorId } : {}),
+          ...(targetTokenUuids !== undefined ? { targetTokenUuids } : {}),
+        };
+      }
     case 'equip':
       if (typeof body.equipped !== 'boolean') return null;
       return { kind, actionId, equipped: body.equipped };
@@ -1207,6 +1256,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       // 5. Execute via the relay (Foundry rolls, posts cards, consumes
       // slots/uses itself). Relay failures throw -> 502 via setErrorHandler.
       let result: ActionRollResult | null = null;
+      let outcome: unknown = null;
       switch (action.endpoint) {
         case 'roll':
           result = extractRoll(await relay.rollFormula(`Actor.${id}`, action.formula, action.flavor));
@@ -1363,12 +1413,46 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
           // card and carry no roll total -> extractRoll yields null.
           result = extractRoll(await relay.actorCommand(action.endpoint, `Actor.${id}`));
           break;
+        case 'use-on-targets': {
+          // Targets are only meaningful during a live encounter; the visible
+          // roster is the whole legal target surface (hidden combatants never
+          // reach the view, so they are untargetable by construction —
+          // Global Constraints).
+          const mgr = deps.encounters;
+          if (!mgr || !mgr.isActive()) return sendError(reply, 409, 'CONFLICT', 'no active encounter');
+          const roster = new Set(
+            (mgr.view().combatants ?? []).map((c) => c.tokenUuid).filter((t): t is string => typeof t === 'string'),
+          );
+          for (const t of action.targetTokenUuids) {
+            if (!roster.has(t)) return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'target is not in the encounter');
+          }
+          try {
+            const res = await relay.useAbilityOnTargets(`Actor.${id}`, `Actor.${id}.Item.${action.itemId}`, {
+              targetTokenUuids: action.targetTokenUuids,
+              ...(action.slotKey !== undefined ? { slotKey: action.slotKey } : {}),
+              ...(action.mode !== undefined ? { mode: action.mode } : {}),
+            });
+            outcome = res;
+            result = res.attack !== null ? extractRoll(res.attack) : null;
+          } catch (err) {
+            // SIDE-EFFECTING — never retried. A relay 408 means the
+            // orchestration may have already applied damage in Foundry;
+            // retrying could double it.
+            if (isRelayTimeout(err)) {
+              return sendError(reply, 502, 'UPSTREAM', 'Timed out — check the Foundry chat before retrying.');
+            }
+            throw err;
+          }
+          break;
+        }
       }
 
       const fresh = await fetchActor(id);
       if (!fresh) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       const freshAdapter = adapterFor(fresh) ?? adapter;
-      return reply.code(200).send({ result, sheet: buildSheet(freshAdapter, fresh) });
+      return reply
+        .code(200)
+        .send({ result, ...(outcome !== null ? { outcome } : {}), sheet: buildSheet(freshAdapter, fresh) });
     },
   );
 

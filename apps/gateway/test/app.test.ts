@@ -13,6 +13,7 @@ import { IntentError, type SystemAdapter } from '@companion/adapter-sdk';
 import { dnd5eAdapter } from '@companion/adapter-dnd5e';
 import { wod5eAdapter } from '@companion/adapter-wod5e';
 import { buildApp, isSafeDiceFormula, type EncounterManagerPort } from '../src/app.js';
+import { EncounterManager } from '../src/encounters.js';
 import { sha256Hex, type Player } from '../src/players.js';
 import { createRegistry } from '../src/registry.js';
 import {
@@ -1220,6 +1221,164 @@ describe('actions', () => {
     const body = res.json();
     expect(body.result).toBeNull();
     expect(body.sheet.actorId).toBe('a1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-07-22 in-combat targeting: use-on-targets action route. The visible
+// encounter roster (tokenUuid-keyed) is the whole legal target surface —
+// hidden combatants never reach view(), so they're untargetable by
+// construction. Every relay leg here is side-effecting (Foundry may already
+// have applied damage) so a 408 must map to 502 with NO retry, never a bare
+// timeout that invites a double-execution.
+describe('targeted actions (use-on-targets)', () => {
+  let mgr: EncounterManager | null = null;
+
+  const post = (appInst: FastifyInstance, actorId: string, payload: unknown) =>
+    appInst.inject({ method: 'POST', url: `/api/actors/${actorId}/actions`, headers: asAnna, payload: payload as object });
+
+  afterEach(() => {
+    if (mgr) mgr.stop();
+    mgr = null;
+  });
+
+  /** Gateway app wired to a live encounter: Hero (a1, the caster's own
+   *  combatant) and Skeleton, both with tokenUuids — the roster use-on-targets
+   *  validates against. */
+  async function setupWithEncounter(): Promise<{ app: FastifyInstance; relay: FakeRelay }> {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'comb1', name: 'Hero', actorUuid: 'Actor.a1', tokenUuid: 'Scene.s1.Token.t1', initiative: 15 },
+          { id: 'comb2', name: 'Skeleton', tokenUuid: 'Scene.s1.Token.t2', initiative: 10 },
+        ],
+      },
+    ];
+    mgr = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await mgr.start();
+    app = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([fakeAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+      encounters: mgr,
+    });
+    return { app, relay };
+  }
+
+  it('POST actions with targets executes use-on-targets and returns the outcome', async () => {
+    const { app, relay } = await setupWithEncounter();
+    relay.useOnTargetsResult = {
+      attack: { total: 19, formula: '1d20+7', isCritical: false, isFumble: false },
+      targets: [
+        {
+          tokenUuid: 'Scene.s1.Token.t2',
+          name: 'Skeleton',
+          outcome: 'hit',
+          damage: { rolled: [{ type: 'slashing', value: 12 }], applied: 6 },
+        },
+      ],
+    };
+    const res = await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { outcome?: { targets: Array<{ outcome: string }> }; result: unknown };
+    expect(body.outcome?.targets[0]?.outcome).toBe('hit');
+    expect((body.result as { total: number }).total).toBe(19); // attack feeds the roll pill
+    expect(relay.useOnTargetsCalls[0]?.opts.targetTokenUuids).toEqual(['Scene.s1.Token.t2']);
+  });
+
+  it('a multi-target save spell forwards slotKey through use-on-targets', async () => {
+    const { app, relay } = await setupWithEncounter();
+    relay.useOnTargetsResult = {
+      attack: null,
+      targets: [{ tokenUuid: 'Scene.s1.Token.t2', name: 'Skeleton', outcome: 'save-failed' }],
+    };
+    const res = await post(app, 'a1', {
+      kind: 'cast',
+      actionId: 'spell.f1.cast',
+      slotLevel: 4,
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(relay.useOnTargetsCalls[0]?.opts).toEqual({ targetTokenUuids: ['Scene.s1.Token.t2'], slotKey: 'spell4' });
+    const body = res.json() as { outcome?: unknown; result: unknown };
+    expect(body.outcome).toEqual({
+      attack: null,
+      targets: [{ tokenUuid: 'Scene.s1.Token.t2', name: 'Skeleton', outcome: 'save-failed' }],
+    });
+    expect(body.result).toBeNull(); // no attack roll on a save spell -> no roll pill
+  });
+
+  it('rejects a target not in the visible encounter roster (403)', async () => {
+    const { app, relay } = await setupWithEncounter();
+    const res = await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.tX'],
+    });
+    expect(res.statusCode).toBe(403);
+    expect(relay.useOnTargetsCalls).toHaveLength(0); // gate BEFORE the relay call
+  });
+
+  it('rejects targeted actions when no encounter is active (409)', async () => {
+    const { app } = setup(); // harness without encounters wired at all
+    const res = await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('maps a relay 408 to 502 with the check-Foundry-chat message and NO retry', async () => {
+    const { app, relay } = await setupWithEncounter();
+    relay.useOnTargetsTimeout = true;
+    const res = await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(502);
+    expect((res.json() as { error: { message: string } }).error.message).toBe(
+      'Timed out — check the Foundry chat before retrying.',
+    );
+    expect(relay.useOnTargetsCalls).toHaveLength(1); // exactly one attempt
+  });
+
+  it('parseActionIntent rejects malformed target lists (422)', async () => {
+    const { app } = setup();
+    for (const bad of [
+      ['not-a-uuid'],
+      [],
+      ['Scene.s1.Token.t2', 'Scene.s1.Token.t2'],
+      Array.from({ length: 13 }, (_, i) => `Scene.s1.Token.t${i}`),
+    ]) {
+      const res = await post(app, 'a1', { kind: 'attack', actionId: 'item.i1.tattack', targetTokenUuids: bad });
+      expect(res.statusCode, JSON.stringify(bad)).toBe(422);
+    }
+  });
+
+  it('a single-target action rejects more than one target (422 via IntentError INVALID)', async () => {
+    const { app } = await setupWithEncounter();
+    const res = await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.t1', 'Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('INVALID_INTENT');
   });
 });
 
