@@ -1570,6 +1570,14 @@ function activityType(item: FoundryItemDoc): string | undefined {
  * Not exposed on weapon attack/damage descriptors — Attacks is already its
  * own unfiltered section.
  */
+function hasSaveWithDamage(activities: Rec[]): boolean {
+  return activities.some((a) => {
+    if (a.type !== 'save') return false;
+    const parts = getPath(a, 'damage.parts');
+    return Array.isArray(parts) && parts.length > 0;
+  });
+}
+
 function effectTypeOf(item: FoundryItemDoc): 'damage' | 'heal' | 'utility' {
   const activities = allActivities(item);
   if (activities.some((a) => a.type === 'heal')) return 'heal';
@@ -1578,12 +1586,7 @@ function effectTypeOf(item: FoundryItemDoc): 'damage' | 'heal' | 'utility' {
   if (item.type === 'spell' || item.type === 'feat') {
     if (activities.some((a) => a.type === 'attack')) return 'damage';
   }
-  const hasSaveDamage = activities.some((a) => {
-    if (a.type !== 'save') return false;
-    const parts = getPath(a, 'damage.parts');
-    return Array.isArray(parts) && parts.length > 0;
-  });
-  if (hasSaveDamage) return 'damage';
+  if (hasSaveWithDamage(activities)) return 'damage';
   const hasSave = activities.some((a) => a.type === 'save');
   const hasUtilityRoll = activities.some(
     (a) => a.type === 'utility' && typeof getPath(a, 'roll.formula') === 'string' && getPath(a, 'roll.formula') !== '',
@@ -1605,7 +1608,7 @@ function targetingOf(item: FoundryItemDoc): { mode: 'single' | 'multiple'; kind:
   if (et !== 'damage') return undefined;
   const acts = allActivities(item);
   if (acts.some((a) => a.type === 'attack')) return { mode: 'single', kind: 'attack' };
-  if (acts.some((a) => a.type === 'save')) return { mode: 'multiple', kind: 'save' };
+  if (hasSaveWithDamage(acts)) return { mode: 'multiple', kind: 'save' };
   return undefined;
 }
 

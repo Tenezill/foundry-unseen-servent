@@ -2280,6 +2280,19 @@ describe('combat targeting metadata + use-on-targets (2026-07-22)', () => {
     return { ...casterCaptured, items: [...(casterCaptured.items ?? []), syntheticSpell] };
   }
 
+  it('Bead of Force (split save-DC + utility-roll damage) stays untargetable', () => {
+    const actions = dnd5eAdapter.actions!(martialCaptured);
+    const beadOfForce = actions.find((a) => a.id === 'item.iecfawCz0pIwcPVg.use')!;
+    expect(beadOfForce).toBeDefined();
+    expect(beadOfForce.targeting).toBeUndefined();
+    expect(() =>
+      dnd5eAdapter.buildAction!(martialCaptured, {
+        kind: 'use', actionId: 'item.iecfawCz0pIwcPVg.use',
+        targetTokenUuids: ['Scene.s1.Token.t1'],
+      } as never),
+    ).toThrow(/does not support targets/);
+  });
+
   it('equipped weapon attack descriptors carry single/attack targeting', () => {
     const actions = dnd5eAdapter.actions!(martialCaptured);
     const attack = actions.find((a) => a.kind === 'attack');
@@ -2337,6 +2350,17 @@ describe('combat targeting metadata + use-on-targets (2026-07-22)', () => {
       targetTokenUuids: ['Scene.s1.Token.t1', 'Scene.s1.Token.t2'],
     });
     expect(action).toMatchObject({ endpoint: 'use-on-targets', slotKey: `spell${chosen}` });
+  });
+
+  it('a targeted use-kind feature (Breath Weapon, save+damage) builds use-on-targets', () => {
+    const actions = dnd5eAdapter.actions!(casterCaptured);
+    const breathWeapon = actions.find((a) => a.kind === 'use' && a.targeting?.kind === 'save')!;
+    expect(breathWeapon).toBeDefined();
+    const action = dnd5eAdapter.buildAction!(casterCaptured, {
+      kind: 'use', actionId: breathWeapon.id,
+      targetTokenUuids: ['Scene.s1.Token.t1', 'Scene.s1.Token.t2'],
+    });
+    expect(action).toMatchObject({ endpoint: 'use-on-targets', targetTokenUuids: ['Scene.s1.Token.t1', 'Scene.s1.Token.t2'] });
   });
 
   it('untargetable actions reject targets', () => {
