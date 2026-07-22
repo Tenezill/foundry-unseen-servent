@@ -2018,10 +2018,18 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
       // to another player's invite). Retrying can never succeed — stop
       // pretending the cached sheet works.
       showNotLinked()
-    } else if (status === 409) {
+    } else if (
+      status === 409 &&
+      'targetTokenUuids' in intent &&
+      intent.targetTokenUuids &&
+      intent.targetTokenUuids.length > 0
+    ) {
       // Targeted attack/cast/use with no active encounter (combat ended or
       // the mirror lagged behind the tap) — the sheet is already fresh, just
-      // explain why the targeted action didn't go through.
+      // explain why the targeted action didn't go through. Untargeted 409s
+      // (e.g. a stale hp write, dash/movement conflicts handled elsewhere)
+      // fall through to the generic copy below — this message would be
+      // actively misleading for them.
       toast.show('No active encounter — that target picker just closed.')
     } else if (status === 403 || status === 422) {
       const msg = errorData<ApiErrorBody>(err)?.error?.message

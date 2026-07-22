@@ -47,13 +47,19 @@ check went green.
 | 2 | attack miss | **PASS** | forced d20=2 → `miss`, no damage entry, HP unchanged, no damage roll in chat. |
 | 3 | crit | **PASS** | forced d20=20 → `attack.isCritical:true`, chat damage roll shows **2d8** (doubled dice); HP dropped by `floor(rolled/2)` (still resisted). |
 | 4 | save spell, multi-target + friendly fire | **PASS (after fix)** | Fireball at skeleton **and Akra**; both `save-passed` → half (fire unresisted, `applied=floor(rolled/2)`), per-target save totals+DC in chat, HP deltas match, ally really takes friendly fire. Acid Splash (none-on-save) both `save-failed` → full. |
-| 5 | heal | **PASS** | Cure Wounds on the damaged ally → HP went **UP** by `applied`, 1st-level slot −1. **No heal-sign flip needed** — `applyDamage(healingParts, {multiplier:1})` heals correctly on 5.3.3 (the `type:'healing'` roll drives HP up). |
+| 5 | heal | **PASS** | Cure Wounds on the damaged ally → HP went **UP** by `applied`, 1st-level slot −1. **No heal-sign flip needed** — `applyDamage(damages, {multiplier:1})` heals correctly on 5.3.3 (the `type:'healing'` roll drives HP up). |
 | 6 | upcast slot consumption | **PASS** | Fireball at `slotLevel:4` → 4th-level slot −1, 3rd-level untouched, damage rolled+applied. |
 | 7 | versatile weapon (record only) | **RECORDED** | see below. |
 | 8 | end turn | **PASS** | stale press after a GM advance → 403/409 (never skips a combatant); own-turn press advances Foundry's tracker; off-turn press → 403. |
 | 9 | movement budget | **PASS** | move 20 ft of 30 → remaining 10; Dash → remaining 40 + chat note; second Dash → 409; new round → budget refilled, dashed reset. |
 | 10 | AC staleness (ac.calc) | **PASS** (see note) | sheet AC == Foundry live derived at rest; a +4 AC effect → live 23, **sheet reflects 23** (the bbf22eb fix — a stale adapter would show 19); removal restores 19. |
 | 11 | dice FAB position | **live-skipped** | pure CSS position (FAB above the carousel) already verified against the mock in Task 10; live-verifying needs the full web+gateway+invite browser wiring for a visual-only assertion. |
+
+**Check 4 (save spells) — deliberate deviation:** saving throws are auto-rolled for **every**
+target passed in, PCs included when friendly-fired (as the Fireball-at-Akra case above
+exercises) — the script has no notion of "roll only for NPCs" and singling PCs out would need
+either a real player-facing save prompt or a GM-only override, neither of which exists headless;
+auto-rolling everyone uniformly is the only workable v1 behavior.
 
 ## Check 7 — versatile longsword (follow-up, not fixed per brief)
 

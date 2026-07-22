@@ -1090,4 +1090,50 @@ describe('tokenUuid plumbing + turn accessors', () => {
     const manager = new EncounterManager({ relay: new FakeRelay(), fetchTimeoutMs: 50 });
     expect(manager.current()).toBeNull();
   });
+
+  // Final-review Fix 1 (c): current() must apply the same visibility rule as
+  // view().turn — a hidden acting combatant means "no visible acting
+  // combatant", not "combat inactive".
+  it('current() returns null when the acting combatant is hidden', async () => {
+    const relay = new FakeRelay();
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 2,
+        turn: 0, // sorted desc -> idx 0 is the hidden combatant (initiative 15)
+        current: true,
+        combatants: [
+          { id: 'hidden1', name: 'Hidden NPC', actorUuid: 'Actor.npc1', initiative: 15, hidden: true },
+          { id: 'comb2', name: 'Hero', actorUuid: 'Actor.a1', initiative: 10 },
+        ],
+      },
+    ];
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await manager.start();
+    expect(manager.current()).toBeNull();
+    manager.stop();
+  });
+
+  // Final-review Fix 1 (d): combatantByActorId must skip a hidden combatant
+  // to find a later visible one sharing the same actorId (e.g. a stealthed
+  // duplicate token doesn't shadow the player's own visible combatant).
+  it('combatantByActorId skips a hidden combatant to find a later visible one with the same actorId', async () => {
+    const relay = new FakeRelay();
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'hiddenDupe', name: 'Hidden Dupe', actorUuid: 'Actor.a1', initiative: 20, hidden: true },
+          { id: 'comb1', name: 'Hero', actorUuid: 'Actor.a1', initiative: 10 },
+        ],
+      },
+    ];
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await manager.start();
+    expect(manager.combatantByActorId('a1')?.id).toBe('comb1');
+    manager.stop();
+  });
 });

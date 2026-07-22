@@ -1617,14 +1617,27 @@ function effectTypeOf(item: FoundryItemDoc): 'damage' | 'heal' | 'utility' {
  * combatants, friends included); heals → single. Utility-roll damage items
  * (Bead of Force's split activities) stay untargeted in v1 — their damage
  * has no per-target resolution rule to apply.
+ *
+ * INVARIANT (final-review Fix 3): the targeting descriptor must be derived
+ * from the item's FIRST activity only, mirroring what actually executes —
+ * targetedUseScript (foundry-client) runs `[...activities.values()][0]` and
+ * never looks past it. Scanning ALL activities here (the old behavior) could
+ * classify an item as targetable off an attack/save activity that isn't
+ * first; the script would then run some OTHER (e.g. utility) activity and
+ * no-op the targeting entirely. Restricting to the first activity is the
+ * SAFE direction — an item can only lose targeting it doesn't actually have,
+ * never gain targeting it can't execute.
  */
 function targetingOf(item: FoundryItemDoc): { mode: 'single' | 'multiple'; kind: 'attack' | 'save' | 'heal' } | undefined {
   const et = effectTypeOf(item);
   if (et === 'heal') return { mode: 'single', kind: 'heal' };
   if (et !== 'damage') return undefined;
-  const acts = allActivities(item);
-  if (acts.some((a) => a.type === 'attack')) return { mode: 'single', kind: 'attack' };
-  if (hasSaveWithDamage(acts)) return { mode: 'multiple', kind: 'save' };
+  const first = firstActivity(item);
+  if (first.type === 'attack') return { mode: 'single', kind: 'attack' };
+  if (first.type === 'save') {
+    const parts = getPath(first, 'damage.parts');
+    if (Array.isArray(parts) && parts.length > 0) return { mode: 'multiple', kind: 'save' };
+  }
   return undefined;
 }
 

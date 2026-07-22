@@ -183,6 +183,9 @@ export interface EncounterManagerPort {
   /** First non-hidden combatant linked to this actor (movement budget /
    *  End turn both key on it, 2026-07-22). */
   combatantByActorId(actorId: string): { id: string; actorId?: string } | undefined;
+  /** Active combat's id + round regardless of the acting combatant's
+   *  visibility (final-review Fix 1) — null only when inactive. */
+  activeRound(): { combatId: string; round: number } | null;
 }
 
 export interface GatewayDeps {
@@ -218,6 +221,13 @@ export interface GatewayDeps {
   /** M22: budget for the hp-write route's actor fetch (every relay await on
    *  the encounter path is bounded — Global Constraints). Default 3000. */
   encounterFetchTimeoutMs?: number;
+  /** Budget for POST /api/encounter/turn/end's relay call (final-review Fix
+   *  4). Deliberately longer than encounterFetchTimeoutMs: that budget is
+   *  sized for plain REST fetches (getScene, getEntity), but endCombatTurn
+   *  runs a script through execute-js in the GM's browser — a slower path —
+   *  so the 3s REST bound was firing spurious 502s while the turn was still
+   *  genuinely advancing. Default 15000. */
+  turnEndTimeoutMs?: number;
   /** Token movement: budget per relay leg (scene/tokens/actor fetch, and the
    *  POST move) — every relay await is bounded. Default 3000. */
   movementTimeoutMs?: number;
@@ -608,6 +618,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   const livePollMs = deps.livePollMs ?? 3_000;
   const adminNameTimeoutMs = deps.adminNameTimeoutMs ?? 3_000;
   const encounterFetchTimeoutMs = deps.encounterFetchTimeoutMs ?? 3_000;
+  const turnEndTimeoutMs = deps.turnEndTimeoutMs ?? 15_000;
   const movementTimeoutMs = deps.movementTimeoutMs ?? 3_000;
   const customItemTimeoutMs = deps.customItemTimeoutMs ?? 3_000;
   const healthTimeoutMs = deps.healthTimeoutMs ?? 3_000;
@@ -681,19 +692,34 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
   };
 
   /** Budget context for this actor (2026-07-22 §F4). Not a combatant (or no
-   *  live encounter) -> free movement, exactly like out-of-combat today. */
+   *  live encounter) -> free movement, exactly like out-of-combat today.
+   *
+   *  Final-review Fix 1: `mgr.current()` is null BOTH when combat is
+   *  inactive AND when combat is active but the acting combatant is hidden
+   *  (same visibility rule as view().turn — current()'s doc comment). Those
+   *  are not the same thing: during a hidden NPC's turn, a player with a
+   *  visible combatant must still be blocked (off-turn), not granted free
+   *  movement. So `mine` (this player's own visible combatant) is resolved
+   *  first and gates the free-movement fallback; the round/combatId needed
+   *  to key the budget then comes from `current()` when the acting
+   *  combatant is visible, or from `activeRound()` (visibility-independent)
+   *  when it's hidden — `yourTurn` is false in that case since a hidden
+   *  combatant can never be `mine` (combatantByActorId only returns visible
+   *  ones). */
   function combatMoveContext(actorId: string, speedFt: number): CombatMoveContext {
     const mgr = deps.encounters;
     if (!mgr || !mgr.isActive()) return { inCombat: false, yourTurn: false };
-    const cur = mgr.current();
     const mine = mgr.combatantByActorId(actorId);
-    if (!cur || !mine) return { inCombat: false, yourTurn: false };
-    movementBudget.prune(cur.combatId, cur.round);
-    const key = MovementBudgetTracker.key(cur.combatId, cur.round, mine.id);
+    if (!mine) return { inCombat: false, yourTurn: false };
+    const cur = mgr.current();
+    const round = cur ?? mgr.activeRound();
+    if (!round) return { inCombat: false, yourTurn: false }; // defensive: isActive() implies activeRound() non-null
+    movementBudget.prune(round.combatId, round.round);
+    const key = MovementBudgetTracker.key(round.combatId, round.round, mine.id);
     const st = movementBudget.state(key);
     return {
       inCombat: true,
-      yourTurn: mine.id === cur.combatantId,
+      yourTurn: cur !== null && mine.id === cur.combatantId,
       key,
       remainingFt: Math.max(0, speedFt * (st.dashed ? 2 : 1) - st.movedFt),
       dashed: st.dashed,
@@ -2040,7 +2066,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
       if (cur.actorId === undefined || !player.actorIds.includes(cur.actorId)) {
         return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'not your turn');
       }
-      const res = await boundedMs(relay.endCombatTurn(cur.combatantId), encounterFetchTimeoutMs);
+      const res = await boundedMs(relay.endCombatTurn(cur.combatantId), turnEndTimeoutMs);
       if (res === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
       if (!res.advanced) return sendError(reply, 409, 'CONFLICT', 'turn already advanced');
       return reply.code(200).send({ ok: true });

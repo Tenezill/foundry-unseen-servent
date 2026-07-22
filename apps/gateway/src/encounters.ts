@@ -183,6 +183,18 @@ export class EncounterManager {
     return this.combat?.combatants.find((c) => c.actorId === actorId && !c.hidden);
   }
 
+  /** The active combat's id + round, independent of the acting combatant's
+   *  visibility (final-review Fix 1): unlike current(), this stays populated
+   *  while combat is active even if the acting combatant is hidden — callers
+   *  that need "is combat live, and what round" without needing to know who's
+   *  acting (e.g. combatMoveContext keying a movement budget during a hidden
+   *  NPC's turn) use this instead of current(). Null only when inactive. */
+  activeRound(): { combatId: string; round: number } | null {
+    if (!this.isActive()) return null;
+    const combat = this.combat as CombatRecord;
+    return { combatId: combat.id, round: combat.round };
+  }
+
   view(): EncounterView {
     if (!this.isActive()) return { active: false };
     const combat = this.combat as CombatRecord;

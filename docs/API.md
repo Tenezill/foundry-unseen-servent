@@ -307,7 +307,8 @@ Retrieve the active encounter state. Active means a combat exists with round >= 
       "isPC": boolean,
       "defeated": boolean,
       "health": "healthy" | "wounded" | "bloodied" | "down",  // non-PCs only; omitted for PCs
-      "hp": { "value": number, "max": number }                // PCs only; omitted for non-PCs
+      "hp": { "value": number, "max": number },               // PCs only; omitted for non-PCs
+      "tokenUuid": string      // "Scene.<id>.Token.<id>"; omitted when not well-formed
     }
   ]
 }

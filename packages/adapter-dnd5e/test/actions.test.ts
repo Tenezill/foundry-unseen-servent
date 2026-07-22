@@ -2293,6 +2293,47 @@ describe('combat targeting metadata + use-on-targets (2026-07-22)', () => {
     ).toThrow(/does not support targets/);
   });
 
+  // Final-review Fix 3 (invariant pin): targetingOf must derive from the
+  // item's FIRST activity only, matching targetedUseScript's
+  // `[...activities.values()][0]` selection — never scan every activity.
+  // This clones Guiding Bolt (attack, non-empty damage.parts) but inserts a
+  // 'utility' activity ahead of it, so the attack activity is real but NOT
+  // first. Under the old all-activities scan this item would have been
+  // classified single/attack (an attack activity exists somewhere) even
+  // though the script only ever runs the first (utility) activity — a no-op
+  // targeting descriptor. The fix must leave it untargetable instead.
+  it('an attack activity that is not the FIRST activity does not make the item targetable', () => {
+    const guidingBolt = casterCaptured.items?.find((i) => i._id === 'pZMrJb3AXiRYO5E8');
+    if (!guidingBolt) throw new Error('fixture missing Guiding Bolt');
+    const gbSystem = guidingBolt.system as Record<string, unknown>;
+    const gbActivities = gbSystem.activities as Record<string, unknown>;
+    const gbActivity = gbActivities.dnd5eactivity000 as Record<string, unknown>;
+    const syntheticItem = {
+      ...guidingBolt,
+      _id: 'itemSyntheticNonFirstAttack',
+      name: 'Test Non-First Attack',
+      system: {
+        ...gbSystem,
+        // Insertion order matters: 'utility' first, the real attack
+        // activity (with damage.parts) second.
+        activities: {
+          utilityFirst: { _id: 'utilityFirst', type: 'utility' },
+          dnd5eactivity000: gbActivity,
+        },
+      },
+    } as unknown as FoundryItemDoc;
+    const actor = { ...casterCaptured, items: [...(casterCaptured.items ?? []), syntheticItem] };
+    const found = dnd5eAdapter.actions!(actor).find((a) => a.id === `spell.${syntheticItem._id}.cast`);
+    expect(found).toBeDefined();
+    expect(found!.targeting).toBeUndefined();
+    expect(() =>
+      dnd5eAdapter.buildAction!(actor, {
+        kind: 'cast', actionId: found!.id,
+        targetTokenUuids: ['Scene.s1.Token.t1'],
+      } as never),
+    ).toThrow(/does not support targets/);
+  });
+
   it('equipped weapon attack descriptors carry single/attack targeting', () => {
     const actions = dnd5eAdapter.actions!(martialCaptured);
     const attack = actions.find((a) => a.kind === 'attack');

@@ -420,8 +420,12 @@ export type RelayAction =
 export interface AdapterIO {
   /** relay GET /<systemId>/get-actor-details?details=[…] for this actor. */
   getSystemDetails(details: string[]): Promise<unknown>;
-  /** Derived armor class for an out-of-roster target (Task 8: attack-roll
-   *  resolution against a token not on the caster's own actor sheet). */
+  /** The enriched actor's OWN live derived AC (execute-js read of the
+   *  prepared document). Used by enrich to display correct AC when an
+   *  Active Effect (e.g. Mage Armor's ac.calc override) makes the relay's
+   *  get-actor-details stats.ac stale. Attack resolution never uses this —
+   *  the orchestration script reads target AC inside Foundry. Bounded +
+   *  null-degrading (a stale AC beats no sheet). */
   getDerivedAc?(): Promise<number | null>;
 }
 

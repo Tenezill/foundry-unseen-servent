@@ -1424,6 +1424,10 @@ describe('turn flow (POST /api/encounter/turn/end)', () => {
       livePollMs: 10_000,
       pingMs: 60_000,
       encounters: mgr,
+      // Final-review Fix 4: turnEndTimeoutMs defaults to 15s (execute-js is
+      // slower than a REST fetch) — kept small here so the stalled-relay
+      // test below doesn't have to actually wait 15s.
+      turnEndTimeoutMs: 50,
     });
     return { app: encApp, relay };
   }
@@ -1585,6 +1589,33 @@ describe('movement budget + dash (in combat)', () => {
     });
     const res = await post(encApp, 'a1', { cx: 4, cy: 2 });
     expect(res.statusCode).toBe(409);
+  });
+
+  // Final-review Fix 1: current() (and thus mgr.current()) is null whenever
+  // the acting combatant is hidden, not only when combat is inactive. Before
+  // the fix, combatMoveContext conflated the two and returned
+  // {inCombat:false} — free movement, no budget spend, no own-turn 409 —
+  // during a hidden NPC's turn. It must behave exactly like off-turn instead.
+  it('moving during a hidden NPC turn -> 409 (POST) and inCombat/yourTurn:false (GET)', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    // Acting combatant (turn index 0 in initiative-desc order) is a hidden
+    // NPC with higher initiative than Anna's comb1 (15) — comb1 stays visible.
+    relay.emitUpdateCombat({
+      _id: 'c1',
+      round: 1,
+      turn: 0,
+      scene: 's1',
+      combatants: [
+        { _id: 'hiddenNpc', actorId: 'npc1', initiative: 20, hidden: true, defeated: false, img: null, tokenId: null },
+        combatant('comb1', 'a1', 15),
+      ],
+    });
+    const res = await post(encApp, 'a1', { cx: 4, cy: 2 });
+    expect(res.statusCode).toBe(409);
+    const get = await encApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    const mv = (get.json() as { movement: Record<string, unknown> }).movement;
+    expect(mv.inCombat).toBe(true);
+    expect(mv.yourTurn).toBe(false);
   });
 
   it('dash doubles the budget once and posts a chat note', async () => {
