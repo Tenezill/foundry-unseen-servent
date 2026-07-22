@@ -212,6 +212,8 @@
           :round="encounter.round"
           :turn-combatant-id="encounter.turn?.combatantId ?? null"
           :actor-id="actorId"
+          :can-end-turn="canEndTurn"
+          @end-turn="onEndTurn"
         />
       </div>
 
@@ -259,6 +261,7 @@
         :busy="movementBusy"
         @submit="onMoveSubmit"
         @refresh="refreshMovement"
+        @dash="onDash"
         @close="showMoveSheet = false"
       />
       <TargetPickerSheet
@@ -267,6 +270,21 @@
         :party="party"
         @pick="onTargetPick"
         @close="targetPickerFor = null"
+      />
+      <CombatTargetSheet
+        v-if="combatTargetFor"
+        :encounter="encounter"
+        :mode="combatTargetMode"
+        :title="combatTargetTitle"
+        @pick="onCombatTargetPick"
+        @close="combatTargetFor = null"
+      />
+      <ActionOutcomeSheet
+        v-if="actionOutcome"
+        :outcome="actionOutcome.outcome"
+        :label="actionOutcome.label"
+        :heal-label="actionOutcome.heal"
+        @close="actionOutcome = null"
       />
       <PoolRollSheet
         v-if="poolAction"
@@ -344,6 +362,7 @@
     <DiceTray
       v-if="sheet"
       :actor-id="actorId"
+      :raised="showCarousel"
       :readonly="conn === 'offline'"
       @rolling="startRollAnim('Dice roll')"
       @roll="onDiceRoll"
@@ -364,6 +383,7 @@ import type {
   Stat,
 } from '@companion/adapter-sdk'
 import type {
+  ActionOutcome,
   ActionResponse,
   ActionRollResult,
   ApiErrorBody,
@@ -529,6 +549,32 @@ async function onMoveSubmit(cell: MovementCell): Promise<void> {
   }
 }
 
+/** Dash (2026-07-22 §F4): doubles the per-turn movement budget once per
+ *  turn; the response IS the fresh movement view, same as a move/refresh. */
+async function onDash(): Promise<void> {
+  if (offline.value || movementBusy.value) return
+  movementBusy.value = true
+  try {
+    const res = await api<MovementResponse>(`/api/actors/${actorId.value}/movement/dash`, {
+      method: 'POST',
+    })
+    movement.value = res.movement
+  } catch (err) {
+    const status = errorStatus(err)
+    if (status === 409) {
+      toast.show('Can’t dash right now — refreshed')
+      void refreshMovement()
+    } else if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else {
+      toast.show('Dash didn’t go through. Try again.')
+    }
+  } finally {
+    movementBusy.value = false
+  }
+}
+
 /* ---- M22 encounter mirror ------------------------------------------------ */
 
 const encounter = ref<EncounterView>({ active: false })
@@ -539,6 +585,44 @@ const encounterActive = computed(() => encounter.value.active === true)
  *  follows the app's usual offline idiom instead: it keeps showing the last
  *  known roster, read-only, rather than vanishing on every reconnect blip. */
 const showCarousel = computed(() => encounterActive.value && combatConn.value === 'live')
+
+/** End-turn button gate (2026-07-22 §F4): only the acting combatant's OWN
+ *  player, viewing THAT actor's sheet, sees the button — and only while the
+ *  combat mirror is confirmed live (a stale/reconnecting mirror could be
+ *  wrong about whose turn it is). */
+const canEndTurn = computed(() => {
+  if (combatConn.value !== 'live') return false
+  const turnId = encounter.value.turn?.combatantId
+  if (!turnId) return false
+  const acting = encounter.value.combatants?.find((c) => c.id === turnId)
+  return acting?.actorId === actorId.value
+})
+
+const turnEndBusy = ref(false)
+
+/** Single tap, no confirm (spec). 409 ("no active encounter" / "turn already
+ *  advanced") is a race the combat SSE mirror self-heals from — refresh
+ *  silently; everything else gets the standard error toast. */
+async function onEndTurn(): Promise<void> {
+  if (offline.value || turnEndBusy.value) return
+  turnEndBusy.value = true
+  try {
+    await api<{ ok: true }>('/api/encounter/turn/end', { method: 'POST' })
+  } catch (err) {
+    const status = errorStatus(err)
+    if (status === 409) {
+      /* self-heals via connectCombatEvents — nothing to show */
+    } else if (status === 401) {
+      clearToken()
+      await navigateTo('/join', { replace: true })
+    } else {
+      toast.show('Couldn’t end your turn. Try again.')
+    }
+  } finally {
+    turnEndBusy.value = false
+  }
+}
+
 const combatantForId = ref<string | null>(null)
 const combatantHpBusy = ref(false)
 const combatantFor = computed(() => encounter.value.combatants?.find((c) => c.id === combatantForId.value) ?? null)
@@ -643,6 +727,85 @@ function openTargetPicker(actionId: string): void {
 function closeActionSheet(): void {
   actionSheetFor.value = null
   pendingTargetActorId.value = undefined
+  pendingTargetTokenUuids.value = undefined
+}
+
+/* ---- in-combat targeted actions (2026-07-22) -----------------------------
+ * Actions whose descriptor carries `targeting` (weapon attacks, save spells,
+ * targeted heals) open CombatTargetSheet instead of executing directly —
+ * but only while a live encounter mirror is actually up: offline/reconnecting
+ * combat state must never dead-end a tap, so those fall through to today's
+ * untargeted flow. `targeting` and the buff-cast `targetable` flag never
+ * co-exist on one descriptor (buffs are always effectType 'utility'), so
+ * there's no ordering conflict between the two pickers. */
+const combatTargetFor = ref<string | null>(null)
+const pendingTargetTokenUuids = ref<string[] | undefined>(undefined)
+const actionOutcome = ref<{ outcome: ActionOutcome; label: string; heal?: boolean } | null>(null)
+
+const combatTargetAction = computed(() =>
+  combatTargetFor.value ? (actionMap.value[combatTargetFor.value] ?? null) : null,
+)
+const combatTargetMode = computed<'single' | 'multiple'>(
+  () => combatTargetAction.value?.targeting?.mode ?? 'single',
+)
+const combatTargetTitle = computed(() => {
+  const action = combatTargetAction.value
+  if (!action) return 'Choose target'
+  return `${action.label} — choose target${combatTargetMode.value === 'multiple' ? 's' : ''}`
+})
+
+/** True only when a targeted action should intercept today's flow: live
+ *  combat mirror confirmed AND the descriptor declares `targeting`. */
+function canTargetInCombat(action: ActionDescriptor): boolean {
+  return !!action.targeting && encounterActive.value && combatConn.value === 'live'
+}
+
+/** Opens the combat target sheet for a targetable attack/cast/use; returns
+ *  whether it did, so callers can fall through to their existing behavior
+ *  otherwise (mirrors the targetable-buff `openTargetPicker` short-circuit). */
+function tryOpenCombatTargeting(actionId: string, action: ActionDescriptor): boolean {
+  if (!canTargetInCombat(action)) return false
+  combatTargetFor.value = actionId
+  return true
+}
+
+/** After tokens are picked: a cast with a multi-level slot choice opens the
+ *  existing upcast picker next (tokens carried via pendingTargetTokenUuids,
+ *  consumed in onActionSubmit); everything else (attacks, single/no-slot
+ *  casts, uses) submits immediately with the chosen targets. */
+function onCombatTargetPick(tokenUuids: string[]): void {
+  const actionId = combatTargetFor.value
+  combatTargetFor.value = null
+  if (!actionId) return
+  const action = actionMap.value[actionId]
+  if (!action) return
+  if (action.kind === 'cast') {
+    if (action.slotLevels !== undefined && action.slotLevels.length > 1) {
+      pendingTargetTokenUuids.value = tokenUuids
+      actionSheetFor.value = actionId
+      return
+    }
+    if (action.slotLevels?.length === 0) return
+    const slotLevel = action.slotLevels?.length === 1 ? action.slotLevels[0] : undefined
+    void submitAction(
+      {
+        kind: 'cast',
+        actionId,
+        ...(slotLevel !== undefined ? { slotLevel } : {}),
+        targetTokenUuids: tokenUuids,
+      },
+      action.label,
+      action.effectType,
+    )
+    return
+  }
+  if (action.kind === 'attack') {
+    void submitAction({ kind: 'attack', actionId, targetTokenUuids: tokenUuids }, action.label, action.effectType)
+    return
+  }
+  if (action.kind === 'use') {
+    void submitAction({ kind: 'use', actionId, targetTokenUuids: tokenUuids }, action.label, action.effectType)
+  }
 }
 
 /** After a target is chosen: a multi-level slot choice opens the existing
@@ -1379,10 +1542,12 @@ function onAction(actionId: string): void {
       actionSheetFor.value = actionId
       break
     case 'cast':
+      if (tryOpenCombatTargeting(actionId, action)) break
       if (action.targetable) openTargetPicker(actionId)
       else actionSheetFor.value = actionId
       break
     case 'attack':
+      if (tryOpenCombatTargeting(actionId, action)) break
       actionSheetFor.value = actionId
       break
     case 'damage': {
@@ -1395,6 +1560,7 @@ function onAction(actionId: string): void {
       break
     }
     case 'use':
+      if (tryOpenCombatTargeting(actionId, action)) break
       void submitAction({ kind: 'use', actionId }, action.label, action.effectType)
       break
     case 'equip':
@@ -1431,6 +1597,7 @@ function onCombatAction(actionId: string): void {
   const action = actionMap.value[actionId]
   if (!action) return
   if (action.kind === 'cast') {
+    if (tryOpenCombatTargeting(actionId, action)) return
     if (action.targetable) {
       openTargetPicker(actionId)
       return
@@ -1455,8 +1622,15 @@ function onActionSubmit(intent: ActionIntent): void {
   actionSheetFor.value = null
   const targetActorId = pendingTargetActorId.value
   pendingTargetActorId.value = undefined
-  const finalIntent: ActionIntent =
-    intent.kind === 'cast' && targetActorId ? { ...intent, targetActorId } : intent
+  const targetTokenUuids = pendingTargetTokenUuids.value
+  pendingTargetTokenUuids.value = undefined
+  let finalIntent: ActionIntent = intent.kind === 'cast' && targetActorId ? { ...intent, targetActorId } : intent
+  if (
+    targetTokenUuids &&
+    (finalIntent.kind === 'attack' || finalIntent.kind === 'cast' || finalIntent.kind === 'use')
+  ) {
+    finalIntent = { ...finalIntent, targetTokenUuids }
+  }
   const label =
     intent.kind === 'cast' ? castLabel(action?.label ?? 'Roll', targetActorId) : (action?.label ?? 'Roll')
   void submitAction(finalIntent, label, action?.effectType)
@@ -1782,6 +1956,14 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
     if (intent.kind === 'cast' && intent.slotLevel !== undefined) {
       castLevels.value = { ...castLevels.value, [intent.actionId.replace(/\.cast$/, '.damage')]: intent.slotLevel }
     }
+    if (res.outcome) {
+      // Targeted attack/cast/use (2026-07-22): the per-target outcome sheet
+      // replaces the roll pill entirely, even when `result` also carries the
+      // attack roll total (docs/API.md) — no dice-roll overlay for this path.
+      cancelRollAnim()
+      actionOutcome.value = { outcome: res.outcome, label, heal: effectType === 'heal' }
+      return
+    }
     if (res.result) {
       updateCritArmed(intent, res.result)
       // Weapon damage rolls carry their effect via the intent kind itself
@@ -1836,6 +2018,19 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
       // to another player's invite). Retrying can never succeed — stop
       // pretending the cached sheet works.
       showNotLinked()
+    } else if (
+      status === 409 &&
+      'targetTokenUuids' in intent &&
+      intent.targetTokenUuids &&
+      intent.targetTokenUuids.length > 0
+    ) {
+      // Targeted attack/cast/use with no active encounter (combat ended or
+      // the mirror lagged behind the tap) — the sheet is already fresh, just
+      // explain why the targeted action didn't go through. Untargeted 409s
+      // (e.g. a stale hp write, dash/movement conflicts handled elsewhere)
+      // fall through to the generic copy below — this message would be
+      // actively misleading for them.
+      toast.show('No active encounter — that target picker just closed.')
     } else if (status === 403 || status === 422) {
       const msg = errorData<ApiErrorBody>(err)?.error?.message
       if (msg && /Allow Execute JS/i.test(msg)) toast.show(msg)
@@ -1843,6 +2038,19 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
       void fetchSheet()
     } else if (status === 429) {
       toast.show('Slow down — too many actions at once')
+    } else if (
+      status === 502 &&
+      'targetTokenUuids' in intent &&
+      intent.targetTokenUuids &&
+      intent.targetTokenUuids.length > 0
+    ) {
+      // A targeted orchestration's relay timeout is never retried — Foundry
+      // may already have applied damage — so the gateway's message must
+      // reach the player verbatim rather than the usual generic copy.
+      // Untargeted 502s (e.g. remove-effect, generic upstream errors) fall
+      // through to the pre-existing generic copy below.
+      const msg = errorData<ApiErrorBody>(err)?.error?.message
+      toast.show(msg ?? 'The table didn’t respond. Try again.')
     } else {
       toast.show('The table didn’t respond. Try again.')
     }

@@ -13,6 +13,7 @@ import { IntentError, type SystemAdapter } from '@companion/adapter-sdk';
 import { dnd5eAdapter } from '@companion/adapter-dnd5e';
 import { wod5eAdapter } from '@companion/adapter-wod5e';
 import { buildApp, isSafeDiceFormula, type EncounterManagerPort } from '../src/app.js';
+import { EncounterManager } from '../src/encounters.js';
 import { sha256Hex, type Player } from '../src/players.js';
 import { createRegistry } from '../src/registry.js';
 import {
@@ -1224,6 +1225,449 @@ describe('actions', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 2026-07-22 in-combat targeting: use-on-targets action route. The visible
+// encounter roster (tokenUuid-keyed) is the whole legal target surface —
+// hidden combatants never reach view(), so they're untargetable by
+// construction. Every relay leg here is side-effecting (Foundry may already
+// have applied damage) so a 408 must map to 502 with NO retry, never a bare
+// timeout that invites a double-execution.
+describe('targeted actions (use-on-targets)', () => {
+  let mgr: EncounterManager | null = null;
+
+  const post = (appInst: FastifyInstance, actorId: string, payload: unknown) =>
+    appInst.inject({ method: 'POST', url: `/api/actors/${actorId}/actions`, headers: asAnna, payload: payload as object });
+
+  afterEach(() => {
+    if (mgr) mgr.stop();
+    mgr = null;
+  });
+
+  /** Gateway app wired to a live encounter: Hero (a1, the caster's own
+   *  combatant) and Skeleton, both with tokenUuids — the roster use-on-targets
+   *  validates against. */
+  async function setupWithEncounter(): Promise<{ app: FastifyInstance; relay: FakeRelay }> {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'comb1', name: 'Hero', actorUuid: 'Actor.a1', tokenUuid: 'Scene.s1.Token.t1', initiative: 15 },
+          { id: 'comb2', name: 'Skeleton', tokenUuid: 'Scene.s1.Token.t2', initiative: 10 },
+        ],
+      },
+    ];
+    mgr = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await mgr.start();
+    app = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([fakeAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+      encounters: mgr,
+    });
+    return { app, relay };
+  }
+
+  it('POST actions with targets executes use-on-targets and returns the outcome', async () => {
+    const { app, relay } = await setupWithEncounter();
+    relay.useOnTargetsResult = {
+      attack: { total: 19, formula: '1d20+7', isCritical: false, isFumble: false },
+      targets: [
+        {
+          tokenUuid: 'Scene.s1.Token.t2',
+          name: 'Skeleton',
+          outcome: 'hit',
+          damage: { rolled: [{ type: 'slashing', value: 12 }], applied: 6 },
+        },
+      ],
+    };
+    const res = await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { outcome?: { targets: Array<{ outcome: string }> }; result: unknown };
+    expect(body.outcome?.targets[0]?.outcome).toBe('hit');
+    expect((body.result as { total: number }).total).toBe(19); // attack feeds the roll pill
+    expect(relay.useOnTargetsCalls[0]?.opts.targetTokenUuids).toEqual(['Scene.s1.Token.t2']);
+  });
+
+  it('a multi-target save spell forwards slotKey through use-on-targets', async () => {
+    const { app, relay } = await setupWithEncounter();
+    relay.useOnTargetsResult = {
+      attack: null,
+      targets: [{ tokenUuid: 'Scene.s1.Token.t2', name: 'Skeleton', outcome: 'save-failed' }],
+    };
+    const res = await post(app, 'a1', {
+      kind: 'cast',
+      actionId: 'spell.f1.cast',
+      slotLevel: 4,
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(relay.useOnTargetsCalls[0]?.opts).toEqual({ targetTokenUuids: ['Scene.s1.Token.t2'], slotKey: 'spell4' });
+    const body = res.json() as { outcome?: unknown; result: unknown };
+    expect(body.outcome).toEqual({
+      attack: null,
+      targets: [{ tokenUuid: 'Scene.s1.Token.t2', name: 'Skeleton', outcome: 'save-failed' }],
+    });
+    expect(body.result).toBeNull(); // no attack roll on a save spell -> no roll pill
+  });
+
+  it('rejects a target not in the visible encounter roster (403)', async () => {
+    const { app, relay } = await setupWithEncounter();
+    const res = await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.tX'],
+    });
+    expect(res.statusCode).toBe(403);
+    expect(relay.useOnTargetsCalls).toHaveLength(0); // gate BEFORE the relay call
+  });
+
+  it('rejects targeted actions when no encounter is active (409)', async () => {
+    const { app } = setup(); // harness without encounters wired at all
+    const res = await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('maps a relay 408 to 502 with the check-Foundry-chat message and NO retry', async () => {
+    const { app, relay } = await setupWithEncounter();
+    relay.useOnTargetsTimeout = true;
+    const res = await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(502);
+    expect((res.json() as { error: { message: string } }).error.message).toBe(
+      'Timed out — check the Foundry chat before retrying.',
+    );
+    expect(relay.useOnTargetsCalls).toHaveLength(1); // exactly one attempt
+  });
+
+  it('parseActionIntent rejects malformed target lists (422)', async () => {
+    const { app } = setup();
+    for (const bad of [
+      ['not-a-uuid'],
+      [],
+      ['Scene.s1.Token.t2', 'Scene.s1.Token.t2'],
+      Array.from({ length: 13 }, (_, i) => `Scene.s1.Token.t${i}`),
+    ]) {
+      const res = await post(app, 'a1', { kind: 'attack', actionId: 'item.i1.tattack', targetTokenUuids: bad });
+      expect(res.statusCode, JSON.stringify(bad)).toBe(422);
+    }
+  });
+
+  it('a single-target action rejects more than one target (422 via IntentError INVALID)', async () => {
+    const { app } = await setupWithEncounter();
+    const res = await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.t1', 'Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('INVALID_INTENT');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-07-22 in-combat targeting: end-turn route. Only the acting combatant's
+// owner may advance the turn — the GM keeps NPC turns in Foundry. The relay
+// script itself re-checks who's acting (race-guard), so a stale end-turn
+// (e.g. a double-tap) must degrade to 409, not silently skip someone else.
+describe('turn flow (POST /api/encounter/turn/end)', () => {
+  let mgr: EncounterManager | null = null;
+  const asBob = { authorization: `Bearer ${BOB_TOKEN}` };
+
+  afterEach(() => {
+    if (mgr) mgr.stop();
+    mgr = null;
+  });
+
+  /** Gateway app wired to a live encounter with comb1 (actor a1, owned by
+   *  Anna) as the acting combatant — same seed shape as the targeted-actions
+   *  harness above. */
+  async function setupWithEncounter(): Promise<{ app: FastifyInstance; relay: FakeRelay }> {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'comb1', name: 'Hero', actorUuid: 'Actor.a1', tokenUuid: 'Scene.s1.Token.t1', initiative: 15 },
+          { id: 'comb2', name: 'Skeleton', tokenUuid: 'Scene.s1.Token.t2', initiative: 10 },
+        ],
+      },
+    ];
+    mgr = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await mgr.start();
+    const encApp = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([fakeAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+      encounters: mgr,
+      // Final-review Fix 4: turnEndTimeoutMs defaults to 15s (execute-js is
+      // slower than a REST fetch) — kept small here so the stalled-relay
+      // test below doesn't have to actually wait 15s.
+      turnEndTimeoutMs: 50,
+    });
+    return { app: encApp, relay };
+  }
+
+  it('the acting player ends their turn', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    const res = await encApp.inject({ method: 'POST', url: '/api/encounter/turn/end', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(relay.endTurnCalls).toEqual(['comb1']);
+  });
+
+  it('a player who does not own the acting combatant gets 403', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    const res = await encApp.inject({ method: 'POST', url: '/api/encounter/turn/end', headers: asBob });
+    expect(res.statusCode).toBe(403);
+    expect(relay.endTurnCalls).toHaveLength(0);
+  });
+
+  it('no active encounter -> 409', async () => {
+    // Manager constructed and wired, but relay has no combats -> inactive
+    // (distinct from encounterManager being entirely absent, which would
+    // 404 instead — the turn/end route lives inside `if (encounterManager)`).
+    const relay = new FakeRelay();
+    mgr = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await mgr.start();
+    const encApp = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([fakeAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+      encounters: mgr,
+    });
+    const res = await encApp.inject({ method: 'POST', url: '/api/encounter/turn/end', headers: asAnna });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('turn race (script refuses) -> 409', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    relay.endTurnResult = { advanced: false, reason: 'not-your-turn' };
+    const res = await encApp.inject({ method: 'POST', url: '/api/encounter/turn/end', headers: asAnna });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('stalled relay -> 502 (bounded)', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    relay.hangEndTurn = true;
+    const res = await encApp.inject({ method: 'POST', url: '/api/encounter/turn/end', headers: asAnna });
+    expect(res.statusCode).toBe(502);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-07-22 combat-targeting §F4: per-turn movement budget, dash, and
+// own-turn move gating. Combines the movement-route scene/token harness
+// (GET/POST /api/actors/:id/movement above) with the EncounterManager-over-
+// FakeRelay harness (turn flow above) — actor a1 is combatant comb1, acting
+// first (initiative 15 > comb2's 10), token at grid cell (3,2), speed 30ft.
+describe('movement budget + dash (in combat)', () => {
+  let mgr: EncounterManager | null = null;
+
+  afterEach(() => {
+    if (mgr) mgr.stop();
+    mgr = null;
+  });
+
+  const tok = (id: string, actorId: string | null, x: number, y: number, extra: Record<string, unknown> = {}) =>
+    ({ _id: id, name: `tok-${id}`, x, y, width: 1, height: 1, hidden: false, disposition: 0, actorId, ...extra });
+  const squareScene = (tokens: Array<ReturnType<typeof tok>>) =>
+    ({ _id: 's1', name: 'Crypt', grid: { type: 1, size: 100, distance: 5, units: 'ft' }, tokens });
+
+  /** Raw Foundry Combat doc combatant shape for updateCombat hook frames
+   *  (bare actorId — see encounters.ts normalizeHookCombatant). */
+  const combatant = (id: string, actorId: string | undefined, initiative: number) =>
+    ({ _id: id, actorId, initiative, hidden: false, defeated: false, img: null, tokenId: null });
+
+  async function setupWithEncounter(): Promise<{ app: FastifyInstance; relay: FakeRelay }> {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
+    relay.systemDetails = { stats: { speed: 30 } };
+    relay.scene = squareScene([tok('t1', 'a1', 300, 200), tok('t2', 'm1', 500, 200)]);
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'comb1', name: 'Hero', actorUuid: 'Actor.a1', tokenUuid: 'Scene.s1.Token.t1', initiative: 15 },
+          { id: 'comb2', name: 'Skeleton', tokenUuid: 'Scene.s1.Token.t2', initiative: 10 },
+        ],
+      },
+    ];
+    mgr = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await mgr.start();
+    const encApp = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([fakeAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+      movementTimeoutMs: 50,
+      encounters: mgr,
+    });
+    return { app: encApp, relay };
+  }
+
+  const post = (appInst: FastifyInstance, id: string, body: unknown) =>
+    appInst.inject({
+      method: 'POST',
+      url: `/api/actors/${id}/movement`,
+      headers: { ...asAnna, 'content-type': 'application/json' },
+      payload: JSON.stringify(body),
+    });
+
+  it('GET movement reports combat budget fields', async () => {
+    const { app: encApp } = await setupWithEncounter();
+    const res = await encApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    const mv = (res.json() as { movement: Record<string, unknown> }).movement;
+    expect(mv.inCombat).toBe(true);
+    expect(mv.yourTurn).toBe(true);
+    expect(mv.remainingFt).toBe(30);
+    expect(mv.dashed).toBe(false);
+  });
+
+  it('moves consume the budget; beyond remaining -> 422, exactly-remaining -> 200', async () => {
+    const { app: encApp } = await setupWithEncounter();
+    // FakeRelay.moveToken never mutates relay.scene, so the token's cell as
+    // read back by fetchMovementContext stays at its original (3,2) for every
+    // POST in this test — only the budget tracker's spend advances. First
+    // move: 4 cells (20ft) from (3,2) to (7,2), leaving 10ft (2 cells) of the
+    // 30ft budget.
+    const moved = await post(encApp, 'a1', { cx: 7, cy: 2 });
+    expect(moved.statusCode).toBe(200);
+    const after = await encApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect((after.json() as { movement: { remainingFt: number } }).movement.remainingFt).toBe(10);
+    // Every subsequent move is still measured from the same origin (3,2) —
+    // moving along cy avoids the occupied (5,2) cell (tok t2). A 3-cell move
+    // (15ft) exceeds the 10ft (2-cell) remaining budget -> 422.
+    const tooFar = await post(encApp, 'a1', { cx: 3, cy: 5 });
+    expect(tooFar.statusCode).toBe(422);
+    // A 2-cell move (10ft) exactly consumes what's left -> 200 (tight boundary).
+    const exact = await post(encApp, 'a1', { cx: 3, cy: 4 });
+    expect(exact.statusCode).toBe(200);
+  });
+
+  it('moving off-turn in combat -> 409', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    // flip the turn to comb2 (Skeleton) — Anna's actor a1/comb1 is no longer acting.
+    relay.emitUpdateCombat({
+      _id: 'c1',
+      round: 1,
+      turn: 1,
+      scene: 's1',
+      combatants: [combatant('comb1', 'a1', 15), combatant('comb2', undefined, 10)],
+    });
+    const res = await post(encApp, 'a1', { cx: 4, cy: 2 });
+    expect(res.statusCode).toBe(409);
+  });
+
+  // Final-review Fix 1: current() (and thus mgr.current()) is null whenever
+  // the acting combatant is hidden, not only when combat is inactive. Before
+  // the fix, combatMoveContext conflated the two and returned
+  // {inCombat:false} — free movement, no budget spend, no own-turn 409 —
+  // during a hidden NPC's turn. It must behave exactly like off-turn instead.
+  it('moving during a hidden NPC turn -> 409 (POST) and inCombat/yourTurn:false (GET)', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    // Acting combatant (turn index 0 in initiative-desc order) is a hidden
+    // NPC with higher initiative than Anna's comb1 (15) — comb1 stays visible.
+    relay.emitUpdateCombat({
+      _id: 'c1',
+      round: 1,
+      turn: 0,
+      scene: 's1',
+      combatants: [
+        { _id: 'hiddenNpc', actorId: 'npc1', initiative: 20, hidden: true, defeated: false, img: null, tokenId: null },
+        combatant('comb1', 'a1', 15),
+      ],
+    });
+    const res = await post(encApp, 'a1', { cx: 4, cy: 2 });
+    expect(res.statusCode).toBe(409);
+    const get = await encApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    const mv = (get.json() as { movement: Record<string, unknown> }).movement;
+    expect(mv.inCombat).toBe(true);
+    expect(mv.yourTurn).toBe(false);
+  });
+
+  it('dash doubles the budget once and posts a chat note', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    const res = await encApp.inject({ method: 'POST', url: '/api/actors/a1/movement/dash', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { movement: { remainingFt: number; dashed: boolean } }).movement)
+      .toMatchObject({ remainingFt: 60, dashed: true });
+    expect(relay.chatNoteCalls).toHaveLength(1);
+    const again = await encApp.inject({ method: 'POST', url: '/api/actors/a1/movement/dash', headers: asAnna });
+    expect(again.statusCode).toBe(409);
+  });
+
+  it('dash still succeeds when the best-effort chat note rejects', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    relay.chatNoteError = true;
+    const res = await encApp.inject({ method: 'POST', url: '/api/actors/a1/movement/dash', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { movement: { remainingFt: number; dashed: boolean } }).movement)
+      .toMatchObject({ remainingFt: 60, dashed: true });
+  });
+
+  it('a new round refills the budget (lazy reset)', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    await post(encApp, 'a1', { cx: 7, cy: 2 });
+    relay.emitUpdateCombat({
+      _id: 'c1',
+      round: 2,
+      turn: 0,
+      scene: 's1',
+      combatants: [combatant('comb1', 'a1', 15), combatant('comb2', undefined, 10)],
+    });
+    const res = await encApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    expect((res.json() as { movement: { remainingFt: number } }).movement.remainingFt).toBe(30);
+  });
+
+  it('out of combat the movement view carries no budget fields', async () => {
+    const { app: plainApp, relay } = setup({ movementTimeoutMs: 50 });
+    relay.systemDetails = { stats: { speed: 30 } };
+    relay.scene = squareScene([tok('t1', 'a1', 300, 200)]);
+    const res = await plainApp.inject({ method: 'GET', url: '/api/actors/a1/movement', headers: asAnna });
+    const mv = (res.json() as { movement: Record<string, unknown> }).movement;
+    expect(mv).toEqual({
+      onScene: true, sceneId: 's1', gridDistance: 5, gridUnits: 'ft', speedFt: 30,
+      token: { cx: 3, cy: 2 }, others: [],
+    });
+    expect(mv.inCombat).toBeUndefined();
+    expect(mv.remainingFt).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // M23 review fix: parseActionIntent had no 'pool'/'rouse' cases, so the real
 // wod5e adapter's pool rolls and rouse checks 422'd at the gateway before
 // ever reaching buildAction. Uses the REAL wod5eAdapter (not fakeAdapter)
@@ -1475,6 +1919,51 @@ describe('adapter enrichment', () => {
     expect(hp.max).toBe(30);
     expect(res.body).not.toContain(FAKE_API_KEY);
     expect(res.body).not.toContain(FAKE_RELAY_URL);
+  });
+
+  // 2026-07-22 Mage Armor (Task 8): the io object handed to enrich() carries
+  // getDerivedAc, wired to relay.getDerivedAc bounded by encounterFetchTimeoutMs.
+  // fakeAdapter itself has no enrich (registry test double), so this proves the
+  // wiring reaches an adapter that opts in, using a locally-scoped adapter like
+  // the hp-override test above.
+  it('passes getDerivedAc through to enrich() and lets it override the AC resource', async () => {
+    const relay = new FakeRelay();
+    const doc = actorDoc('a1', 'Sariel', 24, 30);
+    (doc as Record<string, unknown>).effects = [{
+      _id: 'ae1', name: 'Mage Armor', disabled: false,
+      changes: [{ key: 'system.attributes.ac.calc', mode: 5, value: 'mage' }],
+    }];
+    relay.entities.set('Actor.a1', doc);
+    relay.derivedAc = 14;
+    const acAwareAdapter = {
+      ...fakeAdapter,
+      async enrich(
+        actor: Parameters<typeof fakeAdapter.toViewModel>[0],
+        io: { getSystemDetails(d: string[]): Promise<unknown>; getDerivedAc?(): Promise<number | null> },
+      ) {
+        const effects = Array.isArray((actor as Record<string, unknown>).effects)
+          ? ((actor as Record<string, unknown>).effects as unknown[])
+          : [];
+        if (effects.length === 0 || io.getDerivedAc === undefined) return actor;
+        const live = await io.getDerivedAc();
+        if (live === null) return actor;
+        const system = actor.system as { ac: number };
+        return { ...actor, system: { ...system, ac: live } };
+      },
+    };
+    app = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([acAwareAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+    });
+    const res = await app.inject({ method: 'GET', url: '/api/actors/a1/sheet', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    const ac = res.json().sheet.resources.find((r: { id: string }) => r.id === 'ac');
+    expect(ac.value).toBe(14);
+    expect(relay.getDerivedAcCalls).toEqual(['Actor.a1']);
   });
 });
 

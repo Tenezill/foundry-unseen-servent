@@ -79,7 +79,7 @@ otherwise (wod5e health/willpower vs. hunger/stains).
 ### `GET /api/actors/:id/movement`
 
 Movement context for the actor's token on the ACTIVE scene (square grids only).
-`{ movement: { onScene, sceneId?, gridDistance?, gridUnits?, speedFt?, token?: {cx,cy}, others?: [{cx,cy,disposition,name?}] } }`
+`{ movement: { onScene, sceneId?, gridDistance?, gridUnits?, speedFt?, token?: {cx,cy}, others?: [{cx,cy,disposition,name?}], inCombat?, yourTurn?, remainingFt?, dashed? } }`
 `onScene:false` when there is no active scene, the grid is not square, or the
 actor has no token there. Coordinates are grid cells, never pixels. GM-hidden
 tokens are stripped server-side. Multi-square tokens contribute one `others`
@@ -87,15 +87,39 @@ entry per covered cell (same `disposition`/`name` on each), so a 2×2 monster
 occupies all 4 of its cells, not just its anchor. 404 foreign/unknown actor;
 502 relay failure.
 
+**In combat** (2026-07-22 §F4): when the actor is a live combatant, the flat
+fields `inCombat: true`, `yourTurn`, `remainingFt`, and `dashed` are added.
+`remainingFt` is the actor's per-turn movement budget still available this
+round (`speedFt`, doubled once `dashed`, minus feet already spent this turn —
+see `POST .../movement` and `.../movement/dash` below). Out of combat (no
+live encounter, or the actor isn't a combatant) these fields are entirely
+absent — the response is byte-for-byte the pre-combat shape.
+
 ### `POST /api/actors/:id/movement`
 
 Body `{ cx, cy }` (grid cell). Validates ownership (404), range (422
-INVALID_INTENT, Chebyshev ≤ floor(speed/gridDistance)), occupancy by visible
-tokens (409 CONFLICT), token-on-scene (409). On success moves the token in
-Foundry (animated, straight line) and returns `{ movement }` with the token at
-the new cell. 429 rate-limited; 502 relay failure/stall, including a stall
+INVALID_INTENT, Chebyshev ≤ floor(speed/gridDistance) — in combat, "speed"
+here is the remaining per-turn budget, not the full walk speed), occupancy by
+visible tokens (409 CONFLICT), token-on-scene (409). In combat, moving when
+it isn't the actor's turn is `409 CONFLICT` ("not your turn") — checked before
+range/occupancy. On success moves the token in Foundry (animated, straight
+line), deducts the Chebyshev distance moved (×`gridDistance`, in feet) from
+the per-turn budget, and returns `{ movement }` with the token at the new
+cell (plus the refreshed `inCombat`/`yourTurn`/`remainingFt`/`dashed` fields
+when in combat). 429 rate-limited; 502 relay failure/stall, including a stall
 while fetching the active scene (distinct from the relay answering "no active
 scene", which is the 409 above).
+
+### `POST /api/actors/:id/movement/dash` (2026-07-22 §F4)
+
+Doubles the actor's per-turn movement budget for the current round (once per
+turn) and posts a best-effort "`<name>` dashes!" chat note in Foundry for GM
+visibility (a failed/slow note never fails the dash). Returns `200
+{ movement }` — same shape as the GET/POST movement routes, with
+`remainingFt` reflecting the doubled budget and `dashed: true`. `409
+CONFLICT` when the actor isn't in combat, it isn't their turn, or they've
+already dashed this turn. 404 foreign/unknown actor; 429 rate-limited; 502
+relay failure/stall fetching the scene.
 
 ### `POST /api/actors/:id/intents`
 Body: a single `ResourceIntent`:
@@ -127,6 +151,8 @@ lists everything legal; `actionId` must reference one of them.
 { "kind": "attack", "actionId": "item.X3ab9.attack" }
 { "kind": "cast",   "actionId": "spell.k9Q2f.cast" }
 { "kind": "cast",   "actionId": "spell.k9Q2f.cast", "targetActorId": "kbXH9…" }
+{ "kind": "attack", "actionId": "item.X3ab9.attack", "targetTokenUuids": ["Scene.abc123.Token.def456"] }
+{ "kind": "cast",   "actionId": "spell.k9Q2f.cast", "slotLevel": 4, "targetTokenUuids": ["Scene.abc123.Token.def456", "Scene.abc123.Token.ghi789"] }
 { "kind": "use",    "actionId": "feature.p0Wm1.use" }
 { "kind": "equip",  "actionId": "item.X3ab9.equip", "equipped": false }
 { "kind": "move",   "actionId": "item.X3ab9.move", "containerId": "wYUZWMKa6FntpIvv" }
@@ -155,6 +181,27 @@ applies the buff to the caster, unchanged from the pre-target-buffs
 behavior. Self-only buffs (e.g. Shield) never carry `targetable` on their
 descriptor and are unaffected.
 
+`attack`, `use`, and `cast` also accept an optional `targetTokenUuids`
+(in-combat targeting, 2026-07-22): full REST-scoped token uuids
+(`Scene.<id>.Token.<id>`, 1-12 entries, no duplicates — anything else →
+`422 INVALID_INTENT`). Only meaningful for actions whose descriptor carries a
+`targeting` block (`{ mode: "single" | "multiple", kind: "attack" | "save" |
+"heal" }`); an untargetable action ignores the field. When present, the
+gateway routes the action through one relay orchestration
+(target → activity use → attack/save resolution → damage roll → apply
+damage per target — Foundry owns all the rules) instead of the plain
+`use-item`/`use-spell`/roll paths, and the response gains an `outcome` field
+(see below). Requires a **currently active encounter**: with none running →
+`409 CONFLICT`. Every target must appear in the active encounter's visible
+roster (`GET /api/encounter`'s combatants, keyed by `tokenUuid`) — hidden
+combatants never reach that roster and so can never be targeted; any target
+outside it → `403 FORBIDDEN_RESOURCE`, checked *before* the relay call (no
+slot/use is burned). This leg is side-effecting and **never retried**: a
+relay timeout (408) — Foundry's orchestration may already have applied
+damage — maps to `502 UPSTREAM` with the message "Timed out — check the
+Foundry chat before retrying." rather than the usual null-result 200
+tolerance other cast/use paths give a 408.
+
 `move` (M19) relocates an item to a container or to carried; `containerId` is
 the container item's `_id` (a bare item id, not an action id) or `null`
 (carried). No roll or chat card. `pool` (M23, wod5e) rolls an
@@ -180,10 +227,20 @@ Semantics (server-enforced, in this order):
    same actor, or `null` → else `422`. No cycles: an item cannot move into
    itself, and a container cannot move into its own (transitive) contents →
    else `422`.
-5. Execute via the relay (Foundry rolls, posts chat cards as the character,
+5. For a targeted `attack`/`use`/`cast` (`targetTokenUuids` present and the
+   adapter routes it through the targeted-use orchestration): an active
+   encounter is required → else `409 CONFLICT`; every target must be in the
+   active encounter's visible roster → else `403 FORBIDDEN_RESOURCE`. Both
+   checks run before the relay call.
+6. Execute via the relay (Foundry rolls, posts chat cards as the character,
    consumes slots/uses itself), then:
-   `200 { "result": { "total": 14, "formula": "1d20 + 5", "isCritical": false, "isFumble": false } | null, "sheet": SheetViewModel }`
-   (`result` is null for actions without a roll, e.g. equip or move.)
+   `200 { "result": { "total": 14, "formula": "1d20 + 5", "isCritical": false, "isFumble": false } | null, "outcome"?: TargetedUseResult, "sheet": SheetViewModel }`
+   (`result` is null for actions without a roll, e.g. equip or move.
+   `outcome` is present only for the targeted orchestration above — the
+   per-target attack/save/damage detail
+   (`{ attack: {...} | null, targets: [{ tokenUuid, name, outcome, save?,
+   damage? }] }`); `result` still carries the attack roll total for the roll
+   pill when `outcome.attack` is non-null.)
 
 Shares the write rate limit with intents (30/min per token).
 
@@ -250,7 +307,8 @@ Retrieve the active encounter state. Active means a combat exists with round >= 
       "isPC": boolean,
       "defeated": boolean,
       "health": "healthy" | "wounded" | "bloodied" | "down",  // non-PCs only; omitted for PCs
-      "hp": { "value": number, "max": number }                // PCs only; omitted for non-PCs
+      "hp": { "value": number, "max": number },               // PCs only; omitted for non-PCs
+      "tokenUuid": string      // "Scene.<id>.Token.<id>"; omitted when not well-formed
     }
   ]
 }
@@ -300,6 +358,25 @@ Semantics (server-enforced, in this order):
 
 Additional errors:
 - `502 UPSTREAM` — relay timeout or unreachable.
+
+### `POST /api/encounter/turn/end`
+Advance the combat turn. No body.
+
+Semantics (server-enforced, in this order):
+1. Shared write limiter (30/min per token) → else `429 RATE_LIMITED`.
+2. An encounter must be active with a resolvable acting combatant → else
+   `409 CONFLICT` ("no active encounter").
+3. Only the acting combatant's own player may end their turn — the GM keeps
+   NPC turns in Foundry itself — else `403 FORBIDDEN_RESOURCE` ("not your
+   turn").
+4. The relay re-checks (script-side race guard) that the expected combatant
+   is still acting before calling `combat.nextTurn()`. If a concurrent
+   change already advanced/altered the turn, it refuses → `409 CONFLICT`
+   ("turn already advanced").
+5. On success: `200 { "ok": true }`.
+
+Additional errors:
+- `502 UPSTREAM` — relay timeout or unreachable (bounded).
 
 ### `GET /healthz` (no auth)
 → `200 { "ok": true, "relay": "connected" | "disconnected" }`

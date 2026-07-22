@@ -1206,6 +1206,22 @@ function normalizeStatuses(raw: unknown): string[] {
   return [];
 }
 
+/** True when an enabled Active Effect changes any system.attributes.ac*
+ *  path (Mage Armor's ac.calc OVERRIDE, Shield's ac.bonus…). Gate for the
+ *  extra execute-js AC read — rare enough to keep sheet loads cheap. */
+function hasAcEffect(actor: FoundryActorDoc): boolean {
+  const effects = Array.isArray(actor.effects) ? actor.effects : [];
+  return effects.some((e) => {
+    const eff = rec(e);
+    if (eff.disabled === true) return false;
+    const changes = Array.isArray(eff.changes) ? eff.changes : [];
+    return changes.some((c) => {
+      const key = rec(c).key;
+      return typeof key === 'string' && key.startsWith('system.attributes.ac');
+    });
+  });
+}
+
 function parseEffects(actor: FoundryActorDoc): EffectSummary {
   const rawEffects = getPath(actor, 'effects');
   const effects = Array.isArray(rawEffects) ? rawEffects : [];
@@ -1570,6 +1586,14 @@ function activityType(item: FoundryItemDoc): string | undefined {
  * Not exposed on weapon attack/damage descriptors — Attacks is already its
  * own unfiltered section.
  */
+function hasSaveWithDamage(activities: Rec[]): boolean {
+  return activities.some((a) => {
+    if (a.type !== 'save') return false;
+    const parts = getPath(a, 'damage.parts');
+    return Array.isArray(parts) && parts.length > 0;
+  });
+}
+
 function effectTypeOf(item: FoundryItemDoc): 'damage' | 'heal' | 'utility' {
   const activities = allActivities(item);
   if (activities.some((a) => a.type === 'heal')) return 'heal';
@@ -1578,18 +1602,43 @@ function effectTypeOf(item: FoundryItemDoc): 'damage' | 'heal' | 'utility' {
   if (item.type === 'spell' || item.type === 'feat') {
     if (activities.some((a) => a.type === 'attack')) return 'damage';
   }
-  const hasSaveDamage = activities.some((a) => {
-    if (a.type !== 'save') return false;
-    const parts = getPath(a, 'damage.parts');
-    return Array.isArray(parts) && parts.length > 0;
-  });
-  if (hasSaveDamage) return 'damage';
+  if (hasSaveWithDamage(activities)) return 'damage';
   const hasSave = activities.some((a) => a.type === 'save');
   const hasUtilityRoll = activities.some(
     (a) => a.type === 'utility' && typeof getPath(a, 'roll.formula') === 'string' && getPath(a, 'roll.formula') !== '',
   );
   if (hasSave && hasUtilityRoll) return 'damage';
   return 'utility';
+}
+
+/**
+ * In-combat targeting capability (2026-07-22): attack-roll damage → single
+ * target; save-vs-DC damage → multiple (Fireball can catch several
+ * combatants, friends included); heals → single. Utility-roll damage items
+ * (Bead of Force's split activities) stay untargeted in v1 — their damage
+ * has no per-target resolution rule to apply.
+ *
+ * INVARIANT (final-review Fix 3): the targeting descriptor must be derived
+ * from the item's FIRST activity only, mirroring what actually executes —
+ * targetedUseScript (foundry-client) runs `[...activities.values()][0]` and
+ * never looks past it. Scanning ALL activities here (the old behavior) could
+ * classify an item as targetable off an attack/save activity that isn't
+ * first; the script would then run some OTHER (e.g. utility) activity and
+ * no-op the targeting entirely. Restricting to the first activity is the
+ * SAFE direction — an item can only lose targeting it doesn't actually have,
+ * never gain targeting it can't execute.
+ */
+function targetingOf(item: FoundryItemDoc): { mode: 'single' | 'multiple'; kind: 'attack' | 'save' | 'heal' } | undefined {
+  const et = effectTypeOf(item);
+  if (et === 'heal') return { mode: 'single', kind: 'heal' };
+  if (et !== 'damage') return undefined;
+  const first = firstActivity(item);
+  if (first.type === 'attack') return { mode: 'single', kind: 'attack' };
+  if (first.type === 'save') {
+    const parts = getPath(first, 'damage.parts');
+    if (Array.isArray(parts) && parts.length > 0) return { mode: 'multiple', kind: 'save' };
+  }
+  return undefined;
 }
 
 /**
@@ -1943,7 +1992,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     if (item.type === 'weapon' && getPath(item.system, 'equipped') === true) {
       // Stowed weapons keep their row + equip toggle but offer no rolls —
       // equipping brings Attack/Dmg back (2026-07-18 design).
-      out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack' });
+      out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack', targeting: { mode: 'single', kind: 'attack' } });
       if (weaponDamageFormula(actor, item) !== undefined) {
         out.push({ id: `item.${item._id}.damage`, label: item.name, kind: 'damage' });
       }
@@ -1951,7 +2000,15 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     if (isUsableInventoryItem(item)) {
       // Offered even at 0 uses/quantity — Foundry owns the rules and refuses
       // when empty (same philosophy as unprepared spells).
-      out.push({ id: `item.${item._id}.use`, label: item.name, kind: 'use', group: 'items', effectType: effectTypeOf(item) });
+      const itemTargeting = targetingOf(item);
+      out.push({
+        id: `item.${item._id}.use`,
+        label: item.name,
+        kind: 'use',
+        group: 'items',
+        effectType: effectTypeOf(item),
+        ...(itemTargeting !== undefined ? { targeting: itemTargeting } : {}),
+      });
     }
     if (isEquippable(item)) {
       out.push({
@@ -1986,6 +2043,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       // own Prepare toggle below — so the player can ready it; cluttering the
       // Actions tab with spells that Foundry would just refuse was confusing.
       if (level === 0 || isPrepared || freeUse !== undefined) {
+        const spellTargeting = targetingOf(item);
         out.push({
           id: `spell.${item._id}.cast`,
           label: freeUse !== undefined ? `${item.name} (free use)` : item.name,
@@ -1994,6 +2052,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
           // (Cantrips / 1st Level / …), same split as the Spells tab.
           level: Math.max(0, Math.min(9, level)),
           effectType: effectTypeOf(item),
+          ...(spellTargeting !== undefined ? { targeting: spellTargeting } : {}),
           ...(selfBuffEffect(actor, item) !== undefined && !buffTargetIsSelf(item) ? { targetable: true } : {}),
           // slotLevels semantics (2026-07-19 spec): absent = direct cast, no
           // picker (cantrips, free-use, pact-payable); otherwise the payable
@@ -2028,7 +2087,14 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       }
     }
     if (isUsableFeature(item)) {
-      out.push({ id: `feature.${item._id}.use`, label: item.name, kind: 'use', effectType: effectTypeOf(item) });
+      const featureTargeting = targetingOf(item);
+      out.push({
+        id: `feature.${item._id}.use`,
+        label: item.name,
+        kind: 'use',
+        effectType: effectTypeOf(item),
+        ...(featureTargeting !== undefined ? { targeting: featureTargeting } : {}),
+      });
     }
   }
 
@@ -2099,6 +2165,22 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
     );
   }
 
+  // In-combat targeting (2026-07-22): validated once here, shared by the
+  // attack/use/cast cases below — Foundry owns resolution, this only checks
+  // the descriptor's own targeting capability and single/multiple arity.
+  const targeted =
+    'targetTokenUuids' in intent && Array.isArray(intent.targetTokenUuids) && intent.targetTokenUuids.length > 0
+      ? intent.targetTokenUuids
+      : undefined;
+  if (targeted !== undefined) {
+    if (descriptor.targeting === undefined) {
+      throw new IntentError(`action "${intent.actionId}" does not support targets`, 'INVALID');
+    }
+    if (descriptor.targeting.mode === 'single' && targeted.length !== 1) {
+      throw new IntentError(`action "${intent.actionId}" takes a single target`, 'INVALID');
+    }
+  }
+
   switch (intent.kind) {
     case 'check':
     case 'save': {
@@ -2114,6 +2196,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         throw new IntentError(`unknown roll mode "${String(mode)}"`, 'INVALID');
       }
       const itemId = intent.actionId.slice('item.'.length, -'.attack'.length);
+      if (targeted !== undefined) {
+        return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted, ...(mode !== undefined ? { mode } : {}) };
+      }
       // Plain Roll: Foundry-native item use (consumes ammo/uses, rolls to hit).
       if (mode === undefined) return { endpoint: 'use-item', itemId };
       // Advantage/disadvantage: companion-built to-hit (the relay's use-item
@@ -2176,6 +2261,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         if (item && requiresAttunement(item) && !isAttuned(item)) {
           throw new IntentError(`"${item.name}" requires attunement`, 'INVALID');
         }
+        if (targeted !== undefined) {
+          return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted };
+        }
         if (item) {
           const effect = effectTypeOf(item);
           if (effect === 'heal') {
@@ -2201,6 +2289,9 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       }
       const itemId = intent.actionId.slice('feature.'.length, -'.use'.length);
       const item = (actor.items ?? []).find((i) => i._id === itemId);
+      if (targeted !== undefined) {
+        return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted };
+      }
       if (item && activityType(item) === 'heal') {
         return buildHealAction(actor, item, intent.actionId);
       }
@@ -2224,6 +2315,14 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         }
       }
       const upcast = descriptor.slotLevels !== undefined && chosen > baseLevel;
+      if (targeted !== undefined) {
+        return {
+          endpoint: 'use-on-targets',
+          itemId,
+          targetTokenUuids: targeted,
+          ...(upcast ? { slotKey: `spell${chosen}` } : {}),
+        };
+      }
       const buff = item ? selfBuffEffect(actor, item) : undefined;
       if (buff) {
         return {
@@ -2659,6 +2758,24 @@ async function enrich(actor: FoundryActorDoc, io: AdapterIO): Promise<FoundryAct
     }
     base.abilities = abilities;
     merged = base;
+  }
+
+  // 2026-07-22 Mage Armor: the relay's get-actor-details stats.ac does not
+  // recompute ac.calc overrides. When an AC-touching effect is active, read
+  // the live prepared AC (execute-js) and let it win; null degrades to the
+  // stats.ac merge above.
+  if (hasAcEffect(actor) && io.getDerivedAc !== undefined) {
+    try {
+      const liveAc = await io.getDerivedAc();
+      if (liveAc !== null) {
+        const base = merged ?? { ...system };
+        const attributes = rec(base.attributes);
+        base.attributes = { ...attributes, ac: { ...rec(attributes.ac), value: liveAc } };
+        merged = base;
+      }
+    } catch {
+      /* keep the stats.ac merge */
+    }
   }
 
   return merged === undefined ? actor : { ...actor, system: merged };

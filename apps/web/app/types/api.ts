@@ -32,8 +32,28 @@ export interface ActionRollResult {
   flavor?: string
 }
 
+/** One target's result from a targeted attack/cast/use orchestration
+ *  (docs/API.md TargetedUseResult, 2026-07-22). */
+export interface ActionOutcomeTarget {
+  tokenUuid: string
+  name: string
+  outcome: 'hit' | 'miss' | 'save-failed' | 'save-passed' | 'applied' | 'gone'
+  save?: { total: number; dc: number }
+  damage?: { rolled: Array<{ type: string; value: number }>; applied: number }
+}
+
+/** Per-target attack/save/damage detail returned alongside `result` for a
+ *  targeted action (`targetTokenUuids` present on the intent) — replaces the
+ *  roll pill with `ActionOutcomeSheet` in the client (2026-07-22). */
+export interface ActionOutcome {
+  attack: { total: number; formula: string; isCritical: boolean; isFumble: boolean } | null
+  targets: ActionOutcomeTarget[]
+}
+
 export interface ActionResponse {
   result: ActionRollResult | null
+  /** Present only for a targeted attack/cast/use (docs/API.md). */
+  outcome?: ActionOutcome
   sheet: SheetViewModel
 }
 
@@ -115,6 +135,9 @@ export interface EncounterCombatantView {
   defeated: boolean
   health?: 'healthy' | 'wounded' | 'bloodied' | 'down'
   hp?: { value: number; max: number }
+  /** Full "Scene.<id>.Token.<id>" uuid — the combat target picker's currency
+   *  (2026-07-22). Absent when the combatant has no well-formed token link. */
+  tokenUuid?: string
 }
 
 /** GET /api/encounter response body (bare, not envelope-wrapped) and the
@@ -159,6 +182,12 @@ export interface MovementView {
   speedFt?: number
   token?: MovementCell
   others?: MovementOther[]
+  /** Present only when the actor is a combatant in a live encounter
+   *  (2026-07-22 §F4 turn-flow UI). */
+  inCombat?: boolean
+  yourTurn?: boolean
+  remainingFt?: number
+  dashed?: boolean
 }
 
 export interface MovementResponse {
