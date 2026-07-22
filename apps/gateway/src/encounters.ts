@@ -33,6 +33,8 @@ export interface EncounterCombatantView {
   health?: 'healthy' | 'wounded' | 'bloodied' | 'down';
   /** PCs only — exact HP never serialized for a non-PC combatant. */
   hp?: { value: number; max: number };
+  /** Full "Scene.<id>.Token.<id>" uuid — the combat target picker's currency (2026-07-22). Only set when well-formed. */
+  tokenUuid?: string;
 }
 
 export interface EncounterView {
@@ -54,6 +56,8 @@ export interface CombatantRecord {
   initiative: number | null;
   hidden: boolean;
   defeated: boolean;
+  /** Full "Scene.<id>.Token.<id>" uuid — the combat target picker's currency (2026-07-22). Only set when well-formed. */
+  tokenUuid?: string;
 }
 
 interface CombatRecord {
@@ -156,6 +160,29 @@ export class EncounterManager {
     return this.combat?.combatants.find((c) => c.id === id);
   }
 
+  /** The acting combatant (2026-07-22 turn flow): null when inactive or when
+   *  the acting combatant is hidden — identical visibility rule to view().turn. */
+  current(): { combatId: string; round: number; combatantId: string; actorId?: string } | null {
+    if (!this.isActive()) return null;
+    const combat = this.combat as CombatRecord;
+    const id = this.view().turn?.combatantId ?? null;
+    if (id === null) return null;
+    const rec = this.combatant(id);
+    if (!rec) return null;
+    return {
+      combatId: combat.id,
+      round: combat.round,
+      combatantId: id,
+      ...(rec.actorId !== undefined ? { actorId: rec.actorId } : {}),
+    };
+  }
+
+  /** First non-hidden combatant linked to this actor (movement budget / End
+   *  turn both key on it). */
+  combatantByActorId(actorId: string): CombatantRecord | undefined {
+    return this.combat?.combatants.find((c) => c.actorId === actorId && !c.hidden);
+  }
+
   view(): EncounterView {
     if (!this.isActive()) return { active: false };
     const combat = this.combat as CombatRecord;
@@ -208,6 +235,7 @@ export class EncounterManager {
       defeated: c.defeated,
       ...(c.actorId !== undefined ? { actorId: c.actorId } : {}),
       ...(c.img !== undefined ? { img: c.img } : {}),
+      ...(c.tokenUuid !== undefined ? { tokenUuid: c.tokenUuid } : {}),
     };
     // Degrade path (bounded fetch timed out/failed, or not fetched yet):
     // never PC, never exact hp — a generic "healthy" beats leaking nothing
@@ -467,6 +495,7 @@ function normalizeRestCombat(e: RelayEncounter): CombatRecord {
 
 function normalizeRestCombatant(c: RelayCombatant): CombatantRecord {
   const actorId = actorIdFromUuid(c.actorUuid);
+  const tokenUuid = normalizeTokenUuid(c.tokenUuid);
   return {
     id: c.id,
     ...(actorId !== undefined ? { actorId } : {}),
@@ -475,23 +504,29 @@ function normalizeRestCombatant(c: RelayCombatant): CombatantRecord {
     initiative: typeof c.initiative === 'number' ? c.initiative : null,
     hidden: c.hidden === true,
     defeated: c.defeated === true,
+    ...(tokenUuid !== undefined ? { tokenUuid } : {}),
   };
 }
 
 function normalizeHookCombat(raw: Record<string, unknown>): CombatRecord {
   const rawCombatants = Array.isArray(raw.combatants) ? raw.combatants : [];
+  const sceneId = typeof raw.scene === 'string' && raw.scene !== '' ? raw.scene : undefined;
   return {
     id: typeof raw._id === 'string' ? raw._id : '',
     round: typeof raw.round === 'number' ? raw.round : 0,
     turn: typeof raw.turn === 'number' ? raw.turn : null,
     combatants: rawCombatants
       .filter((c): c is Record<string, unknown> => c !== null && typeof c === 'object')
-      .map(normalizeHookCombatant),
+      .map((c) => normalizeHookCombatant(c, sceneId)),
   };
 }
 
-function normalizeHookCombatant(raw: Record<string, unknown>): CombatantRecord {
+function normalizeHookCombatant(raw: Record<string, unknown>, sceneId?: string): CombatantRecord {
   const actorId = typeof raw.actorId === 'string' && raw.actorId !== '' ? raw.actorId : undefined;
+  const tokenUuid =
+    sceneId !== undefined && typeof raw.tokenId === 'string' && raw.tokenId !== ''
+      ? normalizeTokenUuid(`Scene.${sceneId}.Token.${raw.tokenId}`)
+      : undefined;
   return {
     id: typeof raw._id === 'string' ? raw._id : '',
     ...(actorId !== undefined ? { actorId } : {}),
@@ -500,6 +535,7 @@ function normalizeHookCombatant(raw: Record<string, unknown>): CombatantRecord {
     initiative: typeof raw.initiative === 'number' ? raw.initiative : null,
     hidden: raw.hidden === true,
     defeated: raw.defeated === true,
+    ...(tokenUuid !== undefined ? { tokenUuid } : {}),
   };
 }
 
@@ -509,6 +545,14 @@ function actorIdFromUuid(uuid: string | undefined): string | undefined {
   if (uuid === undefined || !uuid.startsWith('Actor.')) return undefined;
   const id = uuid.split('.').pop();
   return id !== undefined && id !== '' ? id : undefined;
+}
+
+const TOKEN_UUID_RE = /^Scene\.[A-Za-z0-9]{1,32}\.Token\.[A-Za-z0-9]{1,32}$/;
+
+/** REST combatants carry tokenUuid directly; anything not a full
+ *  Scene.*.Token.* uuid is dropped rather than guessed. */
+function normalizeTokenUuid(raw: unknown): string | undefined {
+  return typeof raw === 'string' && TOKEN_UUID_RE.test(raw) ? raw : undefined;
 }
 
 function toActorCacheEntry(actorId: string, doc: Record<string, unknown>): ActorCacheEntry {
