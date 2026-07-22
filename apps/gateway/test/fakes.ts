@@ -303,6 +303,17 @@ export class FakeRelay implements RelayPort {
     return structuredClone(this.useOnTargetsResult);
   }
 
+  // ---- end turn (2026-07-22) -------------------------------------------
+  readonly endTurnCalls: string[] = [];
+  endTurnResult: { advanced: boolean; reason?: string } = { advanced: true };
+  hangEndTurn = false;
+
+  async endCombatTurn(expectedCombatantId: string): Promise<{ advanced: boolean; reason?: string }> {
+    this.endTurnCalls.push(expectedCombatantId);
+    if (this.hangEndTurn) return new Promise(() => undefined);
+    return structuredClone(this.endTurnResult);
+  }
+
   readonly actorCommandCalls: Array<{
     endpoint: 'short-rest' | 'long-rest' | 'death-save' | 'break-concentration';
     actorUuid: string;

@@ -150,6 +150,9 @@ export interface RelayPort {
     itemUuid: string,
     opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' },
   ): Promise<TargetedUseResult>;
+  /** POST /execute-js via foundry-client endCombatTurn — advance the combat
+   *  turn IFF the expected combatant is still acting (race-guard, 2026-07-22). */
+  endCombatTurn(expectedCombatantId: string): Promise<{ advanced: boolean; reason?: string; round?: number; turn?: number }>;
 }
 
 /**
@@ -166,6 +169,9 @@ export interface EncounterManagerPort {
   /** Re-fetch one actor (bounded) and refresh cached hp/type before the
    *  caller re-reads view() — used right after an hp write. */
   refreshActor(actorId: string): Promise<void>;
+  /** The acting combatant (2026-07-22 turn flow): null when inactive or when
+   *  the acting combatant is hidden. */
+  current(): { combatId: string; round: number; combatantId: string; actorId?: string } | null;
 }
 
 export interface GatewayDeps {
@@ -1903,6 +1909,23 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
         return reply.code(200).send({ encounter: encounterManager.view() });
       },
     );
+
+    app.post('/api/encounter/turn/end', { preHandler: auth(false) }, async (req, reply) => {
+      const player = req.player as Player;
+      if (!limiter.allow(player.tokenHash)) {
+        return sendError(reply, 429, 'RATE_LIMITED', 'too many write intents');
+      }
+      const cur = encounterManager.current();
+      if (!cur) return sendError(reply, 409, 'CONFLICT', 'no active encounter');
+      // Only the acting combatant's owner may advance — GM keeps NPC turns in Foundry.
+      if (cur.actorId === undefined || !player.actorIds.includes(cur.actorId)) {
+        return sendError(reply, 403, 'FORBIDDEN_RESOURCE', 'not your turn');
+      }
+      const res = await boundedMs(relay.endCombatTurn(cur.combatantId), encounterFetchTimeoutMs);
+      if (res === null) return sendError(reply, 502, 'UPSTREAM', 'upstream error');
+      if (!res.advanced) return sendError(reply, 409, 'CONFLICT', 'turn already advanced');
+      return reply.code(200).send({ ok: true });
+    });
   }
 
   return app;

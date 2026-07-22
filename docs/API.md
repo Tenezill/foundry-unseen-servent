@@ -334,6 +334,25 @@ Semantics (server-enforced, in this order):
 Additional errors:
 - `502 UPSTREAM` — relay timeout or unreachable.
 
+### `POST /api/encounter/turn/end`
+Advance the combat turn. No body.
+
+Semantics (server-enforced, in this order):
+1. Shared write limiter (30/min per token) → else `429 RATE_LIMITED`.
+2. An encounter must be active with a resolvable acting combatant → else
+   `409 CONFLICT` ("no active encounter").
+3. Only the acting combatant's own player may end their turn — the GM keeps
+   NPC turns in Foundry itself — else `403 FORBIDDEN_RESOURCE` ("not your
+   turn").
+4. The relay re-checks (script-side race guard) that the expected combatant
+   is still acting before calling `combat.nextTurn()`. If a concurrent
+   change already advanced/altered the turn, it refuses → `409 CONFLICT`
+   ("turn already advanced").
+5. On success: `200 { "ok": true }`.
+
+Additional errors:
+- `502 UPSTREAM` — relay timeout or unreachable (bounded).
+
 ### `GET /healthz` (no auth)
 → `200 { "ok": true, "relay": "connected" | "disconnected" }`
 

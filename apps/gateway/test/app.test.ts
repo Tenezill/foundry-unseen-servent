@@ -1383,6 +1383,102 @@ describe('targeted actions (use-on-targets)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 2026-07-22 in-combat targeting: end-turn route. Only the acting combatant's
+// owner may advance the turn — the GM keeps NPC turns in Foundry. The relay
+// script itself re-checks who's acting (race-guard), so a stale end-turn
+// (e.g. a double-tap) must degrade to 409, not silently skip someone else.
+describe('turn flow (POST /api/encounter/turn/end)', () => {
+  let mgr: EncounterManager | null = null;
+  const asBob = { authorization: `Bearer ${BOB_TOKEN}` };
+
+  afterEach(() => {
+    if (mgr) mgr.stop();
+    mgr = null;
+  });
+
+  /** Gateway app wired to a live encounter with comb1 (actor a1, owned by
+   *  Anna) as the acting combatant — same seed shape as the targeted-actions
+   *  harness above. */
+  async function setupWithEncounter(): Promise<{ app: FastifyInstance; relay: FakeRelay }> {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', actorDoc('a1', 'Sariel', 24, 30));
+    relay.encounters = [
+      {
+        id: 'c1',
+        round: 1,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'comb1', name: 'Hero', actorUuid: 'Actor.a1', tokenUuid: 'Scene.s1.Token.t1', initiative: 15 },
+          { id: 'comb2', name: 'Skeleton', tokenUuid: 'Scene.s1.Token.t2', initiative: 10 },
+        ],
+      },
+    ];
+    mgr = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await mgr.start();
+    const encApp = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([fakeAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+      encounters: mgr,
+    });
+    return { app: encApp, relay };
+  }
+
+  it('the acting player ends their turn', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    const res = await encApp.inject({ method: 'POST', url: '/api/encounter/turn/end', headers: asAnna });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(relay.endTurnCalls).toEqual(['comb1']);
+  });
+
+  it('a player who does not own the acting combatant gets 403', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    const res = await encApp.inject({ method: 'POST', url: '/api/encounter/turn/end', headers: asBob });
+    expect(res.statusCode).toBe(403);
+    expect(relay.endTurnCalls).toHaveLength(0);
+  });
+
+  it('no active encounter -> 409', async () => {
+    // Manager constructed and wired, but relay has no combats -> inactive
+    // (distinct from encounterManager being entirely absent, which would
+    // 404 instead — the turn/end route lives inside `if (encounterManager)`).
+    const relay = new FakeRelay();
+    mgr = new EncounterManager({ relay, fetchTimeoutMs: 50 });
+    await mgr.start();
+    const encApp = buildApp({
+      relay,
+      players: memoryPlayers(makePlayers()),
+      registry: createRegistry([fakeAdapter]),
+      defaultSystemId: 'fake',
+      livePollMs: 10_000,
+      pingMs: 60_000,
+      encounters: mgr,
+    });
+    const res = await encApp.inject({ method: 'POST', url: '/api/encounter/turn/end', headers: asAnna });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('turn race (script refuses) -> 409', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    relay.endTurnResult = { advanced: false, reason: 'not-your-turn' };
+    const res = await encApp.inject({ method: 'POST', url: '/api/encounter/turn/end', headers: asAnna });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('stalled relay -> 502 (bounded)', async () => {
+    const { app: encApp, relay } = await setupWithEncounter();
+    relay.hangEndTurn = true;
+    const res = await encApp.inject({ method: 'POST', url: '/api/encounter/turn/end', headers: asAnna });
+    expect(res.statusCode).toBe(502);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // M23 review fix: parseActionIntent had no 'pool'/'rouse' cases, so the real
 // wod5e adapter's pool rolls and rouse checks 422'd at the gateway before
 // ever reaching buildAction. Uses the REAL wod5eAdapter (not fakeAdapter)
