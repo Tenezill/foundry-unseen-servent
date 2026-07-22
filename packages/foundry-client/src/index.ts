@@ -646,6 +646,64 @@ export class FoundryRelayClient {
     return result !== null && typeof result === 'object' ? (result as Record<string, unknown>) : (body as Record<string, unknown>);
   }
 
+  /** POST /execute-js — advance the combat turn IF the expected combatant is
+   *  still acting (race-guard: a stale End-turn can never skip someone else).
+   *  Requires execute-js scope + module setting, like castAtSlot. */
+  async endCombatTurn(
+    expectedCombatantId: string,
+  ): Promise<{ advanced: boolean; reason?: string; round?: number; turn?: number }> {
+    if (!/^[A-Za-z0-9]{1,32}$/.test(expectedCombatantId)) {
+      throw new Error(`endCombatTurn: invalid combatantId "${expectedCombatantId}"`);
+    }
+    const script = [
+      `const combat = game.combat;`,
+      `if (!combat || !(combat.round >= 1)) return { advanced: false, reason: 'no-combat' };`,
+      `const current = combat.combatant;`,
+      `if (!current || current.id !== ${JSON.stringify(expectedCombatantId)}) return { advanced: false, reason: 'not-your-turn' };`,
+      `await combat.nextTurn();`,
+      `return { advanced: true, round: combat.round, turn: combat.turn };`,
+    ].join('\n');
+    const body = await this.executeActivation(script);
+    const advanced = (body as { advanced?: unknown }).advanced === true;
+    const reason = typeof (body as { reason?: unknown }).reason === 'string' ? String((body as { reason?: unknown }).reason) : undefined;
+    return { advanced, ...(reason !== undefined ? { reason } : {}) };
+  }
+
+  /** POST /execute-js — a plain chat note speaking as the actor (Dash etc.).
+   *  Text is sanitized (no angle brackets, ≤100 chars) and JSON.stringified. */
+  async postChatNote(actorUuid: string, text: string): Promise<void> {
+    if (!/^Actor\.[A-Za-z0-9]{1,32}$/.test(actorUuid)) {
+      throw new Error(`postChatNote: invalid actorUuid "${actorUuid}"`);
+    }
+    const safe = text.replace(/[<>]/g, '').slice(0, 100);
+    const script = [
+      `const actor = await fromUuid(${JSON.stringify(actorUuid)});`,
+      `await ChatMessage.create({ content: ${JSON.stringify(safe)}, speaker: actor ? ChatMessage.getSpeaker({ actor }) : undefined });`,
+      `return { ok: true };`,
+    ].join('\n');
+    await this.executeActivation(script);
+  }
+
+  /** POST /execute-js — the PREPARED actor's derived AC. The relay's
+   *  get-actor-details stats.ac does not recompute ac.calc overrides (Mage
+   *  Armor, 2026-07-22 root-cause), so this reads the live prepared document.
+   *  Returns null on ANY failure — callers treat it like a timed-out fetch. */
+  async getDerivedAc(actorUuid: string): Promise<number | null> {
+    if (!/^Actor\.[A-Za-z0-9]{1,32}$/.test(actorUuid)) return null;
+    try {
+      const script = [
+        `const actor = await fromUuid(${JSON.stringify(actorUuid)});`,
+        `const v = actor?.system?.attributes?.ac?.value;`,
+        `return { ac: (typeof v === 'number' && Number.isFinite(v)) ? v : null };`,
+      ].join('\n');
+      const body = await this.executeActivation(script);
+      const ac = (body as { ac?: unknown }).ac;
+      return typeof ac === 'number' && Number.isFinite(ac) ? ac : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** POST /dnd5e/equip-item — toggle an embedded item's equipped state. */
   async equipItem(actorUuid: string, itemUuid: string, equipped: boolean): Promise<void> {
     await this.request('POST', '/dnd5e/equip-item', {}, { actorUuid, itemUuid, equipped });

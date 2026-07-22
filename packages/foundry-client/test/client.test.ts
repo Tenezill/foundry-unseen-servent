@@ -797,3 +797,48 @@ describe('FoundryRelayClient.useAbilityOnTargets', () => {
     expect(res.targets).toEqual([]);
   });
 });
+
+describe('FoundryRelayClient combat/turn helpers', () => {
+  let client: FoundryRelayClient;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new FoundryRelayClient({ baseUrl: 'http://relay:3010', apiKey: 'k', clientId: 'fvtt_x' });
+  });
+  function okExec(result: unknown) {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200, text: vi.fn(),
+      json: vi.fn().mockResolvedValueOnce({ success: true, result }),
+    });
+  }
+
+  it('endCombatTurn guards on the expected combatant inside the script', async () => {
+    okExec({ advanced: true, round: 2, turn: 1 });
+    const res = await client.endCombatTurn('comb1');
+    const [, init] = mockFetch.mock.calls[0] as [string, { body: string }];
+    const script = (JSON.parse(init.body) as { script: string }).script;
+    expect(script).toContain('"comb1"');
+    expect(script).toContain('nextTurn');
+    expect(res.advanced).toBe(true);
+  });
+
+  it('endCombatTurn rejects a bad combatant id without fetching', async () => {
+    await expect(client.endCombatTurn('bad id!')).rejects.toThrow(/invalid combatantId/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('postChatNote strips angle brackets and truncates to 100 chars', async () => {
+    okExec({ ok: true });
+    await client.postChatNote('Actor.a1', `<b>Dash!</b>${'x'.repeat(200)}`);
+    const [, init] = mockFetch.mock.calls[0] as [string, { body: string }];
+    const script = (JSON.parse(init.body) as { script: string }).script;
+    expect(script).not.toContain('<b>');
+    expect(script).toContain('ChatMessage.create');
+  });
+
+  it('getDerivedAc returns the number and null on failure', async () => {
+    okExec({ ac: 14 });
+    expect(await client.getDerivedAc('Actor.a1')).toBe(14);
+    mockFetch.mockRejectedValueOnce(new Error('boom'));
+    expect(await client.getDerivedAc('Actor.a1')).toBeNull();
+  });
+});
