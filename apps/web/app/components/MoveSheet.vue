@@ -27,7 +27,7 @@
       </div>
 
       <div ref="gridWrap" class="grid-wrap">
-        <div class="grid" :style="{ gridTemplateColumns: `repeat(${side}, 1fr)` }">
+        <div class="grid" :style="{ gridTemplateColumns: `repeat(${side}, var(--move-cell))` }">
           <button
             v-for="cell in cells"
             :key="`${cell.cx},${cell.cy}`"
