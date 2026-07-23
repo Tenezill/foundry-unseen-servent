@@ -24,6 +24,11 @@
     <button v-if="canEndTurn" type="button" class="end-turn" @click="emit('endTurn')">
       End turn <span aria-hidden="true">▸</span>
     </button>
+    <button type="button" class="collapse-btn" aria-label="Hide turn order" @click="emit('collapse')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="m6 9 6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </button>
   </div>
 </template>
 
@@ -42,6 +47,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'endTurn'): void
+  (e: 'collapse'): void
 }>()
 
 const config = useRuntimeConfig()
@@ -175,6 +181,29 @@ const windowCombatants = computed(() => {
 }
 
 .end-turn:active {
+  transform: scale(0.95);
+}
+
+/* ---- collapse button (2026-07-23) ---- */
+
+.collapse-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  color: var(--ink-faint);
+}
+
+.collapse-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.collapse-btn:active {
+  color: var(--gold);
   transform: scale(0.95);
 }
 </style>
