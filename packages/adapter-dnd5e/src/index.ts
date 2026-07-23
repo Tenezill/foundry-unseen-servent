@@ -1401,6 +1401,14 @@ function isPreparableSpell(item: FoundryItemDoc): boolean {
   return level > 0 && getPath(item.system, 'prepared') !== 2 && freeUseMethod(item) === undefined;
 }
 
+/** Sort key for prepared-first ordering: prepared (1) and always-prepared (2)
+ *  spells rank 0; unprepared rank 1. Array#sort is stable, so same-rank spells
+ *  keep insertion order. */
+function preparedRank(item: FoundryItemDoc): number {
+  const raw = getPath(item.system, 'prepared');
+  return raw === 2 || raw === 1 || raw === true ? 0 : 1;
+}
+
 /**
  * Preview ListItem for a RAW spell document (compendium search hit, not an
  * embedded item) — the learn-confirm sheet in the PWA renders it. Content
@@ -2644,16 +2652,18 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   ];
 
   const features: ListItem[] = [];
-  /** Spell rows grouped by level, insertion-ordered within a level. */
-  const spellsByLevel = new Map<number, ListItem[]>();
+  /** Raw spell docs grouped by level; sorted prepared-first and mapped to rows
+   *  at section-build time (2026-07-23 declutter — raw system.prepared is only
+   *  in hand here). */
+  const spellsByLevel = new Map<number, FoundryItemDoc[]>();
   const physicalIds = new Set((actor.items ?? []).filter((i) => PHYSICAL_ITEM_TYPES.has(i.type)).map((i) => i._id));
   for (const item of actor.items ?? []) {
     if (item.type === 'feat') features.push(featureListItem(item, resourceIds));
     else if (item.type === 'spell') {
       const level = Math.max(0, Math.min(9, numAt(item.system, 'level') ?? 0));
       const list = spellsByLevel.get(level);
-      if (list) list.push(spellListItem(item, resourceIds));
-      else spellsByLevel.set(level, [spellListItem(item, resourceIds)]);
+      if (list) list.push(item);
+      else spellsByLevel.set(level, [item]);
     }
   }
 
@@ -2737,7 +2747,10 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   // headline mechanism as inventory containers. Section ids keep the
   // 'spells' stem so the PWA's tab heuristic still routes them.
   for (const level of [...spellsByLevel.keys()].sort((a, b) => a - b)) {
-    const items = spellsByLevel.get(level) ?? [];
+    const raw = spellsByLevel.get(level) ?? [];
+    const items = [...raw]
+      .sort((a, b) => preparedRank(a) - preparedRank(b))
+      .map((it) => spellListItem(it, resourceIds));
     const label = level === 0 ? 'Cantrips' : `${ordinal(level)} Level`;
     sections.push({
       kind: 'list',

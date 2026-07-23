@@ -198,3 +198,22 @@ describe('prepared spells: no redundant signalling', () => {
     expect(row!.toggleActionId).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe('prepared-first ordering within a level', () => {
+  it('prepared and always-prepared sort before unprepared, stable within each group', () => {
+    let actor = casterCaptured;
+    for (const s of [
+      spellDoc('z_unprep_a'),                    // rank 1
+      spellDoc('z_prep_b', { prepared: 1 }),      // rank 0
+      spellDoc('z_unprep_c'),                    // rank 1
+      spellDoc('z_always_d', { prepared: 2 }),    // rank 0
+    ]) {
+      actor = withSpell(actor, s);
+    }
+    const l2 = spellSections(actor).find((s) => s.id === 'spells.l2');
+    expect(l2).toBeDefined();
+    expect(l2!.items.map((i) => i.id)).toEqual(['z_prep_b', 'z_always_d', 'z_unprep_a', 'z_unprep_c']);
+  });
+});
