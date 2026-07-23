@@ -1006,6 +1006,26 @@ describe('SSE /api/encounter/events', () => {
 
     stream.destroy();
   });
+
+  it('a fresh SSE connection triggers a REST reconcile so a reload reflects truth', async () => {
+    const { app, relay, manager } = setup();
+    await manager.start();
+    const before = relay.getEncountersCalls.length;
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/encounter/events?token=${ANNA_TOKEN}`,
+      payloadAsStream: true,
+    });
+    expect(res.statusCode).toBe(200);
+    const stream = res.stream() as unknown as EventStream;
+
+    // Opening the stream must kick reconcileNow() -> at least one extra REST read
+    // (well before the default 3s reconcile tick could fire).
+    await sleep(50);
+    expect(relay.getEncountersCalls.length).toBeGreaterThan(before);
+    stream.destroy();
+  });
 });
 
 describe('tokenUuid plumbing + turn accessors', () => {

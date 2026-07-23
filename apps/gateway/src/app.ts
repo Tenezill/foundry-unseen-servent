@@ -186,6 +186,9 @@ export interface EncounterManagerPort {
   /** Active combat's id + round regardless of the acting combatant's
    *  visibility (final-review Fix 1) — null only when inactive. */
   activeRound(): { combatId: string; round: number } | null;
+  /** Fire-and-forget coalesced REST reconcile (2026-07-23) — the SSE route
+   *  calls this on client connect so a reload reflects truth immediately. */
+  reconcileNow(): void;
 }
 
 export interface GatewayDeps {
@@ -1950,6 +1953,11 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
 
         writeEvent('encounter', JSON.stringify(encounterManager.view()));
         const detach = encounterManager.attach((view) => writeEvent('encounter', JSON.stringify(view)));
+        // A fresh connection re-reads authoritative REST state so a reload
+        // reflects truth immediately (2026-07-23): if the mirror missed a
+        // combat start/end hook, this reseed corrects it and the attached
+        // listener above receives the corrected frame.
+        encounterManager.reconcileNow();
         // Keep-alive doubles as a level-triggered state re-emit: the relay's
         // known SSE-drop-under-burst bug can lose a terminal {active:false}
         // frame, leaving a client stuck (no further change frame ever arrives
