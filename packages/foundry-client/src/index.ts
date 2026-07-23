@@ -94,6 +94,7 @@ export interface TargetedUseOptions {
   targetTokenUuids: string[];
   slotKey?: string;
   mode?: 'advantage' | 'disadvantage';
+  attackMode?: 'oneHanded' | 'twoHanded';
 }
 
 export interface TargetedDamagePart {
@@ -233,13 +234,19 @@ function targetedUseScript(
   targetTokenUuids: string[],
   slotKey?: string,
   mode?: 'advantage' | 'disadvantage',
+  attackMode?: 'oneHanded' | 'twoHanded',
 ): string {
   const usage =
     slotKey !== undefined
       ? `{ subsequentActions: false, consume: { spellSlot: true }, spell: { slot: ${JSON.stringify(slotKey)} }, create: { measuredTemplate: false } }`
       : `{ subsequentActions: false, create: { measuredTemplate: false } }`;
-  const attackConfig =
-    mode === 'advantage' ? '{ advantage: true }' : mode === 'disadvantage' ? '{ disadvantage: true }' : '{}';
+  const attackParts: string[] = [];
+  if (mode === 'advantage') attackParts.push('advantage: true');
+  else if (mode === 'disadvantage') attackParts.push('disadvantage: true');
+  if (attackMode !== undefined) attackParts.push(`attackMode: ${JSON.stringify(attackMode)}`);
+  const attackConfig = `{ ${attackParts.join(', ')} }`;
+  const damageConfig =
+    attackMode !== undefined ? `{ isCritical: isCrit, attackMode: ${JSON.stringify(attackMode)} }` : '{ isCritical: isCrit }';
   return [
     `const item = await fromUuid(${JSON.stringify(itemUuid)});`,
     `if (!item) throw new Error('item not found');`,
@@ -292,7 +299,7 @@ function targetedUseScript(
     `  let dmgRolls = null;`,
     `  const dmgHook = Hooks.once('dnd5e.rollDamageV2', (rolls) => { dmgRolls = rolls; });`,
     `  try {`,
-    `    const returned = await activity.rollDamage({ isCritical: isCrit }, { configure: false }, {});`,
+    `    const returned = await activity.rollDamage(${damageConfig}, { configure: false }, {});`,
     `    if (Array.isArray(returned) && returned.length) dmgRolls = returned;`,
     `  } finally { Hooks.off('dnd5e.rollDamageV2', dmgHook); }`,
     `  if (Array.isArray(dmgRolls) && dmgRolls.length) {`,
@@ -627,7 +634,9 @@ export class FoundryRelayClient {
     if (opts.mode !== undefined && opts.mode !== 'advantage' && opts.mode !== 'disadvantage') {
       throw new Error(`useAbilityOnTargets: invalid mode "${String(opts.mode)}"`);
     }
-    const body = await this.executeActivation(targetedUseScript(itemUuid, targets, opts.slotKey, opts.mode));
+    const body = await this.executeActivation(
+      targetedUseScript(itemUuid, targets, opts.slotKey, opts.mode, opts.attackMode),
+    );
     const rawAttack = (body as { attack?: unknown }).attack;
     const attack =
       rawAttack !== null && typeof rawAttack === 'object' &&

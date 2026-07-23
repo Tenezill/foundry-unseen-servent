@@ -2626,3 +2626,21 @@ describe('versatile weapon grip — attack sub-line & shield hint', () => {
     expect(invRows(a).find((r) => r.id === 'gta26ORvqC323k3r')?.tags ?? []).not.toContain('2H + shield');
   });
 });
+
+describe('versatile weapon grip — combat attack-mode', () => {
+  const LS = 'item.gta26ORvqC323k3r';
+  const targets = ['Scene.s.Token.t'];
+
+  it('one-handed targeted attack sends no attackMode', () => {
+    const out = build(martialCaptured, { kind: 'attack', actionId: `${LS}.attack`, targetTokenUuids: targets });
+    expect(out).not.toHaveProperty('attackMode');
+  });
+
+  it('two-handed targeted attack sends attackMode twoHanded', () => {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip: 'twoHanded' } };
+    const out = build(a, { kind: 'attack', actionId: `${LS}.attack`, targetTokenUuids: targets });
+    expect(out).toMatchObject({ endpoint: 'use-on-targets', attackMode: 'twoHanded' });
+  });
+});

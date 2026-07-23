@@ -149,7 +149,12 @@ export interface RelayPort {
   useAbilityOnTargets(
     actorUuid: string,
     itemUuid: string,
-    opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' },
+    opts: {
+      targetTokenUuids: string[];
+      slotKey?: string;
+      mode?: 'advantage' | 'disadvantage';
+      attackMode?: 'oneHanded' | 'twoHanded';
+    },
   ): Promise<TargetedUseResult>;
   /** POST /execute-js via foundry-client endCombatTurn — advance the combat
    *  turn IFF the expected combatant is still acting (race-guard, 2026-07-22). */
@@ -1588,6 +1593,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
               targetTokenUuids: action.targetTokenUuids,
               ...(action.slotKey !== undefined ? { slotKey: action.slotKey } : {}),
               ...(action.mode !== undefined ? { mode: action.mode } : {}),
+              ...(action.attackMode !== undefined ? { attackMode: action.attackMode } : {}),
             });
             outcome = res;
             result = res.attack !== null ? extractRoll(res.attack) : null;

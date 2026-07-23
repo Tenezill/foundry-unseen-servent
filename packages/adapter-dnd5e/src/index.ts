@@ -2322,15 +2322,23 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         throw new IntentError(`unknown roll mode "${String(mode)}"`, 'INVALID');
       }
       const itemId = intent.actionId.slice('item.'.length, -'.attack'.length);
+      const item = (actor.items ?? []).find((i) => i._id === itemId);
       if (targeted !== undefined) {
-        return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted, ...(mode !== undefined ? { mode } : {}) };
+        const attackMode =
+          item !== undefined && isVersatileWeapon(item) && weaponGrip(item) === 'twoHanded' ? ('twoHanded' as const) : undefined;
+        return {
+          endpoint: 'use-on-targets',
+          itemId,
+          targetTokenUuids: targeted,
+          ...(mode !== undefined ? { mode } : {}),
+          ...(attackMode !== undefined ? { attackMode } : {}),
+        };
       }
       // Plain Roll: Foundry-native item use (consumes ammo/uses, rolls to hit).
       if (mode === undefined) return { endpoint: 'use-item', itemId };
       // Advantage/disadvantage: companion-built to-hit (the relay's use-item
       // path exposes no advantage without execute-JS). Best-effort bonus;
       // ammo/uses and auto-crit are NOT modelled on this path.
-      const item = (actor.items ?? []).find((i) => i._id === itemId);
       if (!item) throw new IntentError(`unknown weapon "${itemId}"`, 'UNKNOWN_RESOURCE');
       return {
         endpoint: 'roll',

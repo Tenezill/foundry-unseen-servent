@@ -281,7 +281,12 @@ export class FakeRelay implements RelayPort {
   // ---- targeted use (2026-07-22) --------------------------------------------
   readonly useOnTargetsCalls: Array<{
     actorUuid: string; itemUuid: string;
-    opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' };
+    opts: {
+      targetTokenUuids: string[];
+      slotKey?: string;
+      mode?: 'advantage' | 'disadvantage';
+      attackMode?: 'oneHanded' | 'twoHanded';
+    };
   }> = [];
   useOnTargetsResult: TargetedUseResult = { attack: null, targets: [] };
   /** RelayError-shaped 408, mirrors useAbilityTimeout. */
@@ -290,7 +295,12 @@ export class FakeRelay implements RelayPort {
   async useAbilityOnTargets(
     actorUuid: string,
     itemUuid: string,
-    opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' },
+    opts: {
+      targetTokenUuids: string[];
+      slotKey?: string;
+      mode?: 'advantage' | 'disadvantage';
+      attackMode?: 'oneHanded' | 'twoHanded';
+    },
   ): Promise<TargetedUseResult> {
     this.useOnTargetsCalls.push({ actorUuid, itemUuid, opts: structuredClone(opts) });
     if (this.useOnTargetsTimeout) {
@@ -641,6 +651,21 @@ export const fakeAdapter: SystemAdapter = {
           if (intent.targetTokenUuids.length > 1) {
             throw new IntentError('item.i1.tattack takes a single target', 'INVALID');
           }
+          return {
+            endpoint: 'use-on-targets',
+            itemId: 'i1',
+            targetTokenUuids: intent.targetTokenUuids,
+            ...(intent.mode !== undefined ? { mode: intent.mode } : {}),
+            // Task 4 fake stand-in for a versatile weapon wielded two-handed —
+            // mirrors the real dnd5e adapter's attackMode pass-through so
+            // gateway tests can prove the gateway forwards it unmodified.
+            attackMode: 'twoHanded',
+          };
+        }
+        // Task 4: item.i1.attack (Arrows) simulates a one-handed/non-versatile
+        // weapon on the SAME targeted path — no attackMode field — proving
+        // the gateway forwards nothing when the adapter sets nothing.
+        if (intent.actionId === 'item.i1.attack' && intent.targetTokenUuids?.length) {
           return {
             endpoint: 'use-on-targets',
             itemId: 'i1',

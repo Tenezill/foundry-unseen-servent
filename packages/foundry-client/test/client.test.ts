@@ -779,6 +779,18 @@ describe('FoundryRelayClient.useAbilityOnTargets', () => {
     expect(script).toContain('advantage: true');
   });
 
+  it('threads attackMode into the targeted-use script (rollAttack + rollDamage)', async () => {
+    okExec({ attack: null, targets: [] });
+    await client.useAbilityOnTargets('Actor.abc123', 'Actor.abc123.Item.def456', {
+      targetTokenUuids: ['Scene.s.Token.t'],
+      attackMode: 'twoHanded',
+    });
+    const [, init] = mockFetch.mock.calls[0] as [string, { body: string }];
+    const script = (JSON.parse(init.body) as { script: string }).script;
+    // Appears in both the rollAttack config and the rollDamage config.
+    expect(script.match(/attackMode:\s*"twoHanded"/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+
   it('rejects bad target uuids, bad slot keys, and >12 targets without any fetch', async () => {
     await expect(client.useAbilityOnTargets('Actor.a1', 'Actor.a1.Item.i1',
       { targetTokenUuids: ['Token.t1'] })).rejects.toThrow(/invalid target/);

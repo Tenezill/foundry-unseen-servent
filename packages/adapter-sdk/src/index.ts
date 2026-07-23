@@ -423,6 +423,9 @@ export type RelayAction =
       targetTokenUuids: string[];
       slotKey?: string;
       mode?: 'advantage' | 'disadvantage';
+      /** dnd5e attack-mode for the roll; set to 'twoHanded' for a versatile
+       *  weapon wielded two-handed so Foundry rolls the larger die. */
+      attackMode?: 'oneHanded' | 'twoHanded';
     };
 
 /**

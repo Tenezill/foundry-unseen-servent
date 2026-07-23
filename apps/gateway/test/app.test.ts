@@ -1317,6 +1317,26 @@ describe('targeted actions (use-on-targets)', () => {
     expect(relay.useOnTargetsCalls[0]?.opts.targetTokenUuids).toEqual(['Scene.s1.Token.t2']);
   });
 
+  it('forwards attackMode to the relay on a two-handed targeted attack', async () => {
+    const { app, relay } = await setupWithEncounter();
+    await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(relay.useOnTargetsCalls.at(-1)?.opts.attackMode).toBe('twoHanded');
+  });
+
+  it('forwards no attackMode on a one-handed targeted attack', async () => {
+    const { app, relay } = await setupWithEncounter();
+    await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.attack',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(relay.useOnTargetsCalls.at(-1)?.opts.attackMode).toBeUndefined();
+  });
+
   it('a multi-target save spell forwards slotKey through use-on-targets', async () => {
     const { app, relay } = await setupWithEncounter();
     relay.useOnTargetsResult = {
