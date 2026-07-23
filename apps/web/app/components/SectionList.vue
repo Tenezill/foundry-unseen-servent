@@ -103,6 +103,17 @@
             {{ attuneOf(item)!.attuned ? 'Attuned' : 'Attune' }}
           </button>
           <button
+            v-if="gripOf(item)"
+            class="equip-btn"
+            type="button"
+            :class="{ on: gripOf(item)!.grip === 'twoHanded', pending: actionBusy === item.gripActionId }"
+            :aria-pressed="gripOf(item)!.grip === 'twoHanded'"
+            :disabled="readonly || actionBusy !== null"
+            @click="item.gripActionId && emit('action', item.gripActionId)"
+          >
+            {{ gripOf(item)!.grip === 'twoHanded' ? '2H' : '1H' }}
+          </button>
+          <button
             v-if="verbOf(item)"
             class="act-btn"
             type="button"
@@ -237,6 +248,10 @@ function actionOf(item: ListItem): ActionDescriptor | undefined {
 
 function attuneOf(item: ListItem): ActionDescriptor | undefined {
   return item.attuneActionId ? props.actions[item.attuneActionId] : undefined
+}
+
+function gripOf(item: ListItem): ActionDescriptor | undefined {
+  return item.gripActionId ? props.actions[item.gripActionId] : undefined
 }
 
 function toggleOf(item: ListItem): ActionDescriptor | undefined {

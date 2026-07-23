@@ -39,6 +39,7 @@
           </button>
           <span v-else class="row-label">{{ action.label }}</span>
           <span v-if="noSlots(action)" class="row-sub">No spell slots left</span>
+          <span v-if="action.sub && group.id === 'attacks'" class="row-sub">{{ action.sub }}</span>
         </div>
         <!-- Dmg rides inward (left of the primary button) and only shows when the
              action has a damage component, so the yellow Cast/Attack/Use button

@@ -1622,6 +1622,12 @@ function onAction(actionId: string): void {
         action.label,
       )
       break
+    case 'grip':
+      void submitAction(
+        { kind: 'grip', actionId, grip: action.grip === 'twoHanded' ? 'oneHanded' : 'twoHanded' },
+        action.label,
+      )
+      break
     case 'pool':
       // M23: open the pool roll sheet, pre-filled with this descriptor's
       // default pairing (and the tapped stat, since the descriptor's
@@ -2032,6 +2038,9 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
         break
       case 'attune':
         toast.show(`${label} ${intent.attuned ? 'attuned' : 'attunement ended'}`)
+        break
+      case 'grip':
+        toast.show(`${label} — ${intent.grip === 'twoHanded' ? 'two-handed' : 'one-handed'}`)
         break
       case 'rest':
         toast.show(`${label} complete`)
