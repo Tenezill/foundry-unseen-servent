@@ -2487,3 +2487,43 @@ describe('combat targeting metadata + use-on-targets (2026-07-22)', () => {
     }
   });
 });
+
+describe('versatile weapon grip — damage die', () => {
+  const LS = 'item.gta26ORvqC323k3r';
+  const dmg = (a: FoundryActorDoc) => formulaOf(a, { kind: 'damage', actionId: `${LS}.damage` });
+
+  function withGrip(grip: 'oneHanded' | 'twoHanded'): FoundryActorDoc {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip } };
+    return a;
+  }
+
+  it('one-handed (default, no flag) uses the base die 1d8', () => {
+    expect(dmg(martialCaptured).startsWith('1d8')).toBe(true);
+  });
+
+  it('two-handed steps the empty versatile die up one size to 1d10, keeping the bonus', () => {
+    const oneH = dmg(martialCaptured);
+    const twoH = dmg(withGrip('twoHanded'));
+    expect(twoH).toBe(oneH.replace('1d8', '1d10'));
+  });
+
+  it('two-handed prefers an explicit populated versatile die', () => {
+    const a = withGrip('twoHanded');
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls.system as Record<string, unknown>).damage = {
+      base: { number: 1, denomination: 8, bonus: '', types: ['slashing'] },
+      versatile: { number: 2, denomination: 6, bonus: '', types: ['slashing'] },
+    };
+    expect(dmg(a).startsWith('2d6')).toBe(true);
+  });
+
+  it('a non-versatile weapon ignores the grip flag', () => {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls.system as Record<string, unknown>).properties = []; // drop "ver"
+    (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip: 'twoHanded' } };
+    expect(dmg(a).startsWith('1d8')).toBe(true);
+  });
+});

@@ -1766,30 +1766,101 @@ function weaponAttackBonus(actor: FoundryActorDoc, item: FoundryItemDoc): number
 }
 
 /**
- * Weapon damage formula: base dice + the weapon's own static bonus (e.g. a
- * +1 weapon's `damage.base.bonus`) + the resolved ability modifier —
- * dnd5e's default calc for a plain weapon hit. Undefined when the item
- * carries no base dice (e.g. an improvised/unconfigured weapon).
+ * Grip-aware dice helpers for versatile ("ver") weapons: which die a weapon
+ * rolls depends on the app's own `flags.unseen-servent.grip` item flag
+ * (`weaponGrip`), stepped up from the base die when the item leaves
+ * `damage.versatile` unpopulated (`versatileDice`/`stepUpDenomination`).
+ * `gripDice` is the single source of truth shared by `weaponDamageFormula`
+ * and `versatileAttackSub` so the formula and the attack-row sub-line never
+ * disagree about which die is active.
+ */
+
+/** Weapon carries dnd5e's versatile ("ver") property. */
+function isVersatileWeapon(item: FoundryItemDoc): boolean {
+  if (item.type !== 'weapon') return false;
+  const props = getPath(item.system, 'properties');
+  return Array.isArray(props) && props.includes('ver');
+}
+
+/** Wielded grip for a versatile weapon, from the app's own item flag. Anything
+ *  but the explicit 'twoHanded' flag is one-handed (the default). */
+function weaponGrip(item: FoundryItemDoc): 'oneHanded' | 'twoHanded' {
+  return getPath(item, 'flags.unseen-servent.grip') === 'twoHanded' ? 'twoHanded' : 'oneHanded';
+}
+
+/** Next larger polyhedral die (d4→d6→d8→d10→d12; d12 and anything unusual are
+ *  returned unchanged). SRD versatile weapons all step exactly one size, so this
+ *  reproduces the two-handed die when the item leaves `damage.versatile` empty. */
+function stepUpDenomination(denomination: number): number {
+  const ladder = [4, 6, 8, 10, 12];
+  const i = ladder.indexOf(denomination);
+  return i >= 0 && i < ladder.length - 1 ? (ladder[i + 1] as number) : denomination;
+}
+
+/** Read a {number, denomination} dice block off `item.system.<path>`, or
+ *  undefined when either is missing/non-positive. */
+function readDice(item: FoundryItemDoc, path: string): { number: number; denomination: number } | undefined {
+  const d = rec(getPath(item.system, path));
+  const number = typeof d.number === 'number' && Number.isFinite(d.number) ? d.number : undefined;
+  const denomination = typeof d.denomination === 'number' && Number.isFinite(d.denomination) ? d.denomination : undefined;
+  if (number === undefined || denomination === undefined || number <= 0 || denomination <= 0) return undefined;
+  return { number, denomination };
+}
+
+/** Two-handed damage dice for a versatile weapon: the explicit versatile die
+ *  when populated, else the base die stepped up one size. */
+function versatileDice(item: FoundryItemDoc): { number: number; denomination: number } | undefined {
+  const explicit = readDice(item, 'damage.versatile');
+  if (explicit !== undefined) return explicit;
+  const base = readDice(item, 'damage.base');
+  return base === undefined ? undefined : { number: base.number, denomination: stepUpDenomination(base.denomination) };
+}
+
+/** Damage dice a versatile weapon rolls under `grip` (base one-handed,
+ *  versatile two-handed). Shared by the formula and the attack sub-line so they
+ *  never disagree. */
+function gripDice(item: FoundryItemDoc, grip: 'oneHanded' | 'twoHanded'): { number: number; denomination: number } | undefined {
+  return grip === 'twoHanded' ? versatileDice(item) : readDice(item, 'damage.base');
+}
+
+/** Active-die sub-line for a versatile weapon's attack row, e.g.
+ *  "1d10 slashing · two-handed". Undefined for non-versatile weapons. */
+function versatileAttackSub(item: FoundryItemDoc): string | undefined {
+  if (!isVersatileWeapon(item)) return undefined;
+  const grip = weaponGrip(item);
+  const dice = gripDice(item, grip);
+  if (dice === undefined) return undefined;
+  const types = getPath(item.system, 'damage.base.types');
+  const type = Array.isArray(types) && typeof types[0] === 'string' ? (types[0] as string) : undefined;
+  const gripLabel = grip === 'twoHanded' ? 'two-handed' : 'one-handed';
+  return `${dice.number}d${dice.denomination}${type !== undefined ? ` ${type}` : ''} · ${gripLabel}`;
+}
+
+/**
+ * Weapon damage formula: base (or grip-selected versatile) dice + the
+ * weapon's own static bonus (e.g. a +1 weapon's `damage.base.bonus`) + the
+ * resolved ability modifier — dnd5e's default calc for a plain weapon hit.
+ * Undefined when the item carries no base dice (e.g. an
+ * improvised/unconfigured weapon).
  *
  * Deliberately NOT modelled (no relay action exists to cross-check against
  * Foundry's own roll — see docs/HOSTING.md troubleshooting notes on the
  * relay module's lack of a damage-roll endpoint): extra activity damage
- * parts, weapon mastery bonus dice, the versatile two-handed die, critical
- * doubling, and active effects. This is a best-effort client-side estimate,
- * not a substitute for Foundry's own roll.
+ * parts, weapon mastery bonus dice, critical doubling, and active effects.
+ * This is a best-effort client-side estimate, not a substitute for
+ * Foundry's own roll.
  */
 function weaponDamageFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | undefined {
+  const grip = isVersatileWeapon(item) ? weaponGrip(item) : 'oneHanded';
+  const dice = gripDice(item, grip);
+  if (dice === undefined) return undefined;
+  const diceStr = `${dice.number}d${dice.denomination}`;
   const base = rec(getPath(item.system, 'damage.base'));
-  const number = typeof base.number === 'number' && Number.isFinite(base.number) ? base.number : undefined;
-  const denomination =
-    typeof base.denomination === 'number' && Number.isFinite(base.denomination) ? base.denomination : undefined;
-  if (number === undefined || denomination === undefined || number <= 0 || denomination <= 0) return undefined;
-  const dice = `${number}d${denomination}`;
   const rawBonus = typeof base.bonus === 'string' ? Number(base.bonus) : 0;
   const staticBonus = Number.isFinite(rawBonus) ? rawBonus : 0;
   const bonus = staticBonus + weaponAbilityMod(actor, item);
-  if (bonus === 0) return dice;
-  return `${dice} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}`;
+  if (bonus === 0) return diceStr;
+  return `${diceStr} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}`;
 }
 
 /** The item's heal-type activity, or an empty record if it has none.
