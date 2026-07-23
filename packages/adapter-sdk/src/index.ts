@@ -296,6 +296,9 @@ export interface ActionDescriptor {
   /** attack only: active-die sub-line for versatile weapons, e.g.
    *  "1d10 slashing · two-handed". Absent for non-versatile attacks. */
   sub?: string;
+  /** cast/use only: remaining vs max limited uses, for a counter on the Actions
+   *  row (free-use / limited-use abilities). Absent = unlimited / slot-based. */
+  uses?: { value: number; max: number };
   /** cast/use only: what this spell/feature mechanically does, for grouping
    *  and roll-result wording on the Actions tab (M15). System-agnostic:
    *  'damage' (deals damage, whether via an attack roll or a save), 'heal'

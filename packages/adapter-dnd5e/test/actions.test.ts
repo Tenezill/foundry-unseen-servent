@@ -2668,4 +2668,13 @@ describe('targeted cast — out of uses', () => {
     }
     expect(code).toBe('INVALID');
   });
+
+  it('a free-use spell cast row carries its uses counter', () => {
+    const a = structuredClone(caster);
+    const spell = (a.items ?? []).find((i) => i.type === 'spell')!;
+    (spell.system as Record<string, unknown>).method = 'atwill';
+    (spell.system as Record<string, unknown>).uses = { max: 1, spent: 0 };
+    const cast = actions(a).find((x) => x.id === `spell.${spell._id}.cast`);
+    expect(cast?.uses).toEqual({ value: 1, max: 1 });
+  });
 });

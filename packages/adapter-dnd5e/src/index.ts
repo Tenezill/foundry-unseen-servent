@@ -2170,6 +2170,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       // Actions tab with spells that Foundry would just refuse was confusing.
       if (level === 0 || isPrepared || freeUse !== undefined) {
         const spellTargeting = targetingOf(item);
+        const spellUses = usesInfo(item);
         out.push({
           id: `spell.${item._id}.cast`,
           label: freeUse !== undefined ? `${item.name} (free use)` : item.name,
@@ -2180,6 +2181,11 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
           effectType: effectTypeOf(item),
           ...(spellTargeting !== undefined ? { targeting: spellTargeting } : {}),
           ...(selfBuffEffect(actor, item) !== undefined && !buffTargetIsSelf(item) ? { targetable: true } : {}),
+          // Remaining/max counter for free-use / limited-use spells (2026-07-23
+          // uses-counter spec) — absent (slot-based/unlimited) emits nothing.
+          ...(spellUses !== undefined
+            ? { uses: { value: Math.max(0, spellUses.max - spellUses.spent), max: spellUses.max } }
+            : {}),
           // slotLevels semantics (2026-07-19 spec): absent = direct cast, no
           // picker (cantrips, free-use, pact-payable); otherwise the payable
           // spellN levels — [] disables, length 1 direct-casts, >1 opens the
