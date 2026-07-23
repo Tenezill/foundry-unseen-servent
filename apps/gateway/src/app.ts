@@ -420,6 +420,9 @@ function parseActionIntent(
     case 'attune':
       if (typeof body.attuned !== 'boolean') return null;
       return { kind, actionId, attuned: body.attuned };
+    case 'grip':
+      if (body.grip !== 'oneHanded' && body.grip !== 'twoHanded') return null;
+      return { kind, actionId, grip: body.grip };
     case 'move':
       if (body.containerId !== null && (typeof body.containerId !== 'string' || body.containerId === '')) {
         return null;

@@ -543,6 +543,8 @@ describe('actions', () => {
       { kind: 'equip', actionId: 'item.i1.equip', equipped: 'yes' }, // non-boolean
       { kind: 'attune', actionId: 'item.i1.attune' }, // attuned missing
       { kind: 'attune', actionId: 'item.i1.attune', attuned: 'yes' }, // non-boolean
+      { kind: 'grip', actionId: 'item.i1.grip' }, // grip missing
+      { kind: 'grip', actionId: 'item.i1.grip', grip: 'threeHanded' }, // unknown grip value
       { kind: 'damage', actionId: 'item.i1.damage', critical: 'yes' }, // non-boolean crit flag
     ]) {
       const res = await post(app, 'a1', payload);
@@ -553,6 +555,7 @@ describe('actions', () => {
     expect(relay.useAbilityCalls).toHaveLength(0);
     expect(relay.equipCalls).toHaveLength(0);
     expect(relay.attuneCalls).toHaveLength(0);
+    expect(relay.updates).toHaveLength(0);
   });
 
   it('422 INVALID_INTENT when the adapter rejects an illegal slot level', async () => {
@@ -858,6 +861,21 @@ describe('actions', () => {
       const res = await post(app, 'a1', { kind: 'move', actionId: 'item.i1.move', ...bad });
       expect(res.statusCode, JSON.stringify(bad)).toBe(422);
     }
+  });
+
+  it('accepts a valid grip intent and writes the flag via update-item', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'grip', actionId: 'item.i1.grip', grip: 'twoHanded' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.updates.at(-1)).toEqual({ uuid: 'Actor.a1.Item.i1', data: { 'flags.unseen-servent.grip': 'twoHanded' } });
+  });
+
+  it('rejects an invalid grip value', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'grip', actionId: 'item.i1.grip', grip: 'threeHanded' });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('INVALID_INTENT');
+    expect(relay.updates).toHaveLength(0);
   });
 
   it('rest.short -> short-rest actor command, result null + fresh sheet', async () => {

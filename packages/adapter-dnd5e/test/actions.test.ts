@@ -188,11 +188,12 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
   it('non-caster has no cast actions; total count is pinned', () => {
     expect(all.filter((a) => a.kind === 'cast')).toHaveLength(0);
     // 18 skills + 12 ability checks/saves + 1 initiative (M10) + 3 attacks
-    // + 3 weapon damage rolls (M14) + 5 equips + 1 feature use + 7 item uses
-    // (Waterskin, Torch, Rations, Piton, Rope, Horn, Bead of Force)
+    // + 3 weapon damage rolls (M14) + 5 equips + 1 grip toggle (the
+    // versatile Longsword) + 1 feature use + 7 item uses (Waterskin, Torch,
+    // Rations, Piton, Rope, Horn, Bead of Force)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
     // + 21 move descriptors, one per physical item (M19)
-    expect(all).toHaveLength(73);
+    expect(all).toHaveLength(74);
   });
 });
 
@@ -2525,5 +2526,53 @@ describe('versatile weapon grip — damage die', () => {
     (ls.system as Record<string, unknown>).properties = []; // drop "ver"
     (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip: 'twoHanded' } };
     expect(dmg(a).startsWith('1d8')).toBe(true);
+  });
+});
+
+describe('versatile weapon grip — toggle', () => {
+  const LS = 'item.gta26ORvqC323k3r';
+
+  it('emits a grip descriptor for a versatile weapon, defaulting to one-handed', () => {
+    const g = action(martialCaptured, `${LS}.grip`);
+    expect(g.kind).toBe('grip');
+    expect(g.grip).toBe('oneHanded');
+  });
+
+  it('the grip descriptor reflects the stored two-handed flag', () => {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip: 'twoHanded' } };
+    expect(action(a, `${LS}.grip`).grip).toBe('twoHanded');
+  });
+
+  it('does not emit a grip descriptor for a non-weapon (the Shield)', () => {
+    expect(actions(martialCaptured).find((x) => x.id === 'item.u69KONMFqydKuk1H.grip')).toBeUndefined();
+  });
+
+  it('the inventory row for a versatile weapon carries a gripActionId', () => {
+    const rows = section(martialCaptured, 'inventory').kind === 'list'
+      ? (section(martialCaptured, 'inventory') as Extract<SheetSection, { kind: 'list' }>).items
+      : [];
+    const ls = rows.find((r) => r.id === 'gta26ORvqC323k3r');
+    expect(ls?.gripActionId).toBe(`${LS}.grip`);
+  });
+
+  it('buildAction writes the grip flag via update-item', () => {
+    const out = build(martialCaptured, { kind: 'grip', actionId: `${LS}.grip`, grip: 'twoHanded' });
+    expect(out).toEqual({
+      endpoint: 'update-item',
+      itemId: 'gta26ORvqC323k3r',
+      data: { 'flags.unseen-servent.grip': 'twoHanded' },
+    });
+  });
+
+  it('buildAction rejects an invalid grip value', () => {
+    let code: string | undefined;
+    try {
+      build(martialCaptured, { kind: 'grip', actionId: `${LS}.grip`, grip: 'threeHanded' as unknown as 'twoHanded' });
+    } catch (e) {
+      code = (e as InstanceType<typeof IntentError>).code;
+    }
+    expect(code).toBe('INVALID');
   });
 });

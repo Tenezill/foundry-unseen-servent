@@ -111,6 +111,9 @@ export interface ListItem {
   /** Attune toggle action (M12), rendered as a second pill next to the
    *  equip pill — attune never competes for toggleActionId. */
   attuneActionId?: string;
+  /** Grip toggle action (versatile weapons): a [1H|2H] pill next to the equip
+   *  pill. Only set for weapons with the "ver" property. */
+  gripActionId?: string;
   /** Id of the container row this item sits inside (M12); the PWA groups
    *  inventory rows under their container. Only set when it matches another
    *  row in the same list — dangling refs render flat. */
@@ -244,6 +247,9 @@ export type SheetActionKind =
   | 'prepare'
   /** toggle an item's attuned state (M12; mirrors equip/prepare). */
   | 'attune'
+  /** toggle a versatile weapon's one-/two-handed grip (item-flag write,
+   *  no chat card; mirrors equip/prepare/attune). */
+  | 'grip'
   /** push a physical item between carried and a container (M19). */
   | 'move'
   // M8 actor-scoped commands (no item target):
@@ -284,6 +290,9 @@ export interface ActionDescriptor {
   prepared?: boolean;
   /** attune only: current state (the intent carries the desired state). */
   attuned?: boolean;
+  /** grip only: current one-/two-handed state (the intent carries the desired
+   *  state). Set only for versatile weapons. */
+  grip?: 'oneHanded' | 'twoHanded';
   /** cast/use only: what this spell/feature mechanically does, for grouping
    *  and roll-result wording on the Actions tab (M15). System-agnostic:
    *  'damage' (deals damage, whether via an attack roll or a save), 'heal'
@@ -312,6 +321,7 @@ export type ActionIntent =
   | { kind: 'equip'; actionId: string; equipped: boolean }
   | { kind: 'prepare'; actionId: string; prepared: boolean }
   | { kind: 'attune'; actionId: string; attuned: boolean }
+  | { kind: 'grip'; actionId: string; grip: 'oneHanded' | 'twoHanded' }
   | { kind: 'move'; actionId: string; containerId: string | null }
   | { kind: 'rest' | 'deathsave' | 'endconcentration' | 'endeffect'; actionId: string }
   /** M23: the player's chosen attribute/skill pairing overrides the

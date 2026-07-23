@@ -547,6 +547,7 @@ function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
     { id: 'spell.h1.cast', label: 'Heal', kind: 'cast', slotLevels: [1, 2] },
     { id: 'item.i1.equip', label: 'Arrows', kind: 'equip', equipped: false },
     { id: 'item.i1.attune', label: 'Arrows', kind: 'attune', attuned: false },
+    { id: 'item.i1.grip', label: 'Arrows', kind: 'grip', grip: 'oneHanded' },
     { id: 'spell.s1.prepare', label: 'Zap', kind: 'prepare', prepared: false },
     { id: 'item.i1.move', label: 'Arrows', kind: 'move' },
     { id: 'rest.short', label: 'Short Rest', kind: 'rest' },
@@ -725,6 +726,8 @@ export const fakeAdapter: SystemAdapter = {
         return { endpoint: 'equip-item', itemId: 'i1', equipped: intent.equipped };
       case 'attune':
         return { endpoint: 'attune-item', itemId: 'i1', attuned: intent.attuned };
+      case 'grip':
+        return { endpoint: 'update-item', itemId: 'i1', data: { 'flags.unseen-servent.grip': intent.grip } };
       case 'prepare':
         return { endpoint: 'update-item', itemId: 's1', data: { 'system.prepared': intent.prepared ? 1 : 0 } };
       case 'move':

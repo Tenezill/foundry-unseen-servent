@@ -1292,6 +1292,7 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>, physi
     // attacking live on the Actions tab.
     ...(isEquippable(item) ? { toggleActionId: `item.${item._id}.equip` } : {}),
     ...(isAttuneable(item) ? { attuneActionId: `item.${item._id}.attune` } : {}),
+    ...(isVersatileWeapon(item) ? { gripActionId: `item.${item._id}.grip` } : {}),
     ...(containerId !== undefined ? { containerId } : {}),
     ...(detail !== undefined ? { detail } : {}),
     // Physical items may be removed via the library API (M13).
@@ -2124,6 +2125,9 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
         attuned: isAttuned(item),
       });
     }
+    if (isVersatileWeapon(item)) {
+      out.push({ id: `item.${item._id}.grip`, label: item.name, kind: 'grip', grip: weaponGrip(item) });
+    }
     if (PHYSICAL_ITEM_TYPES.has(item.type)) {
       out.push({ id: `item.${item._id}.move`, label: item.name, kind: 'move' });
     }
@@ -2467,6 +2471,16 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         endpoint: 'attune-item',
         itemId: intent.actionId.slice('item.'.length, -'.attune'.length),
         attuned: intent.attuned,
+      };
+    }
+    case 'grip': {
+      if (intent.grip !== 'oneHanded' && intent.grip !== 'twoHanded') {
+        throw new IntentError('grip requires "oneHanded" or "twoHanded"', 'INVALID');
+      }
+      return {
+        endpoint: 'update-item',
+        itemId: intent.actionId.slice('item.'.length, -'.grip'.length),
+        data: { 'flags.unseen-servent.grip': intent.grip },
       };
     }
     case 'prepare': {
