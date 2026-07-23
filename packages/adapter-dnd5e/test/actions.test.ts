@@ -2576,3 +2576,53 @@ describe('versatile weapon grip — toggle', () => {
     expect(code).toBe('INVALID');
   });
 });
+
+describe('versatile weapon grip — attack sub-line & shield hint', () => {
+  const LS = 'item.gta26ORvqC323k3r';
+
+  function invRows(a: FoundryActorDoc) {
+    const s = dnd5eAdapter.toViewModel(a).sections.find(
+      (x): x is Extract<SheetSection, { kind: 'list' }> => x.kind === 'list' && x.id === 'inventory',
+    );
+    return s?.items ?? [];
+  }
+  function withGrip(grip: 'oneHanded' | 'twoHanded'): FoundryActorDoc {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip } };
+    return a;
+  }
+  // Self-contained: explicitly force the Shield equipped, rather than relying
+  // on the fixture's default equipped-state (which could drift independently
+  // of this test's intent).
+  function withShieldEquipped(a: FoundryActorDoc): FoundryActorDoc {
+    const shield = (a.items ?? []).find((i) => i._id === 'u69KONMFqydKuk1H')!;
+    (shield.system as Record<string, unknown>).equipped = true;
+    return a;
+  }
+
+  it('one-handed attack row shows the base die', () => {
+    expect(action(martialCaptured, `${LS}.attack`).sub).toBe('1d8 slashing · one-handed');
+  });
+
+  it('two-handed attack row shows the versatile die', () => {
+    expect(action(withGrip('twoHanded'), `${LS}.attack`).sub).toBe('1d10 slashing · two-handed');
+  });
+
+  it('a non-versatile weapon attack row has no sub-line', () => {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls.system as Record<string, unknown>).properties = [];
+    expect(action(a, `${LS}.attack`).sub).toBeUndefined();
+  });
+
+  it('flags a two-handed grip while a shield is equipped', () => {
+    const two = withShieldEquipped(withGrip('twoHanded'));
+    expect(invRows(two).find((r) => r.id === 'gta26ORvqC323k3r')?.tags).toContain('2H + shield');
+  });
+
+  it('no hint when one-handed even with a shield equipped', () => {
+    const a = withShieldEquipped(structuredClone(martialCaptured));
+    expect(invRows(a).find((r) => r.id === 'gta26ORvqC323k3r')?.tags ?? []).not.toContain('2H + shield');
+  });
+});

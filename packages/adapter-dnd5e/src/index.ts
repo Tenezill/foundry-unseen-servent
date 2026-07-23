@@ -747,6 +747,17 @@ function hasStealthDisadvantageArmor(actor: FoundryActorDoc): boolean {
   return false;
 }
 
+/** True when the actor has an equipped shield (dnd5e equipment
+ *  `system.type.value === 'shield'`). Mirrors hasStealthDisadvantageArmor. */
+function hasEquippedShield(actor: FoundryActorDoc): boolean {
+  for (const item of actor.items ?? []) {
+    if (item.type !== 'equipment') continue;
+    if (getPath(item.system, 'equipped') !== true) continue;
+    if (strAt(item.system, 'type.value') === 'shield') return true;
+  }
+  return false;
+}
+
 /**
  * Passive advantage/disadvantage indicator for a d20 roll row. DISPLAY-ONLY:
  * never applied to the rolled formula, because other effects can flip the net.
@@ -1253,7 +1264,12 @@ function parseEffects(actor: FoundryActorDoc): EffectSummary {
   return { concentration, conditions };
 }
 
-function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>, physicalIds: Set<string>): ListItem {
+function inventoryListItem(
+  item: FoundryItemDoc,
+  resourceIds: Set<string>,
+  physicalIds: Set<string>,
+  shieldEquipped: boolean,
+): ListItem {
   const qty = numAt(item.system, 'quantity') ?? 1;
   const subParts: string[] = [];
   if (qty !== 1) subParts.push(`×${qty}`);
@@ -1273,6 +1289,7 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>, physi
   const tags: string[] = [];
   if (getPath(item.system, 'equipped') === true) tags.push('equipped');
   if (isAttuned(item)) tags.push('attuned');
+  if (isVersatileWeapon(item) && weaponGrip(item) === 'twoHanded' && shieldEquipped) tags.push('2H + shield');
   // Group under a container row only when the ref resolves on this sheet —
   // captured worlds carry dangling compendium-source refs, which render flat.
   const container = strAt(item.system, 'container');
@@ -2091,7 +2108,14 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     if (item.type === 'weapon' && getPath(item.system, 'equipped') === true) {
       // Stowed weapons keep their row + equip toggle but offer no rolls —
       // equipping brings Attack/Dmg back (2026-07-18 design).
-      out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack', targeting: { mode: 'single', kind: 'attack' } });
+      const sub = versatileAttackSub(item);
+      out.push({
+        id: `item.${item._id}.attack`,
+        label: item.name,
+        kind: 'attack',
+        targeting: { mode: 'single', kind: 'attack' },
+        ...(sub !== undefined ? { sub } : {}),
+      });
       if (weaponDamageFormula(actor, item) !== undefined) {
         out.push({ id: `item.${item._id}.damage`, label: item.name, kind: 'damage' });
       }
@@ -2659,11 +2683,12 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     return c !== undefined && c !== '' && c !== item._id && physicalIds.has(c) ? c : undefined;
   };
 
+  const shieldEquipped = hasEquippedShield(actor);
   const carried: ListItem[] = [];
   const byContainer = new Map<string, ListItem[]>();
   for (const item of physicalItems) {
     const loc = locationOf(item);
-    const row = inventoryListItem(item, resourceIds, physicalIds);
+    const row = inventoryListItem(item, resourceIds, physicalIds, shieldEquipped);
     if (loc !== undefined) {
       const list = byContainer.get(loc);
       if (list) list.push(row);
@@ -2677,7 +2702,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   for (const item of physicalItems) {
     if (item.type !== 'container') continue;
     const contents = byContainer.get(item._id) ?? [];
-    const header = inventoryListItem(item, resourceIds, physicalIds);
+    const header = inventoryListItem(item, resourceIds, physicalIds, shieldEquipped);
     // Presentation-only contents weight (direct contents; same parsing as rows).
     let total = 0;
     let unit = 'lb';

@@ -293,6 +293,9 @@ export interface ActionDescriptor {
   /** grip only: current one-/two-handed state (the intent carries the desired
    *  state). Set only for versatile weapons. */
   grip?: 'oneHanded' | 'twoHanded';
+  /** attack only: active-die sub-line for versatile weapons, e.g.
+   *  "1d10 slashing · two-handed". Absent for non-versatile attacks. */
+  sub?: string;
   /** cast/use only: what this spell/feature mechanically does, for grouping
    *  and roll-result wording on the Actions tab (M15). System-agnostic:
    *  'damage' (deals damage, whether via an attack roll or a save), 'heal'
