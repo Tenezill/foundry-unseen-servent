@@ -217,3 +217,24 @@ describe('prepared-first ordering within a level', () => {
     expect(l2!.items.map((i) => i.id)).toEqual(['z_prep_b', 'z_always_d', 'z_unprep_a', 'z_unprep_c']);
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe('prepared-spell budget (spellPrep)', () => {
+  const vm = (a: FoundryActorDoc) => dnd5eAdapter.toViewModel(a);
+
+  it('a prepared caster reports current prepared count and a computed base', () => {
+    // Akra, Cleric 5, WIS 15 (+2): base = 2 + 5 = 7; prepared leveled (===1) = 3
+    // (Guiding Bolt, Detect Magic, Cure Wounds); always-prepared (===2) excluded.
+    expect(vm(casterCaptured).spellPrep).toEqual({ prepared: 3, base: 7 });
+  });
+
+  it('an actor with no preparable spells has no budget', () => {
+    expect(vm(martialCaptured).spellPrep).toBeUndefined();
+  });
+
+  it('toggling a spell to prepared raises the count', () => {
+    const actor = withSpell(casterCaptured, spellDoc('BudgetAdd0000001', { level: 1, prepared: 1 }));
+    expect(vm(actor).spellPrep).toEqual({ prepared: 4, base: 7 });
+  });
+});

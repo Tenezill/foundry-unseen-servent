@@ -212,6 +212,10 @@ export interface SheetViewModel {
   conditions?: Condition[];
   /** The spell being concentrated on, if any (M8, dnd5e: from effects). */
   concentration?: { label: string } | null;
+  /** Prepared-caster budget (2026-07-23). Present only when the actor has at
+   *  least one preparable spell. `base` is a best-effort rules maximum; the PWA
+   *  adds a persisted, player-set offset on top of it. */
+  spellPrep?: { prepared: number; base: number };
   /** Library collections the actor's adapter supports (M13): search ->
    *  preview -> add / remove. Each entry is a button hint for the PWA: the
    *  `id` routes to /library/:id/*, the `label` names the add button. */

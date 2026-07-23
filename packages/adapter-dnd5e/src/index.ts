@@ -1409,6 +1409,47 @@ function preparedRank(item: FoundryItemDoc): number {
   return raw === 2 || raw === 1 || raw === true ? 0 : 1;
 }
 
+/** Best-effort prepared-spell budget (spec §3). Present only when the actor has
+ *  ≥1 preparable spell. `base` mirrors dnd5e's preparation-formula shape but is
+ *  deliberately not a rules engine — multiclass/homebrew is the PWA offset's job. */
+function spellPrepBudget(actor: FoundryActorDoc): { prepared: number; base: number } | undefined {
+  const preparable = (actor.items ?? []).filter((i) => i.type === 'spell' && isPreparableSpell(i));
+  if (preparable.length === 0) return undefined;
+  const prepared = preparable.filter((i) => {
+    const raw = getPath(i.system, 'prepared');
+    return raw === 1 || raw === true;
+  }).length;
+  return { prepared, base: preparedBase(actor) };
+}
+
+/** Prepared-spell ceiling: spellcasting-ability modifier + a level contribution
+ *  (full = levels, half = ⌊levels/2⌋, third = ⌊levels/3⌋) of the highest-level
+ *  preparing class. Prefers classes with a non-empty
+ *  spellcasting.preparation.formula (the real preparers), else any spellcasting
+ *  class; 0 when none is found (the offset compensates). */
+function preparedBase(actor: FoundryActorDoc): number {
+  const casters = (actor.items ?? [])
+    .filter((i) => i.type === 'class')
+    .map((i) => ({
+      levels: numAt(i.system, 'levels') ?? 1,
+      ability: strAt(i.system, 'spellcasting.ability'),
+      progression: strAt(i.system, 'spellcasting.progression'),
+      formula: strAt(i.system, 'spellcasting.preparation.formula') ?? '',
+    }))
+    .filter((c) => c.ability !== undefined && c.progression !== undefined && c.progression !== 'none');
+  if (casters.length === 0) return 0;
+  const preparers = casters.filter((c) => c.formula.trim() !== '');
+  const pool = preparers.length > 0 ? preparers : casters;
+  const primary = [...pool].sort((a, b) => b.levels - a.levels)[0]!;
+  const contribution =
+    primary.progression === 'half'
+      ? Math.floor(primary.levels / 2)
+      : primary.progression === 'third'
+        ? Math.floor(primary.levels / 3)
+        : primary.levels;
+  return Math.max(0, abilityMod(actor.system, primary.ability!) + contribution);
+}
+
 /**
  * Preview ListItem for a RAW spell document (compendium search hit, not an
  * embedded item) — the learn-confirm sheet in the PWA renders it. Content
@@ -2774,6 +2815,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   });
 
   const { concentration, conditions } = parseEffects(actor);
+  const spellPrep = spellPrepBudget(actor);
 
   return {
     actorId: actor._id,
@@ -2786,6 +2828,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     actions: buildActions(actor),
     concentration,
     ...(conditions.length > 0 ? { conditions } : {}),
+    ...(spellPrep !== undefined ? { spellPrep } : {}),
     library: LIBRARY.map((c) => ({ id: c.id, label: c.label })),
   };
 }
