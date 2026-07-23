@@ -2660,13 +2660,10 @@ describe('targeted cast — out of uses', () => {
 
   it('rejects a targeted cast of an exhausted free-use spell with INVALID', () => {
     const { actor, id } = exhaustedFreeUseHealActor();
-    let code: string | undefined;
-    try {
-      build(actor, { kind: 'cast', actionId: `spell.${id}.cast`, targetTokenUuids: ['Scene.s.Token.t'] });
-    } catch (e) {
-      code = (e as InstanceType<typeof IntentError>).code;
-    }
-    expect(code).toBe('INVALID');
+    expectIntentError(
+      () => build(actor, { kind: 'cast', actionId: `spell.${id}.cast`, targetTokenUuids: ['Scene.s.Token.t'] }),
+      'INVALID',
+    );
   });
 
   it('a free-use spell cast row carries its uses counter', () => {
