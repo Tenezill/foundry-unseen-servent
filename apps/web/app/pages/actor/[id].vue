@@ -144,6 +144,13 @@
             Removing items is GM-side for now — ask your GM to delete a mis-created one.
           </p>
 
+          <SpellPrepSummary
+            v-if="sheet?.spellPrep && spellSectionsOnTab.length > 0"
+            :prepared="sheet.spellPrep.prepared"
+            :base="sheet.spellPrep.base"
+            :actor-id="actorId"
+          />
+
           <div v-if="spellChips.length > 0" class="filter-chips spell-filters">
             <button
               v-for="chip in spellChips"
