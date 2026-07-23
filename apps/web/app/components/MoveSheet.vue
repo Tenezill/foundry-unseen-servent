@@ -26,7 +26,7 @@
         </button>
       </div>
 
-      <div class="grid-wrap">
+      <div ref="gridWrap" class="grid-wrap">
         <div class="grid" :style="{ gridTemplateColumns: `repeat(${side}, 1fr)` }">
           <button
             v-for="cell in cells"
@@ -61,7 +61,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import type { MovementCell, MovementOther, MovementView } from '~/types/api'
 
 const props = defineProps<{ movement: MovementView; busy: boolean }>()
@@ -75,6 +75,7 @@ const emit = defineEmits<{
 interface GridCell extends MovementCell {
   isCenter: boolean
   other?: MovementOther
+  reachable: boolean
   selectable: boolean
 }
 
@@ -93,11 +94,32 @@ const remainingFt = computed(() => props.movement.remainingFt ?? 0)
 /** Reachable range in feet: the per-turn budget while in combat, else the
  *  full walk speed. */
 const rangeFt = computed(() => (inCombat.value ? remainingFt.value : speedFt.value))
-/** Reachable radius in cells; the grid is (2r+1)². */
-const radius = computed(() => Math.floor(rangeFt.value / gridDistance.value))
-const side = computed(() => radius.value * 2 + 1)
+/** Selectable/highlighted radius in cells — how far the player can actually
+ *  move this action (remaining budget in combat, full speed otherwise). */
+const reachRadius = computed(() => Math.floor(rangeFt.value / gridDistance.value))
+/** Squares of greyed context shown around the full-speed reach so the player
+ *  can read nearby enemies (2026-07-23). */
+const WINDOW_MARGIN = 2
+/** Rendered radius — full WALKING speed + margin, fixed for the whole turn: it
+ *  does not shrink as budget is spent (spent squares grey out) nor grow on
+ *  Dash. The grid is (2·windowRadius+1)²; squares beyond reachRadius render
+ *  greyed. */
+const windowRadius = computed(() => Math.floor(speedFt.value / gridDistance.value) + WINDOW_MARGIN)
+const side = computed(() => windowRadius.value * 2 + 1)
 
 const selected = ref<MovementCell | null>(null)
+
+const gridWrap = ref<HTMLElement | null>(null)
+/** Open centered on the ★ token (always the exact grid center) — the fixed-
+ *  size grid can be wider/taller than the sheet, and the sheet mounts fresh on
+ *  each open (2026-07-23). */
+onMounted(async () => {
+  await nextTick()
+  const el = gridWrap.value
+  if (!el) return
+  el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2
+  el.scrollTop = (el.scrollHeight - el.clientHeight) / 2
+})
 
 const center = computed<MovementCell>(() => props.movement.token ?? { cx: 0, cy: 0 })
 
@@ -111,13 +133,16 @@ const otherAt = computed(() => {
 const cells = computed<GridCell[]>(() => {
   const out: GridCell[] = []
   const c = center.value
-  for (let dy = -radius.value; dy <= radius.value; dy++) {
-    for (let dx = -radius.value; dx <= radius.value; dx++) {
+  const wr = windowRadius.value
+  const rr = reachRadius.value
+  for (let dy = -wr; dy <= wr; dy++) {
+    for (let dx = -wr; dx <= wr; dx++) {
       const cx = c.cx + dx
       const cy = c.cy + dy
       const other = otherAt.value.get(`${cx},${cy}`)
       const isCenter = dx === 0 && dy === 0
-      out.push({ cx, cy, isCenter, other, selectable: !isCenter && !other })
+      const reachable = Math.max(Math.abs(dx), Math.abs(dy)) <= rr
+      out.push({ cx, cy, isCenter, other, reachable, selectable: reachable && !isCenter && !other })
     }
   }
   return out
@@ -141,6 +166,7 @@ function cellClass(cell: GridCell): Record<string, boolean> {
   return {
     center: cell.isCenter,
     occupied: !!cell.other,
+    'out-of-range': !cell.reachable && !cell.isCenter,
     selected: selected.value?.cx === cell.cx && selected.value?.cy === cell.cy,
   }
 }
@@ -154,6 +180,7 @@ function dotClass(disposition: number): string {
 function cellAria(cell: GridCell): string {
   if (cell.isCenter) return 'Your position'
   if (cell.other) return `Occupied by ${cell.other.name ?? 'a creature'}`
+  if (!cell.reachable) return 'Out of range'
   return `Move ${distanceOf(cell)} ${units.value}`
 }
 </script>
@@ -197,9 +224,10 @@ function cellAria(cell: GridCell): string {
 }
 
 .grid-wrap { overflow: auto; max-height: 55vh; }
-.grid { display: grid; gap: 2px; }
+.grid { display: grid; gap: 2px; width: max-content; --move-cell: 40px; }
 .cell {
-  aspect-ratio: 1;
+  width: var(--move-cell);
+  height: var(--move-cell);
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -210,6 +238,14 @@ function cellAria(cell: GridCell): string {
 .cell:disabled { opacity: 0.9; }
 .cell.center { background: color-mix(in srgb, var(--gold) 35%, var(--panel-2)); }
 .cell.occupied { background: var(--panel); }
+/* Greyed context beyond reach (2026-07-23): still shows the occupant dot so
+   the player can read nearby enemies; declared last so it wins the background
+   over .occupied for an out-of-range occupied cell. */
+.cell.out-of-range {
+  background: var(--panel-2);
+  border-color: color-mix(in srgb, var(--line) 60%, transparent);
+  opacity: 0.5;
+}
 .cell.selected {
   background: linear-gradient(180deg, var(--gold-bright), var(--gold));
   border-color: var(--gold-deep);
