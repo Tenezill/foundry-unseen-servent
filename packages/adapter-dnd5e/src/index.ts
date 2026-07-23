@@ -1354,7 +1354,6 @@ function spellListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListItem
   // defensively for older documents.
   const rawPrepared = getPath(item.system, 'prepared');
   const always = rawPrepared === 2;
-  const isPrepared = always || rawPrepared === 1 || rawPrepared === true;
   const rawProps = getPath(item.system, 'properties');
   const properties = Array.isArray(rawProps) ? rawProps : [];
   const freeUse = freeUseMethod(item);
@@ -1442,7 +1441,7 @@ function preparedBase(actor: FoundryActorDoc): number {
   const pool = preparers.length > 0 ? preparers : casters;
   const primary = [...pool].sort((a, b) => b.levels - a.levels)[0]!;
   const contribution =
-    primary.progression === 'half'
+    primary.progression === 'half' || primary.progression === 'artificer'
       ? Math.floor(primary.levels / 2)
       : primary.progression === 'third'
         ? Math.floor(primary.levels / 3)

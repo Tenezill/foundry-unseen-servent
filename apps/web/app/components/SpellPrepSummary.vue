@@ -55,7 +55,7 @@ const denom = computed(() => Math.max(0, props.base + offset.value))
 const over = computed(() => props.prepared > denom.value)
 
 function bump(delta: number): void {
-  offset.value += delta
+  offset.value = Math.max(offset.value + delta, -props.base)
   try {
     localStorage.setItem(storageKey.value, String(offset.value))
   } catch {
