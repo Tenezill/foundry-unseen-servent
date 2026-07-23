@@ -1369,11 +1369,9 @@ function spellListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListItem
     if (uses !== undefined && recovery !== undefined) subParts.push(`${uses.max}/${recovery}`);
     else subParts.push('no slot needed');
   } else if (always) subParts.push('always prepared');
-  else if (isPrepared) subParts.push('prepared');
 
   const tags: string[] = [];
   if (freeUse !== undefined) tags.push(freeUse === 'atwill' ? 'free use' : 'innate');
-  if (freeUse === undefined && isPrepared) tags.push('prepared');
   if (properties.includes('concentration')) tags.push('concentration');
   if (properties.includes('ritual')) tags.push('ritual');
 

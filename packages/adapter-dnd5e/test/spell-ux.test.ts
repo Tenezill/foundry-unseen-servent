@@ -59,6 +59,17 @@ function withSpell(actor: FoundryActorDoc, spell: FoundryItemDoc): FoundryActorD
   return { ...actor, items: [...(actor.items ?? []), spell] };
 }
 
+/** Minimal leveled spell doc for preparation tests. Defaults: level 2,
+ *  method "spell" (not free-use), unprepared. */
+function spellDoc(id: string, overrides: Record<string, unknown> = {}): FoundryItemDoc {
+  return {
+    _id: id,
+    name: id,
+    type: 'spell',
+    system: { level: 2, school: 'evo', method: 'spell', prepared: 0, properties: [], ...overrides },
+  };
+}
+
 // ---------------------------------------------------------------------------
 
 describe('weapon actions only while equipped', () => {
@@ -164,5 +175,26 @@ describe('per-level spell sections', () => {
 
   it('non-caster emits no spell sections at all', () => {
     expect(spellSections(martialCaptured)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('prepared spells: no redundant signalling', () => {
+  it('a prepared leveled spell drops the "prepared" sub segment and tag but keeps its toggle + distinct tags', () => {
+    const actor = withSpell(casterCaptured, spellDoc('PrepBolt00000001', { level: 1, prepared: 1, properties: ['concentration'] }));
+    const row = spellSections(actor).flatMap((s) => s.items).find((r) => r.id === 'PrepBolt00000001');
+    expect(row).toBeDefined();
+    expect(row!.tags ?? []).not.toContain('prepared');
+    expect(row!.sub ?? '').not.toMatch(/prepared/i);
+    expect(row!.toggleActionId).toBe('spell.PrepBolt00000001.prepare');
+    expect(row!.tags ?? []).toContain('concentration');
+  });
+
+  it('an always-prepared (prepared: 2) spell keeps its "always prepared" sub and gets no toggle', () => {
+    const actor = withSpell(casterCaptured, spellDoc('DomainWard000001', { level: 1, prepared: 2 }));
+    const row = spellSections(actor).flatMap((s) => s.items).find((r) => r.id === 'DomainWard000001');
+    expect(row!.sub ?? '').toMatch(/always prepared/i);
+    expect(row!.toggleActionId).toBeUndefined();
   });
 });
