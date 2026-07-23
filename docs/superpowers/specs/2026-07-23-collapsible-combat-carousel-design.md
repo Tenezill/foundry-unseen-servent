@@ -99,7 +99,7 @@ The three current consumers of `showCarousel` retarget to the effective flag:
 - **Combat ends while collapsed:** the combat-end watcher resets to expanded;
   both dock and pill are hidden anyway (both gated on `showCarousel`), and the
   next combat opens expanded.
-- **Your turn while collapsed:** auto-expands once via the `canEndTurn` watcher.
+- **Your turn while collapsed:** auto-expands once via the `myTurnActive` watcher.
 
 ## Trade-off
 
