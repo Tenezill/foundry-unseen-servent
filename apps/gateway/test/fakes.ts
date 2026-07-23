@@ -291,6 +291,10 @@ export class FakeRelay implements RelayPort {
   useOnTargetsResult: TargetedUseResult = { attack: null, targets: [] };
   /** RelayError-shaped 408, mirrors useAbilityTimeout. */
   useOnTargetsTimeout = false;
+  /** RelayError-shaped 400: targetedUseScript's own `activity.use()` guard
+   *  refused (out of uses, no spell slot, etc.) — mirrors the real relay
+   *  wording used by the gateway's isUsePerformFailure backstop. */
+  useOnTargetsPerformFail = false;
 
   async useAbilityOnTargets(
     actorUuid: string,
@@ -307,6 +311,12 @@ export class FakeRelay implements RelayPort {
       const err = new Error('relay /execute-js -> 408: request timed out') as Error & { status: number };
       err.name = 'RelayError';
       err.status = 408;
+      throw err;
+    }
+    if (this.useOnTargetsPerformFail) {
+      const err = new Error('relay /execute-js -> 400: {"success":false,"error":"Error executing script: use could not be performed"}') as Error & { status: number };
+      err.name = 'RelayError';
+      err.status = 400;
       throw err;
     }
     if (this.actionError) this.throwActionError('execute-js');

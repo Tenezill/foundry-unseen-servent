@@ -503,6 +503,18 @@ function isRelayTimeout(err: unknown): boolean {
   return err instanceof Error && err.name === 'RelayError' && status === 408;
 }
 
+/** A relay 400 from targetedUseScript's own `activity.use()` guard: the ability
+ *  could not be used (out of uses, no spell slot, etc.). User-actionable, not an
+ *  upstream outage — surface as INVALID, never 502. */
+function isUsePerformFailure(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.name === 'RelayError' &&
+    (err as { status?: unknown }).status === 400 &&
+    /use could not be performed/.test(err.message)
+  );
+}
+
 /** RelayError from execute-js when the module setting or API-key scope is
  *  missing — surfaced as an actionable 422 instead of a generic 502.
  *  Keys on the module's refusal WORDING, never the endpoint path (which
@@ -1603,6 +1615,9 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
             // retrying could double it.
             if (isRelayTimeout(err)) {
               return sendError(reply, 502, 'UPSTREAM', 'Timed out — check the Foundry chat before retrying.');
+            }
+            if (isUsePerformFailure(err)) {
+              return sendError(reply, 422, 'INVALID_INTENT', "That couldn't be used right now — out of uses or no spell slot.");
             }
             throw err;
           }

@@ -2644,3 +2644,28 @@ describe('versatile weapon grip — combat attack-mode', () => {
     expect(out).toMatchObject({ endpoint: 'use-on-targets', attackMode: 'twoHanded' });
   });
 });
+
+describe('targeted cast — out of uses', () => {
+  function exhaustedFreeUseHealActor(): { actor: FoundryActorDoc; id: string } {
+    const a = structuredClone(caster);
+    const spell = (a.items ?? []).find((i) => i.type === 'spell');
+    if (!spell) throw new Error('fixture has no spell');
+    (spell.system as Record<string, unknown>).method = 'atwill';
+    (spell.system as Record<string, unknown>).uses = { max: 1, spent: 1 };
+    (spell.system as Record<string, unknown>).activities = {
+      a0: { _id: 'a0', type: 'heal', healing: { number: 1, denomination: 4, bonus: '@mod', types: ['healing'] } },
+    };
+    return { actor: a, id: spell._id };
+  }
+
+  it('rejects a targeted cast of an exhausted free-use spell with INVALID', () => {
+    const { actor, id } = exhaustedFreeUseHealActor();
+    let code: string | undefined;
+    try {
+      build(actor, { kind: 'cast', actionId: `spell.${id}.cast`, targetTokenUuids: ['Scene.s.Token.t'] });
+    } catch (e) {
+      code = (e as InstanceType<typeof IntentError>).code;
+    }
+    expect(code).toBe('INVALID');
+  });
+});

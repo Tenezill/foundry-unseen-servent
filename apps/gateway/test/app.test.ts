@@ -1395,6 +1395,18 @@ describe('targeted actions (use-on-targets)', () => {
     expect(relay.useOnTargetsCalls).toHaveLength(1); // exactly one attempt
   });
 
+  it('maps a relay 400 "use could not be performed" to 422 INVALID_INTENT, not 502', async () => {
+    const { app, relay } = await setupWithEncounter();
+    relay.useOnTargetsPerformFail = true;
+    const res = await post(app, 'a1', {
+      kind: 'cast',
+      actionId: 'spell.f1.cast',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: { code: string } }).error.code).toBe('INVALID_INTENT');
+  });
+
   it('parseActionIntent rejects malformed target lists (422)', async () => {
     const { app } = setup();
     for (const bad of [

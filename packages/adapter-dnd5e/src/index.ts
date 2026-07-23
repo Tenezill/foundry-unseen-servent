@@ -2396,6 +2396,7 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
           throw new IntentError(`"${item.name}" requires attunement`, 'INVALID');
         }
         if (targeted !== undefined) {
+          if (item) assertUsesRemaining(item);
           return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted };
         }
         if (item) {
@@ -2424,6 +2425,7 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       const itemId = intent.actionId.slice('feature.'.length, -'.use'.length);
       const item = (actor.items ?? []).find((i) => i._id === itemId);
       if (targeted !== undefined) {
+        if (item) assertUsesRemaining(item);
         return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted };
       }
       if (item && activityType(item) === 'heal') {
@@ -2450,6 +2452,7 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       }
       const upcast = descriptor.slotLevels !== undefined && chosen > baseLevel;
       if (targeted !== undefined) {
+        if (item) assertUsesRemaining(item);
         return {
           endpoint: 'use-on-targets',
           itemId,
