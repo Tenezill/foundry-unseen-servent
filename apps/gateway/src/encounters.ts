@@ -98,6 +98,9 @@ export interface EncounterDeps {
   reconnectMinMs?: number;
   /** Hooks-stream reconnect backoff ceiling. Default 30000. */
   reconnectMaxMs?: number;
+  /** Time-based REST reconciliation cadence while ≥1 client is attached
+   *  (2026-07-23). Default 3000. */
+  reconcileMs?: number;
   log?: { warn(obj: object, msg: string): void; debug?(obj: object, msg: string): void };
 }
 
@@ -121,9 +124,15 @@ export class EncounterManager {
   private readonly listeners = new Set<(view: EncounterView) => void>();
   private loopAc: AbortController | null = null;
   private readonly fetchTimeoutMs: number;
+  private readonly reconcileMs: number;
+  /** Last serialized view fanned out to listeners — emit() suppresses an
+   *  identical follow-up so the periodic reconcile is silent when nothing
+   *  changed (2026-07-23). */
+  private lastEmittedJson: string | undefined;
 
   constructor(private readonly deps: EncounterDeps) {
     this.fetchTimeoutMs = deps.fetchTimeoutMs ?? 3_000;
+    this.reconcileMs = deps.reconcileMs ?? 3_000;
   }
 
   /** Seed from the relay's REST read, then start the hooks subscribe loop
@@ -132,6 +141,7 @@ export class EncounterManager {
     await this.reseed();
     this.loopAc = new AbortController();
     void this.subscribeLoop(this.loopAc);
+    void this.reconcileLoop(this.loopAc);
   }
 
   stop(): void {
@@ -146,8 +156,17 @@ export class EncounterManager {
     if (this.loopAc === null) return;
     this.loopAc.abort();
     this.loopAc = new AbortController();
+    this.lastEmittedJson = undefined; // force one authoritative emit under the new identity
     void this.reseed();
     void this.subscribeLoop(this.loopAc);
+    void this.reconcileLoop(this.loopAc);
+  }
+
+  /** Fire-and-forget coalesced REST reconcile (2026-07-23): the SSE route calls
+   *  this on client connect so a reload reflects truth immediately, without
+   *  waiting for the next reconcile tick. Coalesces with any in-flight reseed. */
+  reconcileNow(): void {
+    void this.reseed();
   }
 
   isActive(): boolean {
@@ -232,6 +251,9 @@ export class EncounterManager {
 
   private emit(): void {
     const view = this.view();
+    const json = JSON.stringify(view);
+    if (json === this.lastEmittedJson) return;
+    this.lastEmittedJson = json;
     for (const send of this.listeners) send(view);
   }
 
@@ -481,6 +503,26 @@ export class EncounterManager {
       if (ac.signal.aborted) return;
       await abortableDelay(backoff, ac.signal);
       backoff = Math.min(backoff * 2, maxMs);
+    }
+  }
+
+  /** Time-based reconciliation (2026-07-23): the relay drops hook frames under
+   *  bursts and the SSE re-emit only rebroadcasts our own possibly-stale view,
+   *  so a combat start (round→1) or end (delete) can be missed with no
+   *  follow-up hook to trigger a reseed. While at least one client is attached,
+   *  re-read the authoritative REST state on a modest cadence; emit() dedups so
+   *  an unchanged poll is silent. Shares loopAc with subscribeLoop — stop() and
+   *  restartStream() abort it. */
+  private async reconcileLoop(ac: AbortController): Promise<void> {
+    while (!ac.signal.aborted) {
+      await abortableDelay(this.reconcileMs, ac.signal);
+      if (ac.signal.aborted) return;
+      if (this.listeners.size === 0) continue; // only poll while watched
+      try {
+        await this.reseed();
+      } catch (err) {
+        this.deps.log?.warn({ err: (err as Error).message }, 'encounter: reconcile reseed failed');
+      }
     }
   }
 }

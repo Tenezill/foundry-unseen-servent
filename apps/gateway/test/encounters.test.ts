@@ -1164,3 +1164,110 @@ describe('tokenUuid plumbing + turn accessors', () => {
     manager.stop();
   });
 });
+
+describe('time-based reconciliation (2026-07-23)', () => {
+  /** REST encounter with one linked PC combatant (Task 0 §2a shape). */
+  function liveRest(round: number) {
+    return [
+      {
+        id: 'live',
+        name: 'Combat Encounter',
+        round,
+        turn: 0,
+        current: true,
+        combatants: [
+          { id: 'c1', name: 'Randal', actorUuid: 'Actor.a1', img: null, initiative: 12, hidden: false, defeated: false },
+        ],
+      },
+    ];
+  }
+
+  it('reconciles a MISSED combat-start from REST while a client is attached (no hook frame)', async () => {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 20, 20));
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50, reconcileMs: 20 });
+    await manager.start(); // relay.encounters is [] -> inactive
+    expect(manager.view()).toEqual({ active: false });
+
+    const detach = manager.attach(() => {}); // reconcile only polls while watched
+    relay.encounters = liveRest(1); // combat starts; its updateCombat frame is dropped
+
+    let view = manager.view();
+    for (let i = 0; i < 100 && !view.active; i++) {
+      await sleep(5);
+      view = manager.view();
+    }
+    expect(view.active).toBe(true);
+    expect(view.combatants?.map((c) => c.id)).toEqual(['c1']);
+    detach();
+    manager.stop();
+  });
+
+  it('reconciles a MISSED combat-end from REST while a client is attached (no deleteCombat frame)', async () => {
+    const relay = new FakeRelay();
+    relay.entities.set('Actor.a1', dnd5eActor('a1', 'Randal', 'character', 20, 20));
+    relay.encounters = liveRest(1);
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50, reconcileMs: 20 });
+    await manager.start(); // seeds active
+    expect(manager.view().active).toBe(true);
+
+    const detach = manager.attach(() => {});
+    relay.encounters = []; // combat ends; the deleteCombat frame is dropped
+
+    let view = manager.view();
+    for (let i = 0; i < 100 && view.active; i++) {
+      await sleep(5);
+      view = manager.view();
+    }
+    expect(view).toEqual({ active: false });
+    detach();
+    manager.stop();
+  });
+
+  it('does NOT poll REST when no client is attached', async () => {
+    const relay = new FakeRelay();
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50, reconcileMs: 20 });
+    await manager.start();
+    const after = relay.getEncountersCalls.length;
+    await sleep(120); // several reconcile ticks would fire if it were ungated
+    expect(relay.getEncountersCalls.length).toBe(after); // no extra reads
+    manager.stop();
+  });
+
+  it('emit() suppresses an unchanged view but still emits a genuine change', async () => {
+    const relay = new FakeRelay();
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50, reconcileMs: 60_000 });
+    await manager.start(); // inactive; lastEmitted = inactive
+    const frames: Array<{ active: boolean; round?: number }> = [];
+    const detach = manager.attach((v) => frames.push(v));
+
+    // Ghost combatant (no actorId) -> no actor-cache fetch/emit to muddy the count.
+    const doc = { _id: 'c1', round: 1, turn: 0, scene: 's1', combatants: [{ _id: 'x1', initiative: 5, tokenId: null }] };
+    relay.emitUpdateCombat(doc);
+    relay.emitUpdateCombat(doc); // identical -> deduped
+    expect(frames).toHaveLength(1);
+    expect(frames[0]?.active).toBe(true);
+
+    relay.emitUpdateCombat({ ...doc, round: 2 }); // genuine change -> emits
+    expect(frames).toHaveLength(2);
+    expect(frames[1]?.round).toBe(2);
+    detach();
+    manager.stop();
+  });
+
+  it('reconcileNow() pulls fresh REST state on demand', async () => {
+    const relay = new FakeRelay();
+    const manager = new EncounterManager({ relay, fetchTimeoutMs: 50, reconcileMs: 60_000 });
+    await manager.start(); // inactive
+    relay.encounters = liveRest(1);
+    manager.reconcileNow();
+
+    let view = manager.view();
+    for (let i = 0; i < 100 && !view.active; i++) {
+      await sleep(5);
+      view = manager.view();
+    }
+    expect(view.active).toBe(true);
+    manager.stop();
+  });
+});
