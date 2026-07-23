@@ -1,7 +1,7 @@
 <template>
   <div class="sheet-root">
     <template v-if="sheet">
-      <div class="frame" :class="{ 'with-carousel': showCarousel }">
+      <div class="frame" :class="{ 'with-carousel': carouselDockVisible }">
         <div class="toolbar">
           <NuxtLink to="/" class="tool back" aria-label="Back to characters">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -206,7 +206,7 @@
         </main>
       </div>
 
-      <div v-if="showCarousel" class="carousel-dock">
+      <div v-if="carouselDockVisible" class="carousel-dock">
         <InitiativeCarousel
           :combatants="encounter.combatants ?? []"
           :round="encounter.round"
@@ -214,8 +214,22 @@
           :actor-id="actorId"
           :can-end-turn="canEndTurn"
           @end-turn="onEndTurn"
+          @collapse="carouselCollapsed = true"
         />
       </div>
+
+      <button
+        v-if="carouselPillVisible"
+        type="button"
+        class="carousel-pill"
+        :class="{ 'your-turn': canEndTurn }"
+        aria-label="Show turn order"
+        @click="carouselCollapsed = false"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path :d="ICONS.combat" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
 
       <nav class="tabbar" aria-label="Sheet sections">
         <button
@@ -362,7 +376,7 @@
     <DiceTray
       v-if="sheet"
       :actor-id="actorId"
-      :raised="showCarousel"
+      :raised="carouselDockVisible"
       :readonly="conn === 'offline'"
       @rolling="startRollAnim('Dice roll')"
       @roll="onDiceRoll"
@@ -596,6 +610,27 @@ const canEndTurn = computed(() => {
   if (!turnId) return false
   const acting = encounter.value.combatants?.find((c) => c.id === turnId)
   return acting?.actorId === actorId.value
+})
+
+/** Combat carousel collapse (2026-07-23): the player can hide the initiative
+ *  dock to reclaim vertical space; a floating pill restores it. In-memory only
+ *  — reset to expanded when combat ends (so a new combat opens expanded) and
+ *  auto-expanded once when it becomes the viewer's own turn. */
+const carouselCollapsed = ref(false)
+const carouselDockVisible = computed(() => showCarousel.value && !carouselCollapsed.value)
+const carouselPillVisible = computed(() => showCarousel.value && carouselCollapsed.value)
+
+/* Combat ended -> next combat opens expanded. encounter.value only changes on a
+ * real SSE frame (disconnects flip combatConn, never the active flag), so this
+ * true->false edge is a genuine end, not a reconnect blip. */
+watch(encounterActive, (now, was) => {
+  if (was && !now) carouselCollapsed.value = false
+})
+
+/* Your turn arrived -> reopen once (edge-triggered, so re-collapsing mid-turn
+ * sticks until the next turn). */
+watch(canEndTurn, (now, prev) => {
+  if (now && !prev) carouselCollapsed.value = false
 })
 
 const turnEndBusy = ref(false)
@@ -2417,6 +2452,48 @@ onBeforeUnmount(() => {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-top: 1px solid var(--line);
+}
+
+/* ---- collapsed-carousel restore pill (2026-07-23) ---- */
+
+.carousel-pill {
+  position: fixed;
+  right: 14px;
+  bottom: calc(84px + var(--safe-bottom));
+  z-index: 39;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  border: 1px solid var(--gold-deep);
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  color: var(--accent-ink);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--gold) 34%, transparent);
+}
+
+.carousel-pill svg {
+  width: 24px;
+  height: 24px;
+}
+
+.carousel-pill:active {
+  transform: scale(0.94);
+}
+
+.carousel-pill.your-turn {
+  animation: pill-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pill-pulse {
+  0%, 100% {
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--gold) 34%, transparent);
+  }
+  50% {
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--gold) 34%, transparent),
+      0 0 0 4px color-mix(in srgb, var(--gold-bright) 45%, transparent);
+  }
 }
 
 /* ---- bottom tabs ---- */
