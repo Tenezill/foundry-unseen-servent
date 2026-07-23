@@ -9,6 +9,22 @@
 
     <ConnectionPill class="hero-live" :state="conn" />
 
+    <button
+      v-if="inspiration"
+      class="hero-insp"
+      :class="{ lit: hasInspiration }"
+      type="button"
+      :disabled="readonly"
+      :aria-pressed="hasInspiration"
+      :aria-label="hasInspiration
+        ? 'Heroic Inspiration: available, tap to spend'
+        : 'Heroic Inspiration: none, tap to grant'"
+      @click="toggleInspiration"
+    >
+      <span class="spark" aria-hidden="true">✦</span>
+      Inspiration
+    </button>
+
     <svg class="corner tl" viewBox="0 0 46 46" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 22 Q4 4 22 4 M4 14 Q4 8 10 6 M12 4 Q18 4 20 9" /><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none" /></svg>
     <svg class="corner tr" viewBox="0 0 46 46" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 22 Q4 4 22 4 M4 14 Q4 8 10 6 M12 4 Q18 4 20 9" /><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none" /></svg>
     <svg class="corner bl" viewBox="0 0 46 46" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 22 Q4 4 22 4 M4 14 Q4 8 10 6 M12 4 Q18 4 20 9" /><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none" /></svg>
@@ -86,6 +102,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'numpad', resourceId: string): void
   (e: 'action', actionId: string): void
+  (e: 'step', resourceId: string, direction: 1 | -1): void
 }>()
 
 const config = useRuntimeConfig()
@@ -123,6 +140,18 @@ const hpPct = computed(() => {
   return Math.max(0, Math.min(100, (h.value / h.max) * 100))
 })
 
+/** Heroic Inspiration, promoted out of the Vitals tracks into the hero card
+ *  so players actually see it. Only systems that emit the resource show it. */
+const inspiration = computed<ResourceDescriptor | undefined>(() =>
+  props.sheet.resources.find((r) => r.id === 'inspiration'),
+)
+const hasInspiration = computed(() => inspiration.value?.value === 1)
+
+/** Spend when you have it, grant when you don't (min 0 / max 1 resource). */
+function toggleInspiration(): void {
+  emit('step', 'inspiration', hasInspiration.value ? -1 : 1)
+}
+
 /** The vitals cluster: every headline stat except the class/level line. */
 const cluster = computed<Stat[]>(() => props.sheet.headline.filter((s) => s.id !== 'class'))
 </script>
@@ -159,6 +188,54 @@ const cluster = computed<Stat[]>(() => props.sheet.headline.filter((s) => s.id !
   z-index: 2;
 }
 
+/* ---- Heroic Inspiration chip ----
+ * Stacks directly beneath .hero-live in the same right gutter. Mirrors
+ * ConnectionPill's pill shape, gold-accented: "lit" when available, still
+ * clearly visible (dimmed) when spent so the player knows it exists. */
+.hero-insp {
+  position: absolute;
+  top: 48px;
+  right: 14px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--gold) 30%, var(--line));
+  background: var(--panel);
+  color: var(--ink-dim);
+  white-space: nowrap;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.hero-insp .spark {
+  font-size: 0.82rem;
+  line-height: 1;
+  color: var(--gold);
+  opacity: 0.5;
+}
+.hero-insp.lit {
+  border-color: color-mix(in srgb, var(--gold) 55%, var(--line));
+  background: color-mix(in srgb, var(--gold) 20%, var(--panel));
+  color: var(--gold-bright);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--gold) 55%, transparent);
+}
+.hero-insp.lit .spark {
+  color: var(--gold-bright);
+  opacity: 1;
+}
+.hero-insp:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.hero-insp:disabled {
+  opacity: 0.55;
+}
+
 .corner {
   position: absolute;
   width: 44px;
@@ -177,7 +254,9 @@ const cluster = computed<Stat[]>(() => props.sheet.headline.filter((s) => s.id !
   gap: 16px;
   align-items: center;
   position: relative;
-  padding-right: 56px;
+  /* Clears the right-gutter stack (live pill + inspiration chip) so a long
+   * two-line name wraps before colliding with the chip below it. */
+  padding-right: 120px;
 }
 
 .medallion {
