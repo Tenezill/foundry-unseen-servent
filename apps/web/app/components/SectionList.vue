@@ -47,7 +47,7 @@
           </svg>
         </button>
         <ActorAvatar :name="item.label" :img="item.img" :size="38" />
-        <div class="row-main">
+        <div class="row-main" :class="{ dim: isUnprepared(item) }">
           <button
             v-if="item.detail || (item.removable && !readonly)"
             class="row-name detail"
@@ -262,6 +262,13 @@ function toggleOn(action: ActionDescriptor): boolean {
   return action.kind === 'prepare' ? action.prepared === true : action.equipped === true
 }
 
+/** A spell row is "unprepared" when it has a Prepare toggle that is currently
+ *  off. Inventory/feature rows (no prepare toggle) are never dimmed. */
+function isUnprepared(item: ListItem): boolean {
+  const a = toggleOf(item)
+  return !!a && a.kind === 'prepare' && a.prepared === false
+}
+
 function toggleLabel(action: ActionDescriptor): string {
   if (action.kind === 'prepare') return action.prepared ? 'Prepared' : 'Prepare'
   return action.equipped ? 'Equipped' : 'Equip'
@@ -332,6 +339,10 @@ function tap(item: ListItem): void {
   flex-direction: column;
   gap: 1px;
   align-items: flex-start;
+}
+
+.row-main.dim {
+  opacity: 0.5;
 }
 
 .row-controls {
