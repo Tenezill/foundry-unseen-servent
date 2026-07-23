@@ -288,7 +288,7 @@ Expected: PASS (no new errors).
 - [ ] **Step 7: Visual smoke against the dev stack**
 
 With the dev stack running and the fixture combat active (mock server exposes a permanently-active fixture encounter; the live stack shows one when a Foundry combat runs), open an actor sheet during combat and verify:
-- Tap the carousel's hide (down-chevron) button → the dock disappears, the dice FAB drops to its normal position, the sheet content reclaims the bottom space, and the `⚔` pill appears bottom-right.
+- Tap the carousel's hide (down-chevron) button → the dock disappears, the dice FAB drops to its normal position, the sheet content reclaims the bottom space, and the combat-glyph (shield) pill appears bottom-right.
 - Tap the pill → the carousel returns.
 - Collapse, then advance the fixture turn to the viewed actor → the carousel auto-expands (and while collapsed and it is the viewer's turn, the pill pulses).
 - Collapse, then end the fixture combat and start a new one → it opens expanded.
@@ -316,7 +316,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - State (`carouselCollapsed`, `carouselDockVisible`, `carouselPillVisible`) → Task 2 Step 1. ✓
 - Layout wiring (frame class, dock `v-if`, dice `:raised`) → Task 2 Steps 2–4. ✓
 - Collapse affordance (`collapse` emit + button) → Task 1. ✓
-- Restore pill (bottom-right, `⚔`, your-turn glow) → Task 2 Steps 3 & 5. ✓
+- Restore pill (bottom-right, combat glyph, your-turn glow) → Task 2 Steps 3 & 5. ✓
 - Combat-end + your-turn watchers → Task 2 Step 1. ✓
 - Trade-off (no localStorage) → honored by keeping state in-memory (Global Constraints + Task 2 Step 1). ✓
 - Testing (typecheck + visual smoke) → Task 1 Step 4; Task 2 Steps 6–7. ✓

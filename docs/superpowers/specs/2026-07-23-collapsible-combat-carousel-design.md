@@ -71,7 +71,7 @@ The three current consumers of `showCarousel` retarget to the effective flag:
 
 ### Restore pill (`[id].vue`)
 
-- A floating round pill with a sword `⚔` glyph, positioned bottom-**right**
+- A floating round pill reusing the existing shield combat glyph (`ICONS.combat`), positioned bottom-**right**
   (`right: 14px`, `bottom: ~84px` above the tab bar) so it is clear of the
   bottom-**left** dice FAB. Styled consistently with the existing `.fab`.
   `aria-label="Show turn order"`.
@@ -87,7 +87,7 @@ The three current consumers of `showCarousel` retarget to the effective flag:
   merely flip `combatConn`, never the `active` flag (verified in
   `connectCombatEvents`/`closeCombatEvents`). So `encounterActive` going
   `true → false` is a genuine combat-end signal, immune to reconnect blips.
-- **Your turn** — `watch(canEndTurn, (now, prev) => { if (now && !prev) carouselCollapsed.value = false })`.
+- **Your turn** — `watch(myTurnActive, (now, prev) => { if (now && !prev) carouselCollapsed.value = false })`.
   Edge-triggered on `false → true`, so it reopens once when the turn arrives but
   does not fight the player who re-collapses mid-turn.
 
@@ -115,7 +115,7 @@ ref.
 - `pnpm --filter @companion/web typecheck`.
 - Visual smoke against the dev stack with the fixture combat:
   - Collapse → dock disappears, dice FAB drops to its normal position, the sheet
-    reclaims the bottom space, and the `⚔` pill appears bottom-right.
+    reclaims the bottom space, and the combat-glyph pill appears bottom-right.
   - Tap the pill → carousel returns.
   - Advance the fixture turn to the viewed actor → carousel auto-expands.
   - End the fixture combat → collapse state resets (next combat is expanded).

@@ -600,17 +600,22 @@ const encounterActive = computed(() => encounter.value.active === true)
  *  known roster, read-only, rather than vanishing on every reconnect blip. */
 const showCarousel = computed(() => encounterActive.value && combatConn.value === 'live')
 
-/** End-turn button gate (2026-07-22 §F4): only the acting combatant's OWN
- *  player, viewing THAT actor's sheet, sees the button — and only while the
- *  combat mirror is confirmed live (a stale/reconnecting mirror could be
- *  wrong about whose turn it is). */
-const canEndTurn = computed(() => {
-  if (combatConn.value !== 'live') return false
+/** Connection-independent "is the viewed actor the acting combatant?" —
+ *  derived purely from the encounter mirror, which only changes on a real SSE
+ *  frame (never on a reconnect blip). Used for the carousel your-turn
+ *  auto-expand so a connection flap does not manufacture a false turn edge. */
+const myTurnActive = computed(() => {
   const turnId = encounter.value.turn?.combatantId
   if (!turnId) return false
   const acting = encounter.value.combatants?.find((c) => c.id === turnId)
   return acting?.actorId === actorId.value
 })
+
+/** End-turn button gate (2026-07-22 §F4): only the acting combatant's OWN
+ *  player, viewing THAT actor's sheet, sees the button — and only while the
+ *  combat mirror is confirmed live (a stale/reconnecting mirror could be
+ *  wrong about whose turn it is). */
+const canEndTurn = computed(() => combatConn.value === 'live' && myTurnActive.value)
 
 /** Combat carousel collapse (2026-07-23): the player can hide the initiative
  *  dock to reclaim vertical space; a floating pill restores it. In-memory only
@@ -627,9 +632,10 @@ watch(encounterActive, (now, was) => {
   if (was && !now) carouselCollapsed.value = false
 })
 
-/* Your turn arrived -> reopen once (edge-triggered, so re-collapsing mid-turn
- * sticks until the next turn). */
-watch(canEndTurn, (now, prev) => {
+/* Your turn arrived -> reopen once (edge-triggered off the connection-
+ * independent turn signal, so a reconnect blip mid-turn does not re-expand a
+ * carousel the player deliberately collapsed). */
+watch(myTurnActive, (now, prev) => {
   if (now && !prev) carouselCollapsed.value = false
 })
 
