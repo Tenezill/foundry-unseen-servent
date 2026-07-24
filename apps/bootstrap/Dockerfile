@@ -20,6 +20,7 @@ COPY --from=deps /repo/node_modules ./node_modules
 COPY --from=deps /repo/apps/bootstrap/node_modules ./apps/bootstrap/node_modules
 COPY package.json pnpm-workspace.yaml ./
 COPY apps/bootstrap ./apps/bootstrap
+COPY licence/EULA.md licence/THIRD-PARTY-LICENSES.md /licence/
 COPY apps/bootstrap/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 ENV RUNTIME_DIR=/run/companion STATUS_PORT=8321

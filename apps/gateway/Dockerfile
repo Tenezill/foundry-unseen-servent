@@ -25,6 +25,7 @@ COPY --from=deps /repo/packages/adapter-wod5e/node_modules ./packages/adapter-wo
 COPY package.json pnpm-workspace.yaml ./
 COPY apps/gateway ./apps/gateway
 COPY packages ./packages
+COPY licence/EULA.md licence/THIRD-PARTY-LICENSES.md /licence/
 COPY apps/gateway/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 ENV PORT=8090

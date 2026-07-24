@@ -19,3 +19,4 @@ RUN pnpm --filter @companion/web generate
 
 FROM caddy:2.10
 COPY --from=build /repo/apps/web/.output/public /srv/app
+COPY licence/EULA.md licence/THIRD-PARTY-LICENSES.md /licence/
