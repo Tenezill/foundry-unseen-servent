@@ -1,0 +1,10 @@
+.env
+secrets/
+foundry_data/
+relay-data/
+gateway-data/
+caddy-data/
+companion-runtime/
+Caddyfile.tls
+docker-compose.override.yml
+node_modules/
