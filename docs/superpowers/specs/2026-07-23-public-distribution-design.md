@@ -89,6 +89,12 @@ containers reattach to the data.
 - **Quickstart repo:** MIT (glue only; permissive licensing avoids friction
   for users cloning it).
 - **Patreon themes (later):** personal use, patrons only.
+- **Third-party attribution:** all production dependencies are permissive
+  (MIT/ISC/BSD/Apache-2.0/BlueOak/CC; node-forge is dual BSD-or-GPL — BSD is
+  chosen; the bundled foundry-rest-api module is MIT). No copyleft anywhere,
+  so closed-source distribution is fine. The release build generates a
+  `THIRD-PARTY-LICENSES` file (e.g. via `pnpm licenses`) and ships it in each
+  image to satisfy the attribution requirement.
 
 ## 5. Out of scope
 
