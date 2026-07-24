@@ -70,5 +70,8 @@ jobs:
           else
             git commit -m "release ${GITHUB_REF_NAME}"
           fi
-          git tag "${GITHUB_REF_NAME}"
-          git push origin HEAD:main "refs/tags/${GITHUB_REF_NAME}"
+          # -f: the public mirror is generated output; a workflow re-run for the same
+          # release must be able to overwrite its own tag instead of failing.
+          git tag -f "${GITHUB_REF_NAME}"
+          git push origin HEAD:main
+          git push origin -f "refs/tags/${GITHUB_REF_NAME}"
