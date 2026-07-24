@@ -48,10 +48,12 @@ services:
 
   relay:
     image: threehats/foundryvtt-rest-api-relay:3.4.1
+    # PRIVATE-ONLY-BEGIN
     # Reach the self-hosted relay domain via NPM's LAN IP (not the public IP) so
     # the headless keep-alive connects over wss:// without hairpinning out to WAN.
     extra_hosts:
       - "relay.evilwizard.academy:192.168.50.111"
+    # PRIVATE-ONLY-END
     environment:
       - APP_ENV=production
       - PORT=3010
