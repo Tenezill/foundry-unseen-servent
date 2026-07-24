@@ -32,14 +32,14 @@ afterEach(() => {
 
 describe('resolveQuickstartDir', () => {
   it('returns stack/quickstart when its compose file exists (private repo layout)', () => {
-    const root = mkdtempSync(join(tmpdir(), 'qdir-'));
+    const root = makeDir();
     mkdirSync(join(root, 'stack', 'quickstart'), { recursive: true });
     writeFileSync(join(root, 'stack', 'quickstart', 'docker-compose.yml'), 'name: x\n');
     expect(resolveQuickstartDir(root)).toBe(join(root, 'stack', 'quickstart'));
   });
 
   it('falls back to the repo root (public quickstart repo layout)', () => {
-    const root = mkdtempSync(join(tmpdir(), 'qdir-'));
+    const root = makeDir();
     writeFileSync(join(root, 'docker-compose.yml'), 'name: x\n');
     expect(resolveQuickstartDir(root)).toBe(root);
   });

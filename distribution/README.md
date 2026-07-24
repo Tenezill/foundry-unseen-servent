@@ -18,7 +18,7 @@ everything together automatically (module install, relay pairing key).
 ## Requirements
 
 - Docker with Compose v2, or rootless Podman with podman-compose
-- Node.js 22+ (runs the setup wizard; not needed after setup)
+- Node.js 22+ (runs the setup wizard and updates)
 - A Foundry VTT license (foundryvtt.com account)
 
 ## Install

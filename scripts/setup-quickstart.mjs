@@ -320,7 +320,7 @@ async function main() {
       wizard?.close();
       return;
     }
-    console.log(`\nrunning: ${compose.join(' ')} up -d --build   (in stack/quickstart)`);
+    console.log(`\nrunning: ${compose.join(' ')} up -d --build   (in ${QDIR})`);
     if (wizard !== null) {
       // Browser path: the "I've written these down" click gates compose, and
       // compose runs async so the wizard can keep serving the progress page.

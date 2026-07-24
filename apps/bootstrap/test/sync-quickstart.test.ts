@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   IMAGE_FOR_DOCKERFILE,
   PUBLIC_FILES,
@@ -13,6 +13,16 @@ import {
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const realCompose = () => readFileSync(join(REPO_ROOT, 'stack', 'quickstart', 'docker-compose.yml'), 'utf8');
+
+const dirs: string[] = [];
+function makeDir(): string {
+  const d = mkdtempSync(join(tmpdir(), 'public-tree-'));
+  dirs.push(d);
+  return d;
+}
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
 describe('stripPrivateOnly', () => {
   it('removes marked regions including the marker lines', () => {
@@ -62,7 +72,7 @@ describe('rewriteComposeToImages (against the real quickstart compose)', () => {
 
 describe('assemblePublicRepo (against the real repo)', () => {
   it('produces the complete flat public tree', () => {
-    const outDir = mkdtempSync(join(tmpdir(), 'public-tree-'));
+    const outDir = makeDir();
     assemblePublicRepo({ repoRoot: REPO_ROOT, outDir, version: 'v0.1.0' });
     for (const f of [
       'docker-compose.yml',
