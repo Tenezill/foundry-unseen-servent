@@ -97,7 +97,7 @@ describe('M12 attune actions', () => {
   it('mundane items (attunement "") get no attune action — fixture totals stay pinned', () => {
     const all = dnd5eAdapter.actions?.(martialCaptured) ?? [];
     expect(all.some((a) => a.kind === 'attune')).toBe(false);
-    expect(all).toHaveLength(73);
+    expect(all).toHaveLength(74);
     expect((dnd5eAdapter.actions?.(casterCaptured) ?? []).some((a) => a.kind === 'attune')).toBe(false);
   });
 

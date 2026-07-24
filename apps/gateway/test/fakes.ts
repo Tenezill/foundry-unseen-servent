@@ -281,22 +281,42 @@ export class FakeRelay implements RelayPort {
   // ---- targeted use (2026-07-22) --------------------------------------------
   readonly useOnTargetsCalls: Array<{
     actorUuid: string; itemUuid: string;
-    opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' };
+    opts: {
+      targetTokenUuids: string[];
+      slotKey?: string;
+      mode?: 'advantage' | 'disadvantage';
+      attackMode?: 'oneHanded' | 'twoHanded';
+    };
   }> = [];
   useOnTargetsResult: TargetedUseResult = { attack: null, targets: [] };
   /** RelayError-shaped 408, mirrors useAbilityTimeout. */
   useOnTargetsTimeout = false;
+  /** RelayError-shaped 400: targetedUseScript's own `activity.use()` guard
+   *  refused (out of uses, no spell slot, etc.) — mirrors the real relay
+   *  wording used by the gateway's isUsePerformFailure backstop. */
+  useOnTargetsPerformFail = false;
 
   async useAbilityOnTargets(
     actorUuid: string,
     itemUuid: string,
-    opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' },
+    opts: {
+      targetTokenUuids: string[];
+      slotKey?: string;
+      mode?: 'advantage' | 'disadvantage';
+      attackMode?: 'oneHanded' | 'twoHanded';
+    },
   ): Promise<TargetedUseResult> {
     this.useOnTargetsCalls.push({ actorUuid, itemUuid, opts: structuredClone(opts) });
     if (this.useOnTargetsTimeout) {
       const err = new Error('relay /execute-js -> 408: request timed out') as Error & { status: number };
       err.name = 'RelayError';
       err.status = 408;
+      throw err;
+    }
+    if (this.useOnTargetsPerformFail) {
+      const err = new Error('relay /execute-js -> 400: {"success":false,"error":"Error executing script: use could not be performed"}') as Error & { status: number };
+      err.name = 'RelayError';
+      err.status = 400;
       throw err;
     }
     if (this.actionError) this.throwActionError('execute-js');
@@ -547,6 +567,7 @@ function actionList(_actor: FoundryActorDoc): ActionDescriptor[] {
     { id: 'spell.h1.cast', label: 'Heal', kind: 'cast', slotLevels: [1, 2] },
     { id: 'item.i1.equip', label: 'Arrows', kind: 'equip', equipped: false },
     { id: 'item.i1.attune', label: 'Arrows', kind: 'attune', attuned: false },
+    { id: 'item.i1.grip', label: 'Arrows', kind: 'grip', grip: 'oneHanded' },
     { id: 'spell.s1.prepare', label: 'Zap', kind: 'prepare', prepared: false },
     { id: 'item.i1.move', label: 'Arrows', kind: 'move' },
     { id: 'rest.short', label: 'Short Rest', kind: 'rest' },
@@ -645,6 +666,21 @@ export const fakeAdapter: SystemAdapter = {
             itemId: 'i1',
             targetTokenUuids: intent.targetTokenUuids,
             ...(intent.mode !== undefined ? { mode: intent.mode } : {}),
+            // Task 4 fake stand-in for a versatile weapon wielded two-handed —
+            // mirrors the real dnd5e adapter's attackMode pass-through so
+            // gateway tests can prove the gateway forwards it unmodified.
+            attackMode: 'twoHanded',
+          };
+        }
+        // Task 4: item.i1.attack (Arrows) simulates a one-handed/non-versatile
+        // weapon on the SAME targeted path — no attackMode field — proving
+        // the gateway forwards nothing when the adapter sets nothing.
+        if (intent.actionId === 'item.i1.attack' && intent.targetTokenUuids?.length) {
+          return {
+            endpoint: 'use-on-targets',
+            itemId: 'i1',
+            targetTokenUuids: intent.targetTokenUuids,
+            ...(intent.mode !== undefined ? { mode: intent.mode } : {}),
           };
         }
         // Mirrors the real dnd5e adapter (packages/adapter-dnd5e buildAction
@@ -725,6 +761,8 @@ export const fakeAdapter: SystemAdapter = {
         return { endpoint: 'equip-item', itemId: 'i1', equipped: intent.equipped };
       case 'attune':
         return { endpoint: 'attune-item', itemId: 'i1', attuned: intent.attuned };
+      case 'grip':
+        return { endpoint: 'update-item', itemId: 'i1', data: { 'flags.unseen-servent.grip': intent.grip } };
       case 'prepare':
         return { endpoint: 'update-item', itemId: 's1', data: { 'system.prepared': intent.prepared ? 1 : 0 } };
       case 'move':

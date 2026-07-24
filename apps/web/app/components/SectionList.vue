@@ -47,7 +47,7 @@
           </svg>
         </button>
         <ActorAvatar :name="item.label" :img="item.img" :size="38" />
-        <div class="row-main">
+        <div class="row-main" :class="{ dim: isUnprepared(item) }">
           <button
             v-if="item.detail || (item.removable && !readonly)"
             class="row-name detail"
@@ -101,6 +101,17 @@
             @click="item.attuneActionId && emit('action', item.attuneActionId)"
           >
             {{ attuneOf(item)!.attuned ? 'Attuned' : 'Attune' }}
+          </button>
+          <button
+            v-if="gripOf(item)"
+            class="equip-btn"
+            type="button"
+            :class="{ on: gripOf(item)!.grip === 'twoHanded', pending: actionBusy === item.gripActionId }"
+            :aria-pressed="gripOf(item)!.grip === 'twoHanded'"
+            :disabled="readonly || actionBusy !== null"
+            @click="item.gripActionId && emit('action', item.gripActionId)"
+          >
+            {{ gripOf(item)!.grip === 'twoHanded' ? '2H' : '1H' }}
           </button>
           <button
             v-if="verbOf(item)"
@@ -239,12 +250,23 @@ function attuneOf(item: ListItem): ActionDescriptor | undefined {
   return item.attuneActionId ? props.actions[item.attuneActionId] : undefined
 }
 
+function gripOf(item: ListItem): ActionDescriptor | undefined {
+  return item.gripActionId ? props.actions[item.gripActionId] : undefined
+}
+
 function toggleOf(item: ListItem): ActionDescriptor | undefined {
   return item.toggleActionId ? props.actions[item.toggleActionId] : undefined
 }
 
 function toggleOn(action: ActionDescriptor): boolean {
   return action.kind === 'prepare' ? action.prepared === true : action.equipped === true
+}
+
+/** A spell row is "unprepared" when it has a Prepare toggle that is currently
+ *  off. Inventory/feature rows (no prepare toggle) are never dimmed. */
+function isUnprepared(item: ListItem): boolean {
+  const a = toggleOf(item)
+  return !!a && a.kind === 'prepare' && a.prepared === false
 }
 
 function toggleLabel(action: ActionDescriptor): string {
@@ -317,6 +339,10 @@ function tap(item: ListItem): void {
   flex-direction: column;
   gap: 1px;
   align-items: flex-start;
+}
+
+.row-main.dim {
+  opacity: 0.5;
 }
 
 .row-controls {

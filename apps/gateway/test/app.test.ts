@@ -543,6 +543,8 @@ describe('actions', () => {
       { kind: 'equip', actionId: 'item.i1.equip', equipped: 'yes' }, // non-boolean
       { kind: 'attune', actionId: 'item.i1.attune' }, // attuned missing
       { kind: 'attune', actionId: 'item.i1.attune', attuned: 'yes' }, // non-boolean
+      { kind: 'grip', actionId: 'item.i1.grip' }, // grip missing
+      { kind: 'grip', actionId: 'item.i1.grip', grip: 'threeHanded' }, // unknown grip value
       { kind: 'damage', actionId: 'item.i1.damage', critical: 'yes' }, // non-boolean crit flag
     ]) {
       const res = await post(app, 'a1', payload);
@@ -553,6 +555,7 @@ describe('actions', () => {
     expect(relay.useAbilityCalls).toHaveLength(0);
     expect(relay.equipCalls).toHaveLength(0);
     expect(relay.attuneCalls).toHaveLength(0);
+    expect(relay.updates).toHaveLength(0);
   });
 
   it('422 INVALID_INTENT when the adapter rejects an illegal slot level', async () => {
@@ -858,6 +861,21 @@ describe('actions', () => {
       const res = await post(app, 'a1', { kind: 'move', actionId: 'item.i1.move', ...bad });
       expect(res.statusCode, JSON.stringify(bad)).toBe(422);
     }
+  });
+
+  it('accepts a valid grip intent and writes the flag via update-item', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'grip', actionId: 'item.i1.grip', grip: 'twoHanded' });
+    expect(res.statusCode).toBe(200);
+    expect(relay.updates.at(-1)).toEqual({ uuid: 'Actor.a1.Item.i1', data: { 'flags.unseen-servent.grip': 'twoHanded' } });
+  });
+
+  it('rejects an invalid grip value', async () => {
+    const { app, relay } = setup();
+    const res = await post(app, 'a1', { kind: 'grip', actionId: 'item.i1.grip', grip: 'threeHanded' });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe('INVALID_INTENT');
+    expect(relay.updates).toHaveLength(0);
   });
 
   it('rest.short -> short-rest actor command, result null + fresh sheet', async () => {
@@ -1299,6 +1317,26 @@ describe('targeted actions (use-on-targets)', () => {
     expect(relay.useOnTargetsCalls[0]?.opts.targetTokenUuids).toEqual(['Scene.s1.Token.t2']);
   });
 
+  it('forwards attackMode to the relay on a two-handed targeted attack', async () => {
+    const { app, relay } = await setupWithEncounter();
+    await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.tattack',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(relay.useOnTargetsCalls.at(-1)?.opts.attackMode).toBe('twoHanded');
+  });
+
+  it('forwards no attackMode on a one-handed targeted attack', async () => {
+    const { app, relay } = await setupWithEncounter();
+    await post(app, 'a1', {
+      kind: 'attack',
+      actionId: 'item.i1.attack',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(relay.useOnTargetsCalls.at(-1)?.opts.attackMode).toBeUndefined();
+  });
+
   it('a multi-target save spell forwards slotKey through use-on-targets', async () => {
     const { app, relay } = await setupWithEncounter();
     relay.useOnTargetsResult = {
@@ -1355,6 +1393,18 @@ describe('targeted actions (use-on-targets)', () => {
       'Timed out — check the Foundry chat before retrying.',
     );
     expect(relay.useOnTargetsCalls).toHaveLength(1); // exactly one attempt
+  });
+
+  it('maps a relay 400 "use could not be performed" to 422 INVALID_INTENT, not 502', async () => {
+    const { app, relay } = await setupWithEncounter();
+    relay.useOnTargetsPerformFail = true;
+    const res = await post(app, 'a1', {
+      kind: 'cast',
+      actionId: 'spell.f1.cast',
+      targetTokenUuids: ['Scene.s1.Token.t2'],
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: { code: string } }).error.code).toBe('INVALID_INTENT');
   });
 
   it('parseActionIntent rejects malformed target lists (422)', async () => {

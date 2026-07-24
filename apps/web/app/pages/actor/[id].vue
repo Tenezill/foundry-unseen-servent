@@ -49,7 +49,7 @@
           </button>
         </div>
 
-        <SheetHero :sheet="sheet" :conn="conn" :readonly="offline" @numpad="openNumpad" @action="onAction" />
+        <SheetHero :sheet="sheet" :conn="conn" :readonly="offline" @numpad="openNumpad" @action="onAction" @step="stepResource" />
 
         <ConcentrationBanner
           v-if="sheet.concentration"
@@ -143,6 +143,13 @@
           <p v-if="showCustomItemButton" class="gear-note">
             Removing items is GM-side for now — ask your GM to delete a mis-created one.
           </p>
+
+          <SpellPrepSummary
+            v-if="sheet?.spellPrep && spellSectionsOnTab.length > 0"
+            :prepared="sheet.spellPrep.prepared"
+            :base="sheet.spellPrep.base"
+            :actor-id="actorId"
+          />
 
           <div v-if="spellChips.length > 0" class="filter-chips spell-filters">
             <button
@@ -1622,6 +1629,12 @@ function onAction(actionId: string): void {
         action.label,
       )
       break
+    case 'grip':
+      void submitAction(
+        { kind: 'grip', actionId, grip: action.grip === 'twoHanded' ? 'oneHanded' : 'twoHanded' },
+        action.label,
+      )
+      break
     case 'pool':
       // M23: open the pool roll sheet, pre-filled with this descriptor's
       // default pairing (and the tapped stat, since the descriptor's
@@ -2032,6 +2045,9 @@ async function submitAction(intent: ActionIntent, label: string, effectType?: Ef
         break
       case 'attune':
         toast.show(`${label} ${intent.attuned ? 'attuned' : 'attunement ended'}`)
+        break
+      case 'grip':
+        toast.show(`${label} — ${intent.grip === 'twoHanded' ? 'two-handed' : 'one-handed'}`)
         break
       case 'rest':
         toast.show(`${label} complete`)

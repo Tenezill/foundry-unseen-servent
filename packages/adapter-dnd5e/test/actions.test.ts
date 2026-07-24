@@ -188,11 +188,12 @@ describe('actions() — martial (Randal, Fighter 5)', () => {
   it('non-caster has no cast actions; total count is pinned', () => {
     expect(all.filter((a) => a.kind === 'cast')).toHaveLength(0);
     // 18 skills + 12 ability checks/saves + 1 initiative (M10) + 3 attacks
-    // + 3 weapon damage rolls (M14) + 5 equips + 1 feature use + 7 item uses
-    // (Waterskin, Torch, Rations, Piton, Rope, Horn, Bead of Force)
+    // + 3 weapon damage rolls (M14) + 5 equips + 1 grip toggle (the
+    // versatile Longsword) + 1 feature use + 7 item uses (Waterskin, Torch,
+    // Rations, Piton, Rope, Horn, Bead of Force)
     // + 2 rests (M8; hp>0 & no concentration -> no death-save/end-conc)
     // + 21 move descriptors, one per physical item (M19)
-    expect(all).toHaveLength(73);
+    expect(all).toHaveLength(74);
   });
 });
 
@@ -2485,5 +2486,192 @@ describe('combat targeting metadata + use-on-targets (2026-07-22)', () => {
         }),
       ).toThrow(/does not support targets/);
     }
+  });
+});
+
+describe('versatile weapon grip — damage die', () => {
+  const LS = 'item.gta26ORvqC323k3r';
+  const dmg = (a: FoundryActorDoc) => formulaOf(a, { kind: 'damage', actionId: `${LS}.damage` });
+
+  function withGrip(grip: 'oneHanded' | 'twoHanded'): FoundryActorDoc {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip } };
+    return a;
+  }
+
+  it('one-handed (default, no flag) uses the base die 1d8', () => {
+    expect(dmg(martialCaptured).startsWith('1d8')).toBe(true);
+  });
+
+  it('two-handed steps the empty versatile die up one size to 1d10, keeping the bonus', () => {
+    const oneH = dmg(martialCaptured);
+    const twoH = dmg(withGrip('twoHanded'));
+    expect(twoH).toBe(oneH.replace('1d8', '1d10'));
+  });
+
+  it('two-handed prefers an explicit populated versatile die', () => {
+    const a = withGrip('twoHanded');
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls.system as Record<string, unknown>).damage = {
+      base: { number: 1, denomination: 8, bonus: '', types: ['slashing'] },
+      versatile: { number: 2, denomination: 6, bonus: '', types: ['slashing'] },
+    };
+    expect(dmg(a).startsWith('2d6')).toBe(true);
+  });
+
+  it('a non-versatile weapon ignores the grip flag', () => {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls.system as Record<string, unknown>).properties = []; // drop "ver"
+    (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip: 'twoHanded' } };
+    expect(dmg(a).startsWith('1d8')).toBe(true);
+  });
+});
+
+describe('versatile weapon grip — toggle', () => {
+  const LS = 'item.gta26ORvqC323k3r';
+
+  it('emits a grip descriptor for a versatile weapon, defaulting to one-handed', () => {
+    const g = action(martialCaptured, `${LS}.grip`);
+    expect(g.kind).toBe('grip');
+    expect(g.grip).toBe('oneHanded');
+  });
+
+  it('the grip descriptor reflects the stored two-handed flag', () => {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip: 'twoHanded' } };
+    expect(action(a, `${LS}.grip`).grip).toBe('twoHanded');
+  });
+
+  it('does not emit a grip descriptor for a non-weapon (the Shield)', () => {
+    expect(actions(martialCaptured).find((x) => x.id === 'item.u69KONMFqydKuk1H.grip')).toBeUndefined();
+  });
+
+  it('the inventory row for a versatile weapon carries a gripActionId', () => {
+    const rows = section(martialCaptured, 'inventory').kind === 'list'
+      ? (section(martialCaptured, 'inventory') as Extract<SheetSection, { kind: 'list' }>).items
+      : [];
+    const ls = rows.find((r) => r.id === 'gta26ORvqC323k3r');
+    expect(ls?.gripActionId).toBe(`${LS}.grip`);
+  });
+
+  it('buildAction writes the grip flag via update-item', () => {
+    const out = build(martialCaptured, { kind: 'grip', actionId: `${LS}.grip`, grip: 'twoHanded' });
+    expect(out).toEqual({
+      endpoint: 'update-item',
+      itemId: 'gta26ORvqC323k3r',
+      data: { 'flags.unseen-servent.grip': 'twoHanded' },
+    });
+  });
+
+  it('buildAction rejects an invalid grip value', () => {
+    let code: string | undefined;
+    try {
+      build(martialCaptured, { kind: 'grip', actionId: `${LS}.grip`, grip: 'threeHanded' as unknown as 'twoHanded' });
+    } catch (e) {
+      code = (e as InstanceType<typeof IntentError>).code;
+    }
+    expect(code).toBe('INVALID');
+  });
+});
+
+describe('versatile weapon grip — attack sub-line & shield hint', () => {
+  const LS = 'item.gta26ORvqC323k3r';
+
+  function invRows(a: FoundryActorDoc) {
+    const s = dnd5eAdapter.toViewModel(a).sections.find(
+      (x): x is Extract<SheetSection, { kind: 'list' }> => x.kind === 'list' && x.id === 'inventory',
+    );
+    return s?.items ?? [];
+  }
+  function withGrip(grip: 'oneHanded' | 'twoHanded'): FoundryActorDoc {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip } };
+    return a;
+  }
+  // Self-contained: explicitly force the Shield equipped, rather than relying
+  // on the fixture's default equipped-state (which could drift independently
+  // of this test's intent).
+  function withShieldEquipped(a: FoundryActorDoc): FoundryActorDoc {
+    const shield = (a.items ?? []).find((i) => i._id === 'u69KONMFqydKuk1H')!;
+    (shield.system as Record<string, unknown>).equipped = true;
+    return a;
+  }
+
+  it('one-handed attack row shows the base die', () => {
+    expect(action(martialCaptured, `${LS}.attack`).sub).toBe('1d8 slashing · one-handed');
+  });
+
+  it('two-handed attack row shows the versatile die', () => {
+    expect(action(withGrip('twoHanded'), `${LS}.attack`).sub).toBe('1d10 slashing · two-handed');
+  });
+
+  it('a non-versatile weapon attack row has no sub-line', () => {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls.system as Record<string, unknown>).properties = [];
+    expect(action(a, `${LS}.attack`).sub).toBeUndefined();
+  });
+
+  it('flags a two-handed grip while a shield is equipped', () => {
+    const two = withShieldEquipped(withGrip('twoHanded'));
+    expect(invRows(two).find((r) => r.id === 'gta26ORvqC323k3r')?.tags).toContain('2H + shield');
+  });
+
+  it('no hint when one-handed even with a shield equipped', () => {
+    const a = withShieldEquipped(structuredClone(martialCaptured));
+    expect(invRows(a).find((r) => r.id === 'gta26ORvqC323k3r')?.tags ?? []).not.toContain('2H + shield');
+  });
+});
+
+describe('versatile weapon grip — combat attack-mode', () => {
+  const LS = 'item.gta26ORvqC323k3r';
+  const targets = ['Scene.s.Token.t'];
+
+  it('one-handed targeted attack sends no attackMode', () => {
+    const out = build(martialCaptured, { kind: 'attack', actionId: `${LS}.attack`, targetTokenUuids: targets });
+    expect(out).not.toHaveProperty('attackMode');
+  });
+
+  it('two-handed targeted attack sends attackMode twoHanded', () => {
+    const a = structuredClone(martialCaptured);
+    const ls = (a.items ?? []).find((i) => i._id === 'gta26ORvqC323k3r')!;
+    (ls as { flags?: Record<string, unknown> }).flags = { 'unseen-servent': { grip: 'twoHanded' } };
+    const out = build(a, { kind: 'attack', actionId: `${LS}.attack`, targetTokenUuids: targets });
+    expect(out).toMatchObject({ endpoint: 'use-on-targets', attackMode: 'twoHanded' });
+  });
+});
+
+describe('targeted cast — out of uses', () => {
+  function exhaustedFreeUseHealActor(): { actor: FoundryActorDoc; id: string } {
+    const a = structuredClone(caster);
+    const spell = (a.items ?? []).find((i) => i.type === 'spell');
+    if (!spell) throw new Error('fixture has no spell');
+    (spell.system as Record<string, unknown>).method = 'atwill';
+    (spell.system as Record<string, unknown>).uses = { max: 1, spent: 1 };
+    (spell.system as Record<string, unknown>).activities = {
+      a0: { _id: 'a0', type: 'heal', healing: { number: 1, denomination: 4, bonus: '@mod', types: ['healing'] } },
+    };
+    return { actor: a, id: spell._id };
+  }
+
+  it('rejects a targeted cast of an exhausted free-use spell with INVALID', () => {
+    const { actor, id } = exhaustedFreeUseHealActor();
+    expectIntentError(
+      () => build(actor, { kind: 'cast', actionId: `spell.${id}.cast`, targetTokenUuids: ['Scene.s.Token.t'] }),
+      'INVALID',
+    );
+  });
+
+  it('a free-use spell cast row carries its uses counter', () => {
+    const a = structuredClone(caster);
+    const spell = (a.items ?? []).find((i) => i.type === 'spell')!;
+    (spell.system as Record<string, unknown>).method = 'atwill';
+    (spell.system as Record<string, unknown>).uses = { max: 1, spent: 0 };
+    const cast = actions(a).find((x) => x.id === `spell.${spell._id}.cast`);
+    expect(cast?.uses).toEqual({ value: 1, max: 1 });
   });
 });

@@ -59,6 +59,17 @@ function withSpell(actor: FoundryActorDoc, spell: FoundryItemDoc): FoundryActorD
   return { ...actor, items: [...(actor.items ?? []), spell] };
 }
 
+/** Minimal leveled spell doc for preparation tests. Defaults: level 2,
+ *  method "spell" (not free-use), unprepared. */
+function spellDoc(id: string, overrides: Record<string, unknown> = {}): FoundryItemDoc {
+  return {
+    _id: id,
+    name: id,
+    type: 'spell',
+    system: { level: 2, school: 'evo', method: 'spell', prepared: 0, properties: [], ...overrides },
+  };
+}
+
 // ---------------------------------------------------------------------------
 
 describe('weapon actions only while equipped', () => {
@@ -164,5 +175,66 @@ describe('per-level spell sections', () => {
 
   it('non-caster emits no spell sections at all', () => {
     expect(spellSections(martialCaptured)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('prepared spells: no redundant signalling', () => {
+  it('a prepared leveled spell drops the "prepared" sub segment and tag but keeps its toggle + distinct tags', () => {
+    const actor = withSpell(casterCaptured, spellDoc('PrepBolt00000001', { level: 1, prepared: 1, properties: ['concentration'] }));
+    const row = spellSections(actor).flatMap((s) => s.items).find((r) => r.id === 'PrepBolt00000001');
+    expect(row).toBeDefined();
+    expect(row!.tags ?? []).not.toContain('prepared');
+    expect(row!.sub ?? '').not.toMatch(/prepared/i);
+    expect(row!.toggleActionId).toBe('spell.PrepBolt00000001.prepare');
+    expect(row!.tags ?? []).toContain('concentration');
+  });
+
+  it('an always-prepared (prepared: 2) spell keeps its "always prepared" sub and gets no toggle', () => {
+    const actor = withSpell(casterCaptured, spellDoc('DomainWard000001', { level: 1, prepared: 2 }));
+    const row = spellSections(actor).flatMap((s) => s.items).find((r) => r.id === 'DomainWard000001');
+    expect(row!.sub ?? '').toMatch(/always prepared/i);
+    expect(row!.toggleActionId).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('prepared-first ordering within a level', () => {
+  it('prepared and always-prepared sort before unprepared, stable within each group', () => {
+    let actor = casterCaptured;
+    for (const s of [
+      spellDoc('z_unprep_a'),                    // rank 1
+      spellDoc('z_prep_b', { prepared: 1 }),      // rank 0
+      spellDoc('z_unprep_c'),                    // rank 1
+      spellDoc('z_always_d', { prepared: 2 }),    // rank 0
+    ]) {
+      actor = withSpell(actor, s);
+    }
+    const l2 = spellSections(actor).find((s) => s.id === 'spells.l2');
+    expect(l2).toBeDefined();
+    expect(l2!.items.map((i) => i.id)).toEqual(['z_prep_b', 'z_always_d', 'z_unprep_a', 'z_unprep_c']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('prepared-spell budget (spellPrep)', () => {
+  const vm = (a: FoundryActorDoc) => dnd5eAdapter.toViewModel(a);
+
+  it('a prepared caster reports current prepared count and a computed base', () => {
+    // Akra, Cleric 5, WIS 15 (+2): base = 2 + 5 = 7; prepared leveled (===1) = 3
+    // (Guiding Bolt, Detect Magic, Cure Wounds); always-prepared (===2) excluded.
+    expect(vm(casterCaptured).spellPrep).toEqual({ prepared: 3, base: 7 });
+  });
+
+  it('an actor with no preparable spells has no budget', () => {
+    expect(vm(martialCaptured).spellPrep).toBeUndefined();
+  });
+
+  it('toggling a spell to prepared raises the count', () => {
+    const actor = withSpell(casterCaptured, spellDoc('BudgetAdd0000001', { level: 1, prepared: 1 }));
+    expect(vm(actor).spellPrep).toEqual({ prepared: 4, base: 7 });
   });
 });

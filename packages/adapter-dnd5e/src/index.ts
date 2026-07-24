@@ -747,6 +747,17 @@ function hasStealthDisadvantageArmor(actor: FoundryActorDoc): boolean {
   return false;
 }
 
+/** True when the actor has an equipped shield (dnd5e equipment
+ *  `system.type.value === 'shield'`). Mirrors hasStealthDisadvantageArmor. */
+function hasEquippedShield(actor: FoundryActorDoc): boolean {
+  for (const item of actor.items ?? []) {
+    if (item.type !== 'equipment') continue;
+    if (getPath(item.system, 'equipped') !== true) continue;
+    if (strAt(item.system, 'type.value') === 'shield') return true;
+  }
+  return false;
+}
+
 /**
  * Passive advantage/disadvantage indicator for a d20 roll row. DISPLAY-ONLY:
  * never applied to the rolled formula, because other effects can flip the net.
@@ -1253,7 +1264,12 @@ function parseEffects(actor: FoundryActorDoc): EffectSummary {
   return { concentration, conditions };
 }
 
-function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>, physicalIds: Set<string>): ListItem {
+function inventoryListItem(
+  item: FoundryItemDoc,
+  resourceIds: Set<string>,
+  physicalIds: Set<string>,
+  shieldEquipped: boolean,
+): ListItem {
   const qty = numAt(item.system, 'quantity') ?? 1;
   const subParts: string[] = [];
   if (qty !== 1) subParts.push(`×${qty}`);
@@ -1273,6 +1289,7 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>, physi
   const tags: string[] = [];
   if (getPath(item.system, 'equipped') === true) tags.push('equipped');
   if (isAttuned(item)) tags.push('attuned');
+  if (isVersatileWeapon(item) && weaponGrip(item) === 'twoHanded' && shieldEquipped) tags.push('2H + shield');
   // Group under a container row only when the ref resolves on this sheet —
   // captured worlds carry dangling compendium-source refs, which render flat.
   const container = strAt(item.system, 'container');
@@ -1292,6 +1309,7 @@ function inventoryListItem(item: FoundryItemDoc, resourceIds: Set<string>, physi
     // attacking live on the Actions tab.
     ...(isEquippable(item) ? { toggleActionId: `item.${item._id}.equip` } : {}),
     ...(isAttuneable(item) ? { attuneActionId: `item.${item._id}.attune` } : {}),
+    ...(isVersatileWeapon(item) ? { gripActionId: `item.${item._id}.grip` } : {}),
     ...(containerId !== undefined ? { containerId } : {}),
     ...(detail !== undefined ? { detail } : {}),
     // Physical items may be removed via the library API (M13).
@@ -1336,7 +1354,6 @@ function spellListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListItem
   // defensively for older documents.
   const rawPrepared = getPath(item.system, 'prepared');
   const always = rawPrepared === 2;
-  const isPrepared = always || rawPrepared === 1 || rawPrepared === true;
   const rawProps = getPath(item.system, 'properties');
   const properties = Array.isArray(rawProps) ? rawProps : [];
   const freeUse = freeUseMethod(item);
@@ -1351,11 +1368,9 @@ function spellListItem(item: FoundryItemDoc, resourceIds: Set<string>): ListItem
     if (uses !== undefined && recovery !== undefined) subParts.push(`${uses.max}/${recovery}`);
     else subParts.push('no slot needed');
   } else if (always) subParts.push('always prepared');
-  else if (isPrepared) subParts.push('prepared');
 
   const tags: string[] = [];
   if (freeUse !== undefined) tags.push(freeUse === 'atwill' ? 'free use' : 'innate');
-  if (freeUse === undefined && isPrepared) tags.push('prepared');
   if (properties.includes('concentration')) tags.push('concentration');
   if (properties.includes('ritual')) tags.push('ritual');
 
@@ -1383,6 +1398,55 @@ function isPreparableSpell(item: FoundryItemDoc): boolean {
   if (item.type !== 'spell') return false;
   const level = numAt(item.system, 'level') ?? 0;
   return level > 0 && getPath(item.system, 'prepared') !== 2 && freeUseMethod(item) === undefined;
+}
+
+/** Sort key for prepared-first ordering: prepared (1) and always-prepared (2)
+ *  spells rank 0; unprepared rank 1. Array#sort is stable, so same-rank spells
+ *  keep insertion order. */
+function preparedRank(item: FoundryItemDoc): number {
+  const raw = getPath(item.system, 'prepared');
+  return raw === 2 || raw === 1 || raw === true ? 0 : 1;
+}
+
+/** Best-effort prepared-spell budget (spec §3). Present only when the actor has
+ *  ≥1 preparable spell. `base` mirrors dnd5e's preparation-formula shape but is
+ *  deliberately not a rules engine — multiclass/homebrew is the PWA offset's job. */
+function spellPrepBudget(actor: FoundryActorDoc): { prepared: number; base: number } | undefined {
+  const preparable = (actor.items ?? []).filter((i) => i.type === 'spell' && isPreparableSpell(i));
+  if (preparable.length === 0) return undefined;
+  const prepared = preparable.filter((i) => {
+    const raw = getPath(i.system, 'prepared');
+    return raw === 1 || raw === true;
+  }).length;
+  return { prepared, base: preparedBase(actor) };
+}
+
+/** Prepared-spell ceiling: spellcasting-ability modifier + a level contribution
+ *  (full = levels, half = ⌊levels/2⌋, third = ⌊levels/3⌋) of the highest-level
+ *  preparing class. Prefers classes with a non-empty
+ *  spellcasting.preparation.formula (the real preparers), else any spellcasting
+ *  class; 0 when none is found (the offset compensates). */
+function preparedBase(actor: FoundryActorDoc): number {
+  const casters = (actor.items ?? [])
+    .filter((i) => i.type === 'class')
+    .map((i) => ({
+      levels: numAt(i.system, 'levels') ?? 1,
+      ability: strAt(i.system, 'spellcasting.ability'),
+      progression: strAt(i.system, 'spellcasting.progression'),
+      formula: strAt(i.system, 'spellcasting.preparation.formula') ?? '',
+    }))
+    .filter((c) => c.ability !== undefined && c.progression !== undefined && c.progression !== 'none');
+  if (casters.length === 0) return 0;
+  const preparers = casters.filter((c) => c.formula.trim() !== '');
+  const pool = preparers.length > 0 ? preparers : casters;
+  const primary = [...pool].sort((a, b) => b.levels - a.levels)[0]!;
+  const contribution =
+    primary.progression === 'half' || primary.progression === 'artificer'
+      ? Math.floor(primary.levels / 2)
+      : primary.progression === 'third'
+        ? Math.floor(primary.levels / 3)
+        : primary.levels;
+  return Math.max(0, abilityMod(actor.system, primary.ability!) + contribution);
 }
 
 /**
@@ -1766,30 +1830,101 @@ function weaponAttackBonus(actor: FoundryActorDoc, item: FoundryItemDoc): number
 }
 
 /**
- * Weapon damage formula: base dice + the weapon's own static bonus (e.g. a
- * +1 weapon's `damage.base.bonus`) + the resolved ability modifier —
- * dnd5e's default calc for a plain weapon hit. Undefined when the item
- * carries no base dice (e.g. an improvised/unconfigured weapon).
+ * Grip-aware dice helpers for versatile ("ver") weapons: which die a weapon
+ * rolls depends on the app's own `flags.unseen-servent.grip` item flag
+ * (`weaponGrip`), stepped up from the base die when the item leaves
+ * `damage.versatile` unpopulated (`versatileDice`/`stepUpDenomination`).
+ * `gripDice` is the single source of truth shared by `weaponDamageFormula`
+ * and `versatileAttackSub` so the formula and the attack-row sub-line never
+ * disagree about which die is active.
+ */
+
+/** Weapon carries dnd5e's versatile ("ver") property. */
+function isVersatileWeapon(item: FoundryItemDoc): boolean {
+  if (item.type !== 'weapon') return false;
+  const props = getPath(item.system, 'properties');
+  return Array.isArray(props) && props.includes('ver');
+}
+
+/** Wielded grip for a versatile weapon, from the app's own item flag. Anything
+ *  but the explicit 'twoHanded' flag is one-handed (the default). */
+function weaponGrip(item: FoundryItemDoc): 'oneHanded' | 'twoHanded' {
+  return getPath(item, 'flags.unseen-servent.grip') === 'twoHanded' ? 'twoHanded' : 'oneHanded';
+}
+
+/** Next larger polyhedral die (d4→d6→d8→d10→d12; d12 and anything unusual are
+ *  returned unchanged). SRD versatile weapons all step exactly one size, so this
+ *  reproduces the two-handed die when the item leaves `damage.versatile` empty. */
+function stepUpDenomination(denomination: number): number {
+  const ladder = [4, 6, 8, 10, 12];
+  const i = ladder.indexOf(denomination);
+  return i >= 0 && i < ladder.length - 1 ? (ladder[i + 1] as number) : denomination;
+}
+
+/** Read a {number, denomination} dice block off `item.system.<path>`, or
+ *  undefined when either is missing/non-positive. */
+function readDice(item: FoundryItemDoc, path: string): { number: number; denomination: number } | undefined {
+  const d = rec(getPath(item.system, path));
+  const number = typeof d.number === 'number' && Number.isFinite(d.number) ? d.number : undefined;
+  const denomination = typeof d.denomination === 'number' && Number.isFinite(d.denomination) ? d.denomination : undefined;
+  if (number === undefined || denomination === undefined || number <= 0 || denomination <= 0) return undefined;
+  return { number, denomination };
+}
+
+/** Two-handed damage dice for a versatile weapon: the explicit versatile die
+ *  when populated, else the base die stepped up one size. */
+function versatileDice(item: FoundryItemDoc): { number: number; denomination: number } | undefined {
+  const explicit = readDice(item, 'damage.versatile');
+  if (explicit !== undefined) return explicit;
+  const base = readDice(item, 'damage.base');
+  return base === undefined ? undefined : { number: base.number, denomination: stepUpDenomination(base.denomination) };
+}
+
+/** Damage dice a versatile weapon rolls under `grip` (base one-handed,
+ *  versatile two-handed). Shared by the formula and the attack sub-line so they
+ *  never disagree. */
+function gripDice(item: FoundryItemDoc, grip: 'oneHanded' | 'twoHanded'): { number: number; denomination: number } | undefined {
+  return grip === 'twoHanded' ? versatileDice(item) : readDice(item, 'damage.base');
+}
+
+/** Active-die sub-line for a versatile weapon's attack row, e.g.
+ *  "1d10 slashing · two-handed". Undefined for non-versatile weapons. */
+function versatileAttackSub(item: FoundryItemDoc): string | undefined {
+  if (!isVersatileWeapon(item)) return undefined;
+  const grip = weaponGrip(item);
+  const dice = gripDice(item, grip);
+  if (dice === undefined) return undefined;
+  const types = getPath(item.system, 'damage.base.types');
+  const type = Array.isArray(types) && typeof types[0] === 'string' ? (types[0] as string) : undefined;
+  const gripLabel = grip === 'twoHanded' ? 'two-handed' : 'one-handed';
+  return `${dice.number}d${dice.denomination}${type !== undefined ? ` ${type}` : ''} · ${gripLabel}`;
+}
+
+/**
+ * Weapon damage formula: base (or grip-selected versatile) dice + the
+ * weapon's own static bonus (e.g. a +1 weapon's `damage.base.bonus`) + the
+ * resolved ability modifier — dnd5e's default calc for a plain weapon hit.
+ * Undefined when the item carries no base dice (e.g. an
+ * improvised/unconfigured weapon).
  *
  * Deliberately NOT modelled (no relay action exists to cross-check against
  * Foundry's own roll — see docs/HOSTING.md troubleshooting notes on the
  * relay module's lack of a damage-roll endpoint): extra activity damage
- * parts, weapon mastery bonus dice, the versatile two-handed die, critical
- * doubling, and active effects. This is a best-effort client-side estimate,
- * not a substitute for Foundry's own roll.
+ * parts, weapon mastery bonus dice, critical doubling, and active effects.
+ * This is a best-effort client-side estimate, not a substitute for
+ * Foundry's own roll.
  */
 function weaponDamageFormula(actor: FoundryActorDoc, item: FoundryItemDoc): string | undefined {
+  const grip = isVersatileWeapon(item) ? weaponGrip(item) : 'oneHanded';
+  const dice = gripDice(item, grip);
+  if (dice === undefined) return undefined;
+  const diceStr = `${dice.number}d${dice.denomination}`;
   const base = rec(getPath(item.system, 'damage.base'));
-  const number = typeof base.number === 'number' && Number.isFinite(base.number) ? base.number : undefined;
-  const denomination =
-    typeof base.denomination === 'number' && Number.isFinite(base.denomination) ? base.denomination : undefined;
-  if (number === undefined || denomination === undefined || number <= 0 || denomination <= 0) return undefined;
-  const dice = `${number}d${denomination}`;
   const rawBonus = typeof base.bonus === 'string' ? Number(base.bonus) : 0;
   const staticBonus = Number.isFinite(rawBonus) ? rawBonus : 0;
   const bonus = staticBonus + weaponAbilityMod(actor, item);
-  if (bonus === 0) return dice;
-  return `${dice} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}`;
+  if (bonus === 0) return diceStr;
+  return `${diceStr} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}`;
 }
 
 /** The item's heal-type activity, or an empty record if it has none.
@@ -2019,7 +2154,14 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
     if (item.type === 'weapon' && getPath(item.system, 'equipped') === true) {
       // Stowed weapons keep their row + equip toggle but offer no rolls —
       // equipping brings Attack/Dmg back (2026-07-18 design).
-      out.push({ id: `item.${item._id}.attack`, label: item.name, kind: 'attack', targeting: { mode: 'single', kind: 'attack' } });
+      const sub = versatileAttackSub(item);
+      out.push({
+        id: `item.${item._id}.attack`,
+        label: item.name,
+        kind: 'attack',
+        targeting: { mode: 'single', kind: 'attack' },
+        ...(sub !== undefined ? { sub } : {}),
+      });
       if (weaponDamageFormula(actor, item) !== undefined) {
         out.push({ id: `item.${item._id}.damage`, label: item.name, kind: 'damage' });
       }
@@ -2053,6 +2195,9 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
         attuned: isAttuned(item),
       });
     }
+    if (isVersatileWeapon(item)) {
+      out.push({ id: `item.${item._id}.grip`, label: item.name, kind: 'grip', grip: weaponGrip(item) });
+    }
     if (PHYSICAL_ITEM_TYPES.has(item.type)) {
       out.push({ id: `item.${item._id}.move`, label: item.name, kind: 'move' });
     }
@@ -2071,6 +2216,7 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
       // Actions tab with spells that Foundry would just refuse was confusing.
       if (level === 0 || isPrepared || freeUse !== undefined) {
         const spellTargeting = targetingOf(item);
+        const spellUses = usesInfo(item);
         out.push({
           id: `spell.${item._id}.cast`,
           label: freeUse !== undefined ? `${item.name} (free use)` : item.name,
@@ -2081,6 +2227,11 @@ function buildActions(actor: FoundryActorDoc): ActionDescriptor[] {
           effectType: effectTypeOf(item),
           ...(spellTargeting !== undefined ? { targeting: spellTargeting } : {}),
           ...(selfBuffEffect(actor, item) !== undefined && !buffTargetIsSelf(item) ? { targetable: true } : {}),
+          // Remaining/max counter for free-use / limited-use spells (2026-07-23
+          // uses-counter spec) — absent (slot-based/unlimited) emits nothing.
+          ...(spellUses !== undefined
+            ? { uses: { value: Math.max(0, spellUses.max - spellUses.spent), max: spellUses.max } }
+            : {}),
           // slotLevels semantics (2026-07-19 spec): absent = direct cast, no
           // picker (cantrips, free-use, pact-payable); otherwise the payable
           // spellN levels — [] disables, length 1 direct-casts, >1 opens the
@@ -2223,15 +2374,23 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         throw new IntentError(`unknown roll mode "${String(mode)}"`, 'INVALID');
       }
       const itemId = intent.actionId.slice('item.'.length, -'.attack'.length);
+      const item = (actor.items ?? []).find((i) => i._id === itemId);
       if (targeted !== undefined) {
-        return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted, ...(mode !== undefined ? { mode } : {}) };
+        const attackMode =
+          item !== undefined && isVersatileWeapon(item) && weaponGrip(item) === 'twoHanded' ? ('twoHanded' as const) : undefined;
+        return {
+          endpoint: 'use-on-targets',
+          itemId,
+          targetTokenUuids: targeted,
+          ...(mode !== undefined ? { mode } : {}),
+          ...(attackMode !== undefined ? { attackMode } : {}),
+        };
       }
       // Plain Roll: Foundry-native item use (consumes ammo/uses, rolls to hit).
       if (mode === undefined) return { endpoint: 'use-item', itemId };
       // Advantage/disadvantage: companion-built to-hit (the relay's use-item
       // path exposes no advantage without execute-JS). Best-effort bonus;
       // ammo/uses and auto-crit are NOT modelled on this path.
-      const item = (actor.items ?? []).find((i) => i._id === itemId);
       if (!item) throw new IntentError(`unknown weapon "${itemId}"`, 'UNKNOWN_RESOURCE');
       return {
         endpoint: 'roll',
@@ -2289,6 +2448,7 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
           throw new IntentError(`"${item.name}" requires attunement`, 'INVALID');
         }
         if (targeted !== undefined) {
+          if (item) assertUsesRemaining(item);
           return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted };
         }
         if (item) {
@@ -2317,6 +2477,7 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       const itemId = intent.actionId.slice('feature.'.length, -'.use'.length);
       const item = (actor.items ?? []).find((i) => i._id === itemId);
       if (targeted !== undefined) {
+        if (item) assertUsesRemaining(item);
         return { endpoint: 'use-on-targets', itemId, targetTokenUuids: targeted };
       }
       if (item && activityType(item) === 'heal') {
@@ -2343,6 +2504,7 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
       }
       const upcast = descriptor.slotLevels !== undefined && chosen > baseLevel;
       if (targeted !== undefined) {
+        if (item) assertUsesRemaining(item);
         return {
           endpoint: 'use-on-targets',
           itemId,
@@ -2396,6 +2558,16 @@ function buildAction(actor: FoundryActorDoc, intent: ActionIntent): RelayAction 
         endpoint: 'attune-item',
         itemId: intent.actionId.slice('item.'.length, -'.attune'.length),
         attuned: intent.attuned,
+      };
+    }
+    case 'grip': {
+      if (intent.grip !== 'oneHanded' && intent.grip !== 'twoHanded') {
+        throw new IntentError('grip requires "oneHanded" or "twoHanded"', 'INVALID');
+      }
+      return {
+        endpoint: 'update-item',
+        itemId: intent.actionId.slice('item.'.length, -'.grip'.length),
+        data: { 'flags.unseen-servent.grip': intent.grip },
       };
     }
     case 'prepare': {
@@ -2520,16 +2692,18 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   ];
 
   const features: ListItem[] = [];
-  /** Spell rows grouped by level, insertion-ordered within a level. */
-  const spellsByLevel = new Map<number, ListItem[]>();
+  /** Raw spell docs grouped by level; sorted prepared-first and mapped to rows
+   *  at section-build time (2026-07-23 declutter — raw system.prepared is only
+   *  in hand here). */
+  const spellsByLevel = new Map<number, FoundryItemDoc[]>();
   const physicalIds = new Set((actor.items ?? []).filter((i) => PHYSICAL_ITEM_TYPES.has(i.type)).map((i) => i._id));
   for (const item of actor.items ?? []) {
     if (item.type === 'feat') features.push(featureListItem(item, resourceIds));
     else if (item.type === 'spell') {
       const level = Math.max(0, Math.min(9, numAt(item.system, 'level') ?? 0));
       const list = spellsByLevel.get(level);
-      if (list) list.push(spellListItem(item, resourceIds));
-      else spellsByLevel.set(level, [spellListItem(item, resourceIds)]);
+      if (list) list.push(item);
+      else spellsByLevel.set(level, [item]);
     }
   }
 
@@ -2574,11 +2748,12 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     return c !== undefined && c !== '' && c !== item._id && physicalIds.has(c) ? c : undefined;
   };
 
+  const shieldEquipped = hasEquippedShield(actor);
   const carried: ListItem[] = [];
   const byContainer = new Map<string, ListItem[]>();
   for (const item of physicalItems) {
     const loc = locationOf(item);
-    const row = inventoryListItem(item, resourceIds, physicalIds);
+    const row = inventoryListItem(item, resourceIds, physicalIds, shieldEquipped);
     if (loc !== undefined) {
       const list = byContainer.get(loc);
       if (list) list.push(row);
@@ -2592,7 +2767,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   for (const item of physicalItems) {
     if (item.type !== 'container') continue;
     const contents = byContainer.get(item._id) ?? [];
-    const header = inventoryListItem(item, resourceIds, physicalIds);
+    const header = inventoryListItem(item, resourceIds, physicalIds, shieldEquipped);
     // Presentation-only contents weight (direct contents; same parsing as rows).
     let total = 0;
     let unit = 'lb';
@@ -2612,7 +2787,10 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   // headline mechanism as inventory containers. Section ids keep the
   // 'spells' stem so the PWA's tab heuristic still routes them.
   for (const level of [...spellsByLevel.keys()].sort((a, b) => a - b)) {
-    const items = spellsByLevel.get(level) ?? [];
+    const raw = spellsByLevel.get(level) ?? [];
+    const items = [...raw]
+      .sort((a, b) => preparedRank(a) - preparedRank(b))
+      .map((it) => spellListItem(it, resourceIds));
     const label = level === 0 ? 'Cantrips' : `${ordinal(level)} Level`;
     sections.push({
       kind: 'list',
@@ -2636,6 +2814,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
   });
 
   const { concentration, conditions } = parseEffects(actor);
+  const spellPrep = spellPrepBudget(actor);
 
   return {
     actorId: actor._id,
@@ -2648,6 +2827,7 @@ function toViewModel(actor: FoundryActorDoc): SheetViewModel {
     actions: buildActions(actor),
     concentration,
     ...(conditions.length > 0 ? { conditions } : {}),
+    ...(spellPrep !== undefined ? { spellPrep } : {}),
     library: LIBRARY.map((c) => ({ id: c.id, label: c.label })),
   };
 }

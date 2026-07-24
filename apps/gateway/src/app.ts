@@ -149,7 +149,12 @@ export interface RelayPort {
   useAbilityOnTargets(
     actorUuid: string,
     itemUuid: string,
-    opts: { targetTokenUuids: string[]; slotKey?: string; mode?: 'advantage' | 'disadvantage' },
+    opts: {
+      targetTokenUuids: string[];
+      slotKey?: string;
+      mode?: 'advantage' | 'disadvantage';
+      attackMode?: 'oneHanded' | 'twoHanded';
+    },
   ): Promise<TargetedUseResult>;
   /** POST /execute-js via foundry-client endCombatTurn — advance the combat
    *  turn IFF the expected combatant is still acting (race-guard, 2026-07-22). */
@@ -420,6 +425,9 @@ function parseActionIntent(
     case 'attune':
       if (typeof body.attuned !== 'boolean') return null;
       return { kind, actionId, attuned: body.attuned };
+    case 'grip':
+      if (body.grip !== 'oneHanded' && body.grip !== 'twoHanded') return null;
+      return { kind, actionId, grip: body.grip };
     case 'move':
       if (body.containerId !== null && (typeof body.containerId !== 'string' || body.containerId === '')) {
         return null;
@@ -493,6 +501,18 @@ function extractRoll(value: unknown): ActionRollResult | null {
 function isRelayTimeout(err: unknown): boolean {
   const status = (err as { status?: unknown }).status;
   return err instanceof Error && err.name === 'RelayError' && status === 408;
+}
+
+/** A relay 400 from targetedUseScript's own `activity.use()` guard: the ability
+ *  could not be used (out of uses, no spell slot, etc.). User-actionable, not an
+ *  upstream outage — surface as INVALID, never 502. */
+function isUsePerformFailure(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.name === 'RelayError' &&
+    (err as { status?: unknown }).status === 400 &&
+    /use could not be performed/.test(err.message)
+  );
 }
 
 /** RelayError from execute-js when the module setting or API-key scope is
@@ -1585,6 +1605,7 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
               targetTokenUuids: action.targetTokenUuids,
               ...(action.slotKey !== undefined ? { slotKey: action.slotKey } : {}),
               ...(action.mode !== undefined ? { mode: action.mode } : {}),
+              ...(action.attackMode !== undefined ? { attackMode: action.attackMode } : {}),
             });
             outcome = res;
             result = res.attack !== null ? extractRoll(res.attack) : null;
@@ -1594,6 +1615,9 @@ export function buildApp(deps: GatewayDeps): FastifyInstance {
             // retrying could double it.
             if (isRelayTimeout(err)) {
               return sendError(reply, 502, 'UPSTREAM', 'Timed out — check the Foundry chat before retrying.');
+            }
+            if (isUsePerformFailure(err)) {
+              return sendError(reply, 422, 'INVALID_INTENT', "That couldn't be used right now — out of uses or no spell slot.");
             }
             throw err;
           }

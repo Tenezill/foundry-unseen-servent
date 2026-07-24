@@ -212,24 +212,24 @@ describe('view model — caster (derived data preferred)', () => {
     expect(s.resourceIds).toEqual(['slots.1', 'slots.2', 'slots.3']);
   });
 
-  it('spells list: level, school, prepared state in sub; tags for prepared/concentration/ritual', () => {
+  it('spells list: level, school, prepared state in sub; tags for concentration/ritual (no redundant "prepared")', () => {
     const s = { items: spellRows(caster) };
     expect(s.items).toHaveLength(6);
 
     const detect = s.items.find((i) => i.label === 'Detect Magic');
     expect(detect?.sub).toBe('1st level · Divination · always prepared');
-    expect(detect?.tags).toEqual(['prepared', 'concentration', 'ritual']);
+    expect(detect?.tags).toEqual(['concentration', 'ritual']);
 
     const guardians = s.items.find((i) => i.label === 'Spirit Guardians');
-    expect(guardians?.sub).toBe('3rd level · Conjuration · prepared');
-    expect(guardians?.tags).toEqual(['prepared', 'concentration']);
+    expect(guardians?.sub).toBe('3rd level · Conjuration');
+    expect(guardians?.tags).toEqual(['concentration']);
 
     const weapon = s.items.find((i) => i.label === 'Spiritual Weapon');
     expect(weapon?.sub).toBe('2nd level · Evocation');
     expect(weapon?.tags).toBeUndefined(); // known but not prepared
 
     const flame = s.items.find((i) => i.label === 'Sacred Flame');
-    expect(flame?.sub).toBe('Cantrip · Evocation · prepared');
+    expect(flame?.sub).toBe('Cantrip · Evocation');
   });
 
   it('features link uses-backed resources', () => {
@@ -743,14 +743,14 @@ describe('captured fixtures — caster (Akra, Cleric 5)', () => {
     for (const item of s.items) {
       expect(item.sub).toMatch(/^(Cantrip|1st level|2nd level|3rd level)/);
     }
-    // prepared: 1 -> prepared
+    // prepared: 1 -> its toggle already shows the state; no redundant sub/tag
     const bolt = s.items.find((i) => i.label === 'Guiding Bolt');
-    expect(bolt?.sub).toBe('1st level · Evocation · prepared');
-    expect(bolt?.tags).toEqual(['prepared']);
+    expect(bolt?.sub).toBe('1st level · Evocation');
+    expect(bolt?.tags).toBeUndefined();
     // prepared: 2 -> always prepared (Life Domain spell)
     const bless = s.items.find((i) => i.label === 'Bless');
     expect(bless?.sub).toBe('1st level · Enchantment · always prepared');
-    expect(bless?.tags).toEqual(['prepared', 'concentration']);
+    expect(bless?.tags).toEqual(['concentration']);
     // prepared: 0 -> known, not prepared; properties still drive tags
     const bane = s.items.find((i) => i.label === 'Bane');
     expect(bane?.sub).toBe('1st level · Enchantment');

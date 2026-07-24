@@ -39,6 +39,8 @@
           </button>
           <span v-else class="row-label">{{ action.label }}</span>
           <span v-if="noSlots(action)" class="row-sub">No spell slots left</span>
+          <span v-if="action.sub && group.id === 'attacks'" class="row-sub">{{ action.sub }}</span>
+          <span v-if="action.uses" class="row-uses">{{ action.uses.value }}/{{ action.uses.max }}</span>
         </div>
         <!-- Dmg rides inward (left of the primary button) and only shows when the
              action has a damage component, so the yellow Cast/Attack/Use button
@@ -305,6 +307,12 @@ function isCritArmed(action: ActionDescriptor): boolean {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.row-uses {
+  font-size: 0.78rem;
+  opacity: 0.7;
+  margin-left: 0.4rem;
 }
 
 .act-btn {
