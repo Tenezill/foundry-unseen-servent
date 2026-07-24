@@ -1,0 +1,607 @@
+# Third-party licenses
+
+Unseen Servant bundles the following third-party packages. Each is used
+under its own license; the full license text of every package ships in
+its directory inside the image (node_modules/<name>/LICENSE*).
+
+## (BSD-3-Clause OR GPL-2.0)
+
+- node-forge (1.4.0) — https://github.com/digitalbazaar/forge
+
+## (MIT OR CC0-1.0)
+
+- type-fest (5.8.0) — https://github.com/sindresorhus/type-fest#readme
+
+## Apache-2.0
+
+- b4a (1.8.1) — https://github.com/holepunchto/b4a#readme
+- bare-events (2.9.1) — https://github.com/holepunchto/bare-events#readme
+- bare-fs (4.7.3) — https://github.com/holepunchto/bare-fs#readme
+- bare-os (3.9.3) — https://github.com/holepunchto/bare-os#readme
+- bare-path (3.0.1) — https://github.com/holepunchto/bare-path#readme
+- bare-stream (2.13.3) — https://github.com/holepunchto/bare-stream#readme
+- bare-url (2.4.5) — https://github.com/holepunchto/bare-url
+- baseline-browser-mapping (2.10.42) — https://github.com/web-platform-dx/baseline-browser-mapping#readme
+- cluster-key-slot (1.1.1) — https://github.com/Salakar/cluster-key-slot#readme
+- crc-32 (1.2.2) — https://sheetjs.com/
+- denque (2.1.0) — https://docs.page/invertase/denque
+- detect-libc (2.1.2) — https://github.com/lovell/detect-libc#readme
+- events-universal (1.0.1) — https://github.com/holepunchto/events-universal#readme
+- fuse.js (7.4.2) — http://fusejs.io
+- human-signals (5.0.0) — https://www.github.com/ehmicky/human-signals
+- readdir-glob (1.1.3) — https://github.com/Yqnn/node-readdir-glob
+- text-decoder (1.2.7) — https://github.com/holepunchto/text-decoder#readme
+- typescript (5.9.3) — https://www.typescriptlang.org/
+
+## BSD-2-Clause
+
+- css-select (5.2.2) — https://github.com/fb55/css-select#readme
+- css-what (6.2.2) — https://github.com/fb55/css-what#readme
+- domelementtype (2.3.0) — https://github.com/fb55/domelementtype#readme
+- domhandler (5.0.3) — https://github.com/fb55/domhandler#readme
+- domutils (3.2.2) — https://github.com/fb55/domutils#readme
+- dotenv (17.4.2) — https://github.com/motdotla/dotenv#readme
+- entities (4.5.0, 7.0.1) — https://github.com/fb55/entities#readme
+- nth-check (2.1.1) — https://github.com/fb55/nth-check
+- terser (5.48.0) — https://terser.org
+- webidl-conversions (3.0.1) — https://github.com/jsdom/webidl-conversions#readme
+
+## BSD-3-Clause
+
+- @mapbox/node-pre-gyp (2.0.3) — https://github.com/mapbox/node-pre-gyp#readme
+- diff (8.0.4) — https://github.com/kpdecker/jsdiff#readme
+- fast-uri (3.1.3) — https://github.com/fastify/fast-uri
+- fzf (0.5.2) — https://fzf.netlify.app
+- ieee754 (1.2.1) — https://github.com/feross/ieee754#readme
+- light-my-request (6.6.0) — https://github.com/fastify/light-my-request#readme
+- secure-json-parse (4.1.0) — https://github.com/fastify/secure-json-parse#readme
+- serialize-javascript (7.0.7) — https://github.com/yahoo/serialize-javascript
+- source-map (0.6.1, 0.7.6) — https://github.com/mozilla/source-map
+- source-map-js (1.2.1) — https://github.com/7rulnik/source-map-js
+
+## BlueOak-1.0.0
+
+- chownr (3.0.0) — https://github.com/isaacs/chownr#readme
+- glob (13.0.6) — https://github.com/isaacs/node-glob#readme
+- isexe (4.0.0) — https://github.com/isaacs/isexe#readme
+- jackspeak (3.4.3) — https://github.com/isaacs/jackspeak#readme
+- lru-cache (11.5.1) — https://github.com/isaacs/node-lru-cache#readme
+- minimatch (10.2.5) — https://github.com/isaacs/minimatch#readme
+- minipass (7.1.3) — https://github.com/isaacs/minipass#readme
+- package-json-from-dist (1.0.1) — https://github.com/isaacs/package-json-from-dist#readme
+- path-scurry (1.11.1, 2.0.2) — https://github.com/isaacs/path-scurry#readme
+- sax (1.6.0) — https://github.com/isaacs/sax-js#readme
+- tar (7.5.19) — https://github.com/isaacs/node-tar#readme
+- yallist (5.0.0) — https://github.com/isaacs/yallist#readme
+
+## CC-BY-4.0
+
+- caniuse-lite (1.0.30001802) — https://github.com/browserslist/caniuse-lite#readme
+
+## CC0-1.0
+
+- @speed-highlight/core (1.2.17) — https://github.com/speed-highlight/core#readme
+- mdn-data (2.0.28, 2.27.1) — https://developer.mozilla.org
+
+## ISC
+
+- @isaacs/cliui (8.0.2) — https://github.com/yargs/cliui#readme
+- @isaacs/fs-minipass (4.0.1) — https://github.com/npm/fs-minipass#readme
+- abbrev (3.0.1) — https://github.com/npm/abbrev-js#readme
+- ansis (4.3.1) — https://github.com/webdiscus/ansis#readme
+- anymatch (3.1.3) — https://github.com/micromatch/anymatch
+- boolbase (1.0.0) — https://github.com/fb55/boolbase
+- cliui (9.0.1) — https://github.com/yargs/cliui#readme
+- electron-to-chromium (1.5.387) — https://github.com/Kilian/electron-to-chromium#readme
+- fastq (1.20.1) — https://github.com/mcollina/fastq#readme
+- foreground-child (3.3.1) — https://github.com/tapjs/foreground-child#readme
+- get-caller-file (2.0.5) — https://github.com/stefanpenner/get-caller-file#readme
+- glob (10.5.0) — https://github.com/isaacs/node-glob#readme
+- glob-parent (5.1.2) — https://github.com/gulpjs/glob-parent#readme
+- graceful-fs (4.2.11) — https://github.com/isaacs/node-graceful-fs#readme
+- inherits (2.0.4) — https://github.com/isaacs/inherits#readme
+- ini (4.1.1) — https://github.com/npm/ini#readme
+- isexe (2.0.0) — https://github.com/isaacs/isexe#readme
+- lru-cache (5.1.1, 10.4.3) — https://github.com/isaacs/node-lru-cache#readme
+- minimatch (5.1.9, 9.0.9) — https://github.com/isaacs/minimatch#readme
+- nopt (8.1.0) — https://github.com/npm/nopt#readme
+- picocolors (1.1.1) — https://github.com/alexeyraspopov/picocolors#readme
+- semver (6.3.1, 7.8.5) — https://github.com/npm/node-semver#readme
+- setprototypeof (1.2.0) — https://github.com/wesleytodd/setprototypeof
+- signal-exit (3.0.7, 4.1.0) — https://github.com/tapjs/signal-exit#readme
+- split2 (4.2.0) — https://github.com/mcollina/split2#readme
+- structured-clone-es (2.0.0) — https://github.com/antfu-collective/structured-clone-es#readme
+- which (2.0.2, 6.0.1) — https://github.com/npm/node-which#readme
+- y18n (5.0.8) — https://github.com/yargs/y18n
+- yallist (3.1.1) — https://github.com/isaacs/yallist#readme
+- yaml (2.9.0) — https://eemeli.org/yaml/
+- yargs-parser (22.0.0) — https://github.com/yargs/yargs-parser#readme
+
+## MIT
+
+- @babel/code-frame (7.29.7) — https://babel.dev/docs/en/next/babel-code-frame
+- @babel/compat-data (7.29.7) — https://github.com/babel/babel#readme
+- @babel/core (7.29.7) — https://babel.dev/docs/en/next/babel-core
+- @babel/generator (7.29.7, 8.0.0) — https://babel.dev/docs/en/next/babel-generator
+- @babel/helper-annotate-as-pure (7.29.7) — https://babel.dev/docs/en/next/babel-helper-annotate-as-pure
+- @babel/helper-compilation-targets (7.29.7) — https://github.com/babel/babel#readme
+- @babel/helper-create-class-features-plugin (7.29.7) — https://github.com/babel/babel#readme
+- @babel/helper-globals (7.29.7) — https://github.com/babel/babel#readme
+- @babel/helper-member-expression-to-functions (7.29.7) — https://babel.dev/docs/en/next/babel-helper-member-expression-to-functions
+- @babel/helper-module-imports (7.29.7) — https://babel.dev/docs/en/next/babel-helper-module-imports
+- @babel/helper-module-transforms (7.29.7) — https://babel.dev/docs/en/next/babel-helper-module-transforms
+- @babel/helper-optimise-call-expression (7.29.7) — https://babel.dev/docs/en/next/babel-helper-optimise-call-expression
+- @babel/helper-plugin-utils (7.29.7) — https://babel.dev/docs/en/next/babel-helper-plugin-utils
+- @babel/helper-replace-supers (7.29.7) — https://babel.dev/docs/en/next/babel-helper-replace-supers
+- @babel/helper-skip-transparent-expression-wrappers (7.29.7) — https://github.com/babel/babel#readme
+- @babel/helper-string-parser (7.29.7, 8.0.0) — https://babel.dev/docs/en/next/babel-helper-string-parser
+- @babel/helper-validator-identifier (7.29.7, 8.0.2) — https://github.com/babel/babel#readme
+- @babel/helper-validator-option (7.29.7) — https://github.com/babel/babel#readme
+- @babel/helpers (7.29.7) — https://babel.dev/docs/en/next/babel-helpers
+- @babel/parser (7.29.7, 8.0.0) — https://babel.dev/docs/en/next/babel-parser
+- @babel/plugin-syntax-jsx (7.29.7) — https://babel.dev/docs/en/next/babel-plugin-syntax-jsx
+- @babel/plugin-syntax-typescript (7.29.7) — https://babel.dev/docs/en/next/babel-plugin-syntax-typescript
+- @babel/plugin-transform-typescript (7.29.7) — https://babel.dev/docs/en/next/babel-plugin-transform-typescript
+- @babel/template (7.29.7) — https://babel.dev/docs/en/next/babel-template
+- @babel/traverse (7.29.7) — https://babel.dev/docs/en/next/babel-traverse
+- @babel/types (7.29.7, 8.0.0) — https://babel.dev/docs/en/next/babel-types
+- @bomb.sh/tab (0.0.17) — https://github.com/bombshell-dev/tab#readme
+- @clack/core (1.4.3) — https://github.com/bombshell-dev/clack/tree/main/packages/core#readme
+- @clack/prompts (1.7.0) — https://github.com/bombshell-dev/clack/tree/main/packages/prompts#readme
+- @colordx/core (5.5.0) — https://colordx.dev
+- @dxup/nuxt (0.4.1) — https://github.com/KazariEX/dxup#readme
+- @dxup/unimport (0.1.2) — https://github.com/KazariEX/dxup#readme
+- @esbuild/win32-x64 (0.28.1) — https://github.com/evanw/esbuild#readme
+- @fastify/ajv-compiler (4.0.5) — https://github.com/fastify/ajv-compiler#readme
+- @fastify/error (4.2.0) — https://github.com/fastify/fastify-error#readme
+- @fastify/fast-json-stringify-compiler (5.1.0) — https://github.com/fastify/fast-json-stringify-compiler#readme
+- @fastify/forwarded (3.0.1) — https://github.com/fastify/forwarded#readme
+- @fastify/merge-json-schemas (0.2.1) — https://github.com/fastify/merge-json-schemas#readme
+- @fastify/proxy-addr (5.1.0) — https://github.com/fastify/proxy-addr#readme
+- @ioredis/commands (1.10.0) — https://github.com/ioredis/commands
+- @jridgewell/gen-mapping (0.3.13) — https://github.com/jridgewell/sourcemaps/tree/main/packages/gen-mapping
+- @jridgewell/remapping (2.3.5) — https://github.com/jridgewell/sourcemaps/tree/main/packages/remapping
+- @jridgewell/resolve-uri (3.1.2) — https://github.com/jridgewell/resolve-uri#readme
+- @jridgewell/source-map (0.3.11) — https://github.com/jridgewell/sourcemaps/tree/main/packages/source-map
+- @jridgewell/sourcemap-codec (1.5.5) — https://github.com/jridgewell/sourcemaps/tree/main/packages/sourcemap-codec
+- @jridgewell/trace-mapping (0.3.31) — https://github.com/jridgewell/sourcemaps/tree/main/packages/trace-mapping
+- @kwsites/file-exists (1.1.1) — https://github.com/kwsites/file-exists#readme
+- @kwsites/promise-deferred (1.1.1) — https://github.com/kwsites/promise-deferred#readme
+- @nodelib/fs.scandir (2.1.5) — https://github.com/nodelib/nodelib/tree/master#readme
+- @nodelib/fs.stat (2.0.5) — https://github.com/nodelib/nodelib/tree/master#readme
+- @nodelib/fs.walk (1.2.8) — https://github.com/nodelib/nodelib/tree/master#readme
+- @nuxt/cli (3.36.1) — https://github.com/nuxt/cli#readme
+- @nuxt/devalue (2.0.2) — https://github.com/nuxt/devalue#readme
+- @nuxt/devtools (3.2.4) — https://devtools.nuxt.com
+- @nuxt/devtools-kit (3.2.4) — https://devtools.nuxt.com/module/utils-kit
+- @nuxt/devtools-wizard (3.2.4) — https://devtools.nuxt.com
+- @nuxt/kit (4.4.8) — https://nuxt.com/docs/4.x/api/kit
+- @nuxt/nitro-server (4.4.8) — https://nuxt.com
+- @nuxt/schema (4.4.8) — https://nuxt.com
+- @nuxt/telemetry (2.8.0) — https://github.com/nuxt/telemetry#readme
+- @nuxt/vite-builder (4.4.8) — https://nuxt.com
+- @oxc-minify/binding-win32-x64-msvc (0.133.0) — https://oxc.rs/docs/guide/usage/minifier
+- @oxc-parser/binding-win32-x64-msvc (0.133.0) — https://oxc.rs/docs/guide/usage/parser
+- @oxc-project/types (0.133.0) — https://oxc.rs
+- @oxc-transform/binding-win32-x64-msvc (0.133.0) — https://oxc.rs/docs/guide/usage/transformer
+- @parcel/watcher (2.5.6) — https://github.com/parcel-bundler/watcher#readme
+- @parcel/watcher-wasm (2.5.6) — https://github.com/parcel-bundler/watcher#readme
+- @parcel/watcher-win32-x64 (2.5.6) — https://github.com/parcel-bundler/watcher#readme
+- @pinojs/redact (0.4.0) — https://github.com/pinojs/redact#readme
+- @pkgjs/parseargs (0.11.0) — https://github.com/pkgjs/parseargs#readme
+- @polka/url (1.0.0-next.29) — https://github.com/lukeed/polka#readme
+- @poppinss/colors (4.1.6) — https://github.com/poppinss/colors#readme
+- @poppinss/dumper (0.7.0) — https://github.com/poppinss/dumper#readme
+- @poppinss/exception (1.2.3) — https://github.com/poppinss/exception#readme
+- @rolldown/pluginutils (1.0.1) — https://github.com/rolldown/plugins/tree/main/packages/pluginutils#readme
+- @rollup/plugin-alias (6.0.0) — https://github.com/rollup/plugins/tree/master/packages/alias#readme
+- @rollup/plugin-babel (6.1.0) — https://github.com/rollup/plugins/tree/master/packages/babel#readme
+- @rollup/plugin-commonjs (29.0.3) — https://github.com/rollup/plugins/tree/master/packages/commonjs/#readme
+- @rollup/plugin-inject (5.0.5) — https://github.com/rollup/plugins/tree/master/packages/inject#readme
+- @rollup/plugin-json (6.1.0) — https://github.com/rollup/plugins/tree/master/packages/json#readme
+- @rollup/plugin-node-resolve (16.0.3) — https://github.com/rollup/plugins/tree/master/packages/node-resolve/#readme
+- @rollup/plugin-replace (6.0.3) — https://github.com/rollup/plugins/tree/master/packages/replace#readme
+- @rollup/plugin-terser (1.0.0) — https://github.com/rollup/plugins/tree/master/packages/terser#readme
+- @rollup/pluginutils (5.4.0) — https://github.com/rollup/plugins/tree/master/packages/pluginutils#readme
+- @rollup/rollup-win32-x64-gnu (4.62.2) — https://rollupjs.org/
+- @rollup/rollup-win32-x64-msvc (4.62.2) — https://rollupjs.org/
+- @simple-git/args-pathspec (1.0.3) — https://github.com/steveukx/git-js#readme
+- @simple-git/argv-parser (1.1.1) — https://github.com/steveukx/git-js#readme
+- @sindresorhus/is (7.2.0) — https://github.com/sindresorhus/is#readme
+- @sindresorhus/merge-streams (4.0.0) — https://github.com/sindresorhus/merge-streams#readme
+- @types/estree (1.0.9) — https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/estree
+- @types/jsesc (2.5.1) — https://github.com/DefinitelyTyped/DefinitelyTyped#readme
+- @types/node (22.20.1) — https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/node
+- @types/resolve (1.20.2) — https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/resolve
+- @unhead/vue (2.1.15) — https://unhead.unjs.io
+- @vercel/nft (1.10.2) — https://github.com/vercel/nft#readme
+- @vitejs/plugin-vue (6.0.7) — https://github.com/vitejs/vite-plugin-vue/tree/main/packages/plugin-vue#readme
+- @vitejs/plugin-vue-jsx (5.1.6) — https://github.com/vitejs/vite-plugin-vue/tree/main/packages/plugin-vue-jsx#readme
+- @volar/language-core (2.4.15) — https://github.com/volarjs/volar.js#readme
+- @volar/source-map (2.4.15) — https://github.com/volarjs/volar.js#readme
+- @volar/typescript (2.4.15) — https://github.com/volarjs/volar.js#readme
+- @vue-macros/common (3.1.2) — https://vue-macros.dev
+- @vue/babel-helper-vue-transform-on (2.0.1) — https://github.com/vuejs/babel-plugin-jsx#readme
+- @vue/babel-plugin-jsx (2.0.1) — https://github.com/vuejs/babel-plugin-jsx/tree/dev/packages/babel-plugin-jsx#readme
+- @vue/babel-plugin-resolve-type (2.0.1) — https://github.com/vuejs/babel-plugin-jsx/tree/dev/packages/babel-plugin-resolve-type#readme
+- @vue/compiler-core (3.5.39) — https://github.com/vuejs/core/tree/main/packages/compiler-core#readme
+- @vue/compiler-dom (3.5.39) — https://github.com/vuejs/core/tree/main/packages/compiler-dom#readme
+- @vue/compiler-sfc (3.5.39) — https://github.com/vuejs/core/tree/main/packages/compiler-sfc#readme
+- @vue/compiler-ssr (3.5.39) — https://github.com/vuejs/core/tree/main/packages/compiler-ssr#readme
+- @vue/compiler-vue2 (2.7.16) — https://github.com/vuejs/vue/tree/dev/packages/vue-template-compiler#readme
+- @vue/devtools-api (8.1.5) — https://github.com/vuejs/devtools#readme
+- @vue/devtools-core (8.1.5) — https://github.com/vuejs/devtools#readme
+- @vue/devtools-kit (8.1.5) — https://github.com/vuejs/devtools#readme
+- @vue/devtools-shared (8.1.5) — https://github.com/vuejs/devtools#readme
+- @vue/language-core (2.2.12) — https://github.com/vuejs/language-tools#readme
+- @vue/reactivity (3.5.39) — https://github.com/vuejs/core/tree/main/packages/reactivity#readme
+- @vue/runtime-core (3.5.39) — https://github.com/vuejs/core/tree/main/packages/runtime-core#readme
+- @vue/runtime-dom (3.5.39) — https://github.com/vuejs/core/tree/main/packages/runtime-dom#readme
+- @vue/server-renderer (3.5.39) — https://github.com/vuejs/core/tree/main/packages/server-renderer#readme
+- @vue/shared (3.5.39) — https://github.com/vuejs/core/tree/main/packages/shared#readme
+- abort-controller (3.0.0) — https://github.com/mysticatea/abort-controller#readme
+- abstract-logging (2.0.1) — https://github.com/jsumners/abstract-logging#readme
+- acorn (8.17.0) — https://github.com/acornjs/acorn
+- acorn-import-attributes (1.9.5) — https://github.com/xtuc/acorn-import-attributes#readme
+- agent-base (7.1.4) — https://github.com/TooTallNate/proxy-agents#readme
+- ajv (8.20.0) — https://ajv.js.org
+- ajv-formats (3.0.1) — https://github.com/ajv-validator/ajv-formats#readme
+- alien-signals (1.0.13) — https://github.com/johnsoncodehk/signals#readme
+- ansi-regex (5.0.1, 6.2.2) — https://github.com/chalk/ansi-regex#readme
+- ansi-styles (4.3.0, 6.2.3) — https://github.com/chalk/ansi-styles#readme
+- archiver (7.0.1) — https://github.com/archiverjs/node-archiver
+- archiver-utils (5.0.2) — https://github.com/archiverjs/archiver-utils#readme
+- ast-kit (2.2.0) — https://github.com/sxzz/ast-kit#readme
+- ast-walker-scope (0.9.0) — https://github.com/sxzz/ast-walker-scope#readme
+- async (3.2.6) — https://caolan.github.io/async/
+- async-sema (3.1.1) — https://github.com/vercel/async-sema
+- atomic-sleep (1.0.0) — https://github.com/davidmarkclements/atomic-sleep#readme
+- autoprefixer (10.5.2) — https://github.com/postcss/autoprefixer#readme
+- avvio (9.2.0) — https://github.com/fastify/avvio#readme
+- balanced-match (1.0.2, 4.0.4) — https://github.com/juliangruber/balanced-match#readme
+- base64-js (1.5.1) — https://github.com/beatgammit/base64-js
+- bindings (1.5.0) — https://github.com/TooTallNate/node-bindings
+- birpc (2.9.0, 4.0.0) — https://github.com/antfu-collective/birpc#readme
+- brace-expansion (2.1.1, 5.0.7) — https://github.com/juliangruber/brace-expansion#readme
+- braces (3.0.3) — https://github.com/micromatch/braces
+- browserslist (4.28.4) — https://github.com/browserslist/browserslist#readme
+- buffer (6.0.3) — https://github.com/feross/buffer
+- buffer-crc32 (1.0.0) — https://github.com/brianloveswords/buffer-crc32
+- buffer-from (1.1.2) — https://github.com/LinusU/buffer-from#readme
+- bundle-name (4.1.0) — https://github.com/sindresorhus/bundle-name#readme
+- c12 (3.3.4) — https://github.com/unjs/c12#readme
+- cac (6.7.14) — https://github.com/egoist/cac#readme
+- caniuse-api (4.0.0) — https://github.com/MoOx/caniuse-api#readme
+- chokidar (5.0.0) — https://github.com/paulmillr/chokidar
+- citty (0.1.6, 0.2.2) — https://github.com/unjs/citty#readme
+- color-convert (2.0.1) — https://github.com/Qix-/color-convert#readme
+- color-name (1.1.4) — https://github.com/colorjs/color-name
+- commander (2.20.3, 11.1.0) — https://github.com/tj/commander.js#readme
+- commondir (1.0.1) — https://github.com/substack/node-commondir#readme
+- compatx (0.2.0) — https://github.com/unjs/compatx#readme
+- compress-commons (6.0.2) — https://github.com/archiverjs/node-compress-commons
+- confbox (0.1.8, 0.2.4) — https://github.com/unjs/confbox#readme
+- consola (3.4.2) — https://github.com/unjs/consola#readme
+- convert-source-map (2.0.0) — https://github.com/thlorenz/convert-source-map
+- cookie (1.1.1) — https://github.com/jshttp/cookie#readme
+- cookie-es (1.2.3, 2.0.1, 3.1.1) — https://github.com/unjs/cookie-es#readme
+- core-util-is (1.0.3) — https://github.com/isaacs/core-util-is#readme
+- crc32-stream (6.0.0) — https://github.com/archiverjs/node-crc32-stream
+- croner (10.0.1) — https://croner.56k.guru
+- cross-spawn (7.0.6) — https://github.com/moxystudio/node-cross-spawn
+- crossws (0.3.5, 0.4.9) — https://crossws.h3.dev
+- css-tree (2.2.1, 3.2.1) — https://github.com/csstree/csstree#readme
+- cssesc (3.0.0) — https://mths.be/cssesc
+- cssnano (8.0.2) — https://github.com/cssnano/cssnano
+- cssnano-preset-default (8.0.2) — https://github.com/cssnano/cssnano
+- cssnano-utils (6.0.1) — https://github.com/cssnano/cssnano
+- csso (5.0.5) — https://github.com/css/csso#readme
+- csstype (3.2.3) — https://github.com/frenic/csstype#readme
+- db0 (0.3.4) — https://github.com/unjs/db0#readme
+- de-indent (1.0.2) — https://github.com/yyx990803/de-indent#readme
+- debug (4.4.3) — https://github.com/debug-js/debug#readme
+- deepmerge (4.3.1) — https://github.com/TehShrike/deepmerge
+- default-browser (5.5.0) — https://github.com/sindresorhus/default-browser#readme
+- default-browser-id (5.0.1) — https://github.com/sindresorhus/default-browser-id#readme
+- define-lazy-prop (3.0.0) — https://github.com/sindresorhus/define-lazy-prop#readme
+- defu (6.1.7) — https://github.com/unjs/defu#readme
+- depd (2.0.0) — https://github.com/dougwilson/nodejs-depd#readme
+- dequal (2.0.3) — https://github.com/lukeed/dequal#readme
+- destr (2.0.5) — https://github.com/unjs/destr#readme
+- devalue (5.8.1) — https://github.com/sveltejs/devalue#readme
+- dom-serializer (2.0.0) — https://github.com/cheeriojs/dom-serializer#readme
+- dot-prop (10.1.0) — https://github.com/sindresorhus/dot-prop#readme
+- duplexer (0.1.2) — https://github.com/Raynos/duplexer
+- ee-first (1.1.1) — https://github.com/jonathanong/ee-first#readme
+- emoji-regex (8.0.0, 10.6.0) — https://mths.be/emoji-regex
+- encodeurl (2.0.0) — https://github.com/pillarjs/encodeurl#readme
+- error-stack-parser-es (1.0.5) — https://github.com/antfu/error-stack-parser-es#readme
+- errx (0.1.0) — https://github.com/danielroe/errx#readme
+- es-errors (1.3.0) — https://github.com/ljharb/es-errors#readme
+- es-module-lexer (2.3.0) — https://github.com/guybedford/es-module-lexer#readme
+- esbuild (0.28.1) — https://github.com/evanw/esbuild#readme
+- escalade (3.2.0) — https://github.com/lukeed/escalade#readme
+- escape-html (1.0.3) — https://github.com/component/escape-html#readme
+- escape-string-regexp (5.0.0) — https://github.com/sindresorhus/escape-string-regexp#readme
+- estree-walker (2.0.2, 3.0.3) — https://github.com/Rich-Harris/estree-walker#readme
+- etag (1.8.1) — https://github.com/jshttp/etag#readme
+- event-target-shim (5.0.1) — https://github.com/mysticatea/event-target-shim
+- events (3.3.0) — https://github.com/Gozala/events#readme
+- execa (8.0.1) — https://github.com/sindresorhus/execa#readme
+- exsolve (1.1.0) — https://github.com/unjs/exsolve#readme
+- fast-decode-uri-component (1.0.1) — https://github.com/delvedor/fast-decode-uri-component#readme
+- fast-deep-equal (3.1.3) — https://github.com/epoberezkin/fast-deep-equal#readme
+- fast-fifo (1.3.2) — https://github.com/mafintosh/fast-fifo
+- fast-glob (3.3.3) — https://github.com/mrmlnc/fast-glob#readme
+- fast-json-stringify (7.0.0) — https://github.com/fastify/fast-json-stringify#readme
+- fast-npm-meta (1.5.1) — https://github.com/antfu/fast-npm-meta#readme
+- fast-querystring (1.1.2) — https://github.com/anonrig/fast-querystring#readme
+- fast-string-truncated-width (3.0.3) — https://github.com/fabiospampinato/fast-string-truncated-width#readme
+- fast-string-width (3.0.2) — https://github.com/fabiospampinato/fast-string-width#readme
+- fast-wrap-ansi (0.2.2) — https://github.com/43081j/fast-wrap-ansi#readme
+- fastify (5.10.0) — https://fastify.dev/
+- fdir (6.5.0) — https://github.com/thecodrr/fdir#readme
+- file-uri-to-path (1.0.0) — https://github.com/TooTallNate/file-uri-to-path
+- fill-range (7.1.1) — https://github.com/jonschlinkert/fill-range
+- find-my-way (9.6.0) — https://github.com/delvedor/find-my-way#readme
+- fraction.js (5.3.4) — https://raw.org/article/rational-numbers-in-javascript/
+- fresh (2.0.0) — https://github.com/jshttp/fresh#readme
+- function-bind (1.1.2) — https://github.com/Raynos/function-bind
+- gensync (1.0.0-beta.2) — https://github.com/loganfsmyth/gensync
+- get-east-asian-width (1.6.0) — https://github.com/sindresorhus/get-east-asian-width#readme
+- get-port-please (3.2.0) — https://github.com/unjs/get-port-please#readme
+- get-stream (8.0.1) — https://github.com/sindresorhus/get-stream#readme
+- giget (3.3.0) — https://github.com/unjs/giget#readme
+- global-directory (4.0.1) — https://github.com/sindresorhus/global-directory#readme
+- globby (16.2.1) — https://github.com/sindresorhus/globby#readme
+- gzip-size (7.0.0) — https://github.com/sindresorhus/gzip-size#readme
+- h3 (1.15.11) — https://github.com/h3js/h3#readme
+- hasown (2.0.4) — https://github.com/inspect-js/hasOwn#readme
+- he (1.2.0) — https://mths.be/he
+- hookable (5.5.3, 6.1.1) — https://github.com/unjs/hookable#readme
+- http-errors (2.0.1) — https://github.com/jshttp/http-errors#readme
+- http-shutdown (1.2.2) — https://github.com/thedillonb/http-shutdown#readme
+- https-proxy-agent (7.0.6) — https://github.com/TooTallNate/proxy-agents#readme
+- httpxy (0.5.4) — https://github.com/unjs/httpxy#readme
+- ignore (7.0.5) — https://github.com/kaelzhang/node-ignore#readme
+- image-meta (0.2.2) — https://github.com/unjs/image-meta#readme
+- impound (1.1.5) — https://github.com/unjs/impound#readme
+- ioredis (5.11.1) — https://github.com/luin/ioredis#readme
+- ipaddr.js (2.4.0) — https://github.com/whitequark/ipaddr.js#readme
+- iron-webcrypto (1.2.1) — https://github.com/brc-dd/iron-webcrypto#readme
+- is-core-module (2.16.2) — https://github.com/inspect-js/is-core-module
+- is-docker (3.0.0) — https://github.com/sindresorhus/is-docker#readme
+- is-extglob (2.1.1) — https://github.com/jonschlinkert/is-extglob
+- is-fullwidth-code-point (3.0.0) — https://github.com/sindresorhus/is-fullwidth-code-point#readme
+- is-glob (4.0.3) — https://github.com/micromatch/is-glob
+- is-in-ssh (1.0.0) — https://github.com/sindresorhus/is-in-ssh#readme
+- is-inside-container (1.0.0) — https://github.com/sindresorhus/is-inside-container#readme
+- is-installed-globally (1.0.0) — https://github.com/sindresorhus/is-installed-globally#readme
+- is-module (1.0.0) — https://github.com/component/is-module#readme
+- is-number (7.0.0) — https://github.com/jonschlinkert/is-number
+- is-path-inside (4.0.0) — https://github.com/sindresorhus/is-path-inside#readme
+- is-reference (1.2.1) — https://github.com/Rich-Harris/is-reference#readme
+- is-stream (2.0.1, 3.0.0) — https://github.com/sindresorhus/is-stream#readme
+- is-wsl (3.1.1) — https://github.com/sindresorhus/is-wsl#readme
+- isarray (1.0.0) — https://github.com/juliangruber/isarray
+- jiti (2.7.0) — https://github.com/unjs/jiti#readme
+- js-tokens (4.0.0, 9.0.1) — https://github.com/lydell/js-tokens#readme
+- jsesc (3.1.0) — https://mths.be/jsesc
+- json-schema-ref-resolver (3.0.0) — https://github.com/fastify/json-schema-ref-resolver#readme
+- json-schema-traverse (1.0.0) — https://github.com/epoberezkin/json-schema-traverse#readme
+- json5 (2.2.3) — http://json5.org/
+- kleur (4.1.5) — https://github.com/lukeed/kleur#readme
+- klona (2.0.6) — https://github.com/lukeed/klona#readme
+- knitwork (1.3.0) — https://github.com/unjs/knitwork#readme
+- launch-editor (2.14.1) — https://github.com/vitejs/launch-editor#readme
+- lazystream (1.0.1) — https://github.com/jpommerening/node-lazystream
+- lilconfig (3.1.3) — https://github.com/antonk52/lilconfig#readme
+- listhen (1.10.0) — https://github.com/unjs/listhen#readme
+- local-pkg (1.2.1) — https://github.com/antfu-collective/local-pkg#readme
+- lodash (4.18.1) — https://lodash.com/
+- magic-regexp (0.11.0) — https://regexp.dev
+- magic-string (0.30.21) — https://github.com/Rich-Harris/magic-string#readme
+- magic-string-ast (1.0.3) — https://github.com/sxzz/magic-string-ast#readme
+- magicast (0.5.3) — https://github.com/unjs/magicast#readme
+- merge-stream (2.0.0) — https://github.com/grncdr/merge-stream#readme
+- merge2 (1.4.1) — https://github.com/teambition/merge2
+- micromatch (4.0.8) — https://github.com/micromatch/micromatch
+- mime (4.1.0) — https://github.com/broofa/mime#readme
+- mime-db (1.54.0) — https://github.com/jshttp/mime-db#readme
+- mime-types (3.0.2) — https://github.com/jshttp/mime-types#readme
+- mimic-fn (4.0.0) — https://github.com/sindresorhus/mimic-fn#readme
+- minizlib (3.1.0) — https://github.com/isaacs/minizlib#readme
+- mlly (1.8.2) — https://github.com/unjs/mlly#readme
+- mocked-exports (0.1.1) — https://github.com/unjs/mocked-exports#readme
+- mrmime (2.0.1) — https://github.com/lukeed/mrmime#readme
+- ms (2.1.3) — https://github.com/vercel/ms#readme
+- muggle-string (0.4.1) — https://github.com/johnsoncodehk/muggle-string#readme
+- nanoid (3.3.15) — https://github.com/ai/nanoid#readme
+- nanotar (0.3.0) — https://github.com/unjs/nanotar#readme
+- nitropack (2.13.4) — https://github.com/nitrojs/nitro#readme
+- node-addon-api (7.1.1) — https://github.com/nodejs/node-addon-api
+- node-fetch (2.7.0) — https://github.com/bitinn/node-fetch
+- node-fetch-native (1.6.7) — https://github.com/unjs/node-fetch-native#readme
+- node-gyp-build (4.8.4) — https://github.com/prebuild/node-gyp-build
+- node-mock-http (1.0.4) — https://github.com/unjs/node-mock-http#readme
+- node-releases (2.0.50) — https://github.com/chicoxyzzy/node-releases#readme
+- normalize-path (3.0.0) — https://github.com/jonschlinkert/normalize-path
+- npm-run-path (5.3.0, 6.0.0) — https://github.com/sindresorhus/npm-run-path#readme
+- nuxt (4.4.8) — https://nuxt.com
+- nypm (0.6.8) — https://github.com/unjs/nypm#readme
+- obug (2.1.3) — https://github.com/sxzz/obug#readme
+- ofetch (1.5.1, 2.0.0-alpha.3) — https://github.com/unjs/ofetch#readme
+- ohash (2.0.11) — https://github.com/unjs/ohash#readme
+- on-change (6.0.2) — https://github.com/sindresorhus/on-change#readme
+- on-exit-leak-free (2.1.2) — https://github.com/mcollina/on-exit-or-gc#readme
+- on-finished (2.4.1) — https://github.com/jshttp/on-finished#readme
+- onetime (6.0.0) — https://github.com/sindresorhus/onetime#readme
+- open (11.0.0) — https://github.com/sindresorhus/open#readme
+- oxc-minify (0.133.0) — https://oxc.rs/docs/guide/usage/minifier
+- oxc-parser (0.133.0) — https://oxc.rs/docs/guide/usage/parser
+- oxc-transform (0.133.0) — https://oxc.rs/docs/guide/usage/transformer
+- oxc-walker (1.0.0) — https://github.com/oxc-project/oxc-walker#readme
+- parseurl (1.3.3) — https://github.com/pillarjs/parseurl#readme
+- path-browserify (1.0.1) — https://github.com/browserify/path-browserify
+- path-key (3.1.1, 4.0.0) — https://github.com/sindresorhus/path-key#readme
+- path-parse (1.0.7) — https://github.com/jbgutierrez/path-parse#readme
+- pathe (1.1.2, 2.0.3) — https://github.com/unjs/pathe#readme
+- perfect-debounce (2.1.0) — https://github.com/unjs/perfect-debounce#readme
+- picomatch (2.3.2, 4.0.5) — https://github.com/micromatch/picomatch
+- pino (10.3.1) — https://getpino.io
+- pino-abstract-transport (3.0.0) — https://github.com/pinojs/pino-abstract-transport#readme
+- pino-std-serializers (7.1.0) — https://github.com/pinojs/pino-std-serializers#readme
+- pkg-types (1.3.1, 2.3.1) — https://github.com/unjs/pkg-types#readme
+- postcss (8.5.16) — https://postcss.org/
+- postcss-calc (10.1.1) — https://github.com/postcss/postcss-calc
+- postcss-colormin (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-convert-values (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-discard-comments (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-discard-duplicates (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-discard-empty (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-discard-overridden (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-merge-longhand (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-merge-rules (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-minify-font-values (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-minify-gradients (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-minify-params (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-minify-selectors (8.0.2) — https://github.com/cssnano/cssnano
+- postcss-normalize-charset (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-normalize-display-values (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-normalize-positions (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-normalize-repeat-style (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-normalize-string (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-normalize-timing-functions (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-normalize-unicode (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-normalize-url (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-normalize-whitespace (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-ordered-values (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-reduce-initial (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-reduce-transforms (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-selector-parser (7.1.4) — https://github.com/postcss/postcss-selector-parser
+- postcss-svgo (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-unique-selectors (8.0.1) — https://github.com/cssnano/cssnano
+- postcss-value-parser (4.2.0) — https://github.com/TrySound/postcss-value-parser
+- powershell-utils (0.1.0) — https://github.com/sindresorhus/powershell-utils#readme
+- pretty-bytes (7.1.0) — https://github.com/sindresorhus/pretty-bytes#readme
+- process (0.11.10) — https://github.com/shtylman/node-process#readme
+- process-nextick-args (2.0.1) — https://github.com/calvinmetcalf/process-nextick-args
+- process-warning (4.0.1, 5.0.0) — https://github.com/fastify/fastify-warning#readme
+- proper-lockfile (4.1.2) — https://github.com/moxystudio/node-proper-lockfile
+- quansync (0.2.11) — https://github.com/quansync-dev/quansync#readme
+- queue-microtask (1.2.3) — https://github.com/feross/queue-microtask
+- quick-format-unescaped (4.0.4) — https://github.com/davidmarkclements/quick-format#readme
+- radix3 (1.1.2) — https://github.com/unjs/radix3#readme
+- range-parser (1.3.0) — https://github.com/jshttp/range-parser#readme
+- rc9 (3.0.1) — https://github.com/unjs/rc9#readme
+- readable-stream (2.3.8, 4.7.0) — https://github.com/nodejs/readable-stream
+- readdirp (5.0.0) — https://github.com/paulmillr/readdirp
+- real-require (0.2.0, 1.0.0) — https://github.com/pinojs/real-require
+- redis-errors (1.2.0) — https://github.com/NodeRedis/redis-errors#readme
+- redis-parser (3.0.0) — https://github.com/NodeRedis/node-redis-parser#readme
+- regexp-tree (0.1.27) — https://github.com/DmitrySoshnikov/regexp-tree
+- require-from-string (2.0.2) — https://github.com/floatdrop/require-from-string#readme
+- resolve (1.22.12) — https://github.com/browserify/resolve#readme
+- resolve-from (5.0.0) — https://github.com/sindresorhus/resolve-from#readme
+- ret (0.5.0) — https://github.com/fent/ret.js#readme
+- retry (0.12.0) — https://github.com/tim-kos/node-retry
+- reusify (1.1.0) — https://github.com/mcollina/reusify#readme
+- rfdc (1.4.1) — https://github.com/davidmarkclements/rfdc#readme
+- rollup (4.62.2) — https://rollupjs.org/
+- rollup-plugin-visualizer (7.0.1) — https://github.com/btd/rollup-plugin-visualizer
+- rou3 (0.8.1) — https://github.com/h3js/rou3#readme
+- run-applescript (7.1.0) — https://github.com/sindresorhus/run-applescript#readme
+- run-parallel (1.2.0) — https://github.com/feross/run-parallel
+- safe-buffer (5.1.2, 5.2.1) — https://github.com/feross/safe-buffer
+- safe-regex2 (5.1.1) — https://github.com/fastify/safe-regex2
+- safe-stable-stringify (2.5.0) — https://github.com/BridgeAR/safe-stable-stringify#readme
+- scule (1.3.0) — https://github.com/unjs/scule#readme
+- send (1.2.1) — https://github.com/pillarjs/send#readme
+- seroval (1.5.4) — https://github.com/lxsmnsyc/seroval/tree/main/packages/seroval
+- serve-placeholder (2.0.2) — https://github.com/unjs/serve-placeholder#readme
+- serve-static (2.2.1) — https://github.com/expressjs/serve-static#readme
+- set-cookie-parser (2.7.2) — https://github.com/nfriedly/set-cookie-parser
+- shebang-command (2.0.0) — https://github.com/kevva/shebang-command#readme
+- shebang-regex (3.0.0) — https://github.com/sindresorhus/shebang-regex#readme
+- shell-quote (1.9.0) — https://github.com/ljharb/shell-quote
+- simple-git (3.36.0) — https://github.com/steveukx/git-js#readme
+- sirv (3.0.2) — https://github.com/lukeed/sirv#readme
+- sisteransi (1.0.5) — https://github.com/terkelg/sisteransi#readme
+- slash (5.1.0) — https://github.com/sindresorhus/slash#readme
+- smob (1.6.2) — https://github.com/Tada5hi/smob#readme
+- sonic-boom (4.2.1) — https://github.com/pinojs/sonic-boom#readme
+- source-map-support (0.5.21) — https://github.com/evanw/node-source-map-support#readme
+- srvx (0.11.21) — https://srvx.h3.dev
+- standard-as-callback (2.1.0) — https://github.com/luin/asCallback#readme
+- statuses (2.0.2) — https://github.com/jshttp/statuses#readme
+- std-env (4.1.0) — https://github.com/unjs/std-env#readme
+- streamx (2.28.0) — https://github.com/mafintosh/streamx
+- string_decoder (1.1.1, 1.3.0) — https://github.com/nodejs/string_decoder
+- string-width (4.2.3, 7.2.0) — https://github.com/sindresorhus/string-width#readme
+- strip-ansi (6.0.1, 7.2.0) — https://github.com/chalk/strip-ansi#readme
+- strip-final-newline (3.0.0) — https://github.com/sindresorhus/strip-final-newline#readme
+- strip-literal (3.1.0) — https://github.com/antfu/strip-literal#readme
+- stylehacks (8.0.1) — https://github.com/cssnano/cssnano
+- supports-color (10.2.2) — https://github.com/chalk/supports-color#readme
+- supports-preserve-symlinks-flag (1.0.0) — https://github.com/inspect-js/node-supports-preserve-symlinks-flag#readme
+- svgo (4.0.1) — https://svgo.dev
+- tagged-tag (1.0.0) — https://github.com/sindresorhus/tagged-tag#readme
+- tar-stream (3.2.0) — https://github.com/mafintosh/tar-stream
+- teex (1.0.1) — https://github.com/mafintosh/teex
+- thread-stream (4.2.0) — https://github.com/mcollina/thread-stream#readme
+- tiny-invariant (1.3.3) — https://github.com/alexreardon/tiny-invariant#readme
+- tinyclip (0.1.15) — https://github.com/tinylibs/tinyclip#readme
+- tinyexec (1.2.4) — https://github.com/tinylibs/tinyexec#readme
+- tinyglobby (0.2.17) — https://superchupu.dev/tinyglobby
+- to-regex-range (5.0.1) — https://github.com/micromatch/to-regex-range
+- toad-cache (3.7.4) — https://github.com/kibertoad/toad-cache
+- toidentifier (1.0.1) — https://github.com/component/toidentifier#readme
+- totalist (3.0.1) — https://github.com/lukeed/totalist#readme
+- tr46 (0.0.3) — https://github.com/Sebmaster/tr46.js#readme
+- tsx (4.23.0) — https://tsx.hirok.io
+- type-level-regexp (0.1.17) — https://github.com/didavid61202/type-level-regexp#readme
+- ufo (1.6.4) — https://github.com/unjs/ufo#readme
+- ultrahtml (1.6.0) — https://github.com/natemoo-re/ultrahtml#README
+- uncrypto (0.1.3) — https://github.com/unjs/uncrypto#readme
+- unctx (2.5.0) — https://github.com/unjs/unctx#readme
+- undici-types (6.21.0) — https://undici.nodejs.org
+- unenv (2.0.0-rc.24) — https://github.com/unjs/unenv#readme
+- unhead (2.1.15) — https://unhead.unjs.io
+- unicorn-magic (0.3.0, 0.4.0) — https://github.com/sindresorhus/unicorn-magic#readme
+- unimport (6.3.0) — https://github.com/unjs/unimport#readme
+- unplugin (2.3.11, 3.3.0) — https://unplugin.unjs.io
+- unplugin-utils (0.3.2) — https://github.com/sxzz/unplugin-utils#readme
+- unrouting (0.1.7) — https://github.com/unjs/unrouting#readme
+- unstorage (1.17.5) — https://unstorage.unjs.io
+- untun (0.1.3) — https://github.com/unjs/untun#readme
+- untyped (2.0.0) — https://github.com/unjs/untyped#readme
+- unwasm (0.5.3) — https://github.com/unjs/unwasm#readme
+- update-browserslist-db (1.2.3) — https://github.com/browserslist/update-db#readme
+- uqr (0.1.3) — https://github.com/unjs/uqr#readme
+- util-deprecate (1.0.2) — https://github.com/TooTallNate/util-deprecate
+- vite (7.3.6) — https://vite.dev
+- vite-dev-rpc (2.0.0) — https://github.com/antfu/vite-dev-rpc#readme
+- vite-hot-client (2.2.0) — https://github.com/antfu/vite-hot-client#readme
+- vite-node (5.3.0) — https://github.com/antfu-collective/vite-node#readme
+- vite-plugin-checker (0.14.4) — https://github.com/fi3ework/vite-plugin-checker
+- vite-plugin-inspect (11.4.1) — https://github.com/antfu-collective/vite-plugin-inspect#readme
+- vite-plugin-vue-tracer (1.4.0) — https://github.com/antfu/vite-plugin-vue-tracer#readme
+- vscode-uri (3.1.0) — https://github.com/microsoft/vscode-uri#readme
+- vue (3.5.39) — https://vuejs.org/
+- vue-bundle-renderer (2.3.1) — https://github.com/nuxt-contrib/vue-bundle-renderer#readme
+- vue-devtools-stub (0.1.0) — https://github.com/nuxt-contrib/vue-devtools-stub#readme
+- vue-router (5.1.0) — https://router.vuejs.org
+- vue-tsc (2.2.12) — https://github.com/vuejs/language-tools#readme
+- webpack-virtual-modules (0.6.2) — https://github.com/sysgears/webpack-virtual-modules#readme
+- whatwg-url (5.0.0) — https://github.com/jsdom/whatwg-url#readme
+- wrap-ansi (7.0.0, 9.0.2) — https://github.com/chalk/wrap-ansi#readme
+- ws (8.21.0) — https://github.com/websockets/ws
+- wsl-utils (0.3.1) — https://github.com/sindresorhus/wsl-utils#readme
+- yargs (18.0.0) — https://yargs.js.org/
+- youch (4.1.1) — https://github.com/poppinss/youch#readme
+- youch-core (0.3.3) — https://github.com/poppinss/youch-core#readme
+- zip-stream (6.0.1) — https://github.com/archiverjs/node-zip-stream
+
+## MIT OR Apache-2.0
+
+- @cloudflare/kv-asset-handler (0.4.2) — https://github.com/cloudflare/workers-sdk#readme

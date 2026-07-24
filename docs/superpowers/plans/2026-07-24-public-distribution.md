@@ -827,11 +827,27 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: release-sync
+  cancel-in-progress: false
+
 jobs:
-  build-push:
+  validate-tag:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Refuse non-release tag formats (transform enforces vX.Y.Z)
+        run: |
+          if ! echo "${GITHUB_REF_NAME}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag ${GITHUB_REF_NAME} is not vX.Y.Z — refusing to release"
+            exit 1
+          fi
+
+  build-push:
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     strategy:
-      fail-fast: true
       matrix:
         include:
           - image: unseen-servant-gateway
@@ -862,6 +878,7 @@ jobs:
   sync-quickstart:
     needs: build-push
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -885,8 +902,16 @@ jobs:
           else
             git commit -m "release ${GITHUB_REF_NAME}"
           fi
-          git tag "${GITHUB_REF_NAME}"
-          git push origin HEAD:main "refs/tags/${GITHUB_REF_NAME}"
+          # -f: the public mirror is generated output; a workflow re-run for the same
+          # release must be able to overwrite its own tag instead of failing.
+          # Hazard: this re-run idempotency cuts both ways — re-running an OLD
+          # release's workflow after a newer release exists will force-push
+          # that old content back onto the public repo's main (tags stay
+          # correct; only main regresses). Only re-run the latest release's
+          # workflow, or re-run the newest release afterwards to restore main.
+          git tag -f "${GITHUB_REF_NAME}"
+          git push origin HEAD:main
+          git push origin -f "refs/tags/${GITHUB_REF_NAME}"
 ```
 
 - [ ] **Step 2: Validate the YAML parses**

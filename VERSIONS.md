@@ -13,6 +13,7 @@ Never let `latest` drift in production.
 | foundryvtt-rest-api-relay | **3.4.1** | `stack/docker-compose.*.yml` → `threehats/foundryvtt-rest-api-relay:3.4.1` + `stack/quickstart/docker-compose.yml` (same tag) |
 | Node | 22.x | `package.json` engines |
 | pnpm | 11.10.0 | `package.json` packageManager |
+| unseen-servant images | git tag (e.g. `v0.1.0`) | `.github/workflows/release.yml` → `ghcr.io/tenezill/unseen-servant-{gateway,web,bootstrap}` + synced `Tenezill/unseen-servant` quickstart repo |
 
 Adapter data paths (`packages/adapter-dnd5e`) are pinned to **dnd5e 5.3.3**;
 its fixture tests fail loudly if a system update changes document shapes.
@@ -21,3 +22,9 @@ quickstart stack (`stack/quickstart/`) pins the same three image/module
 versions independently of `stack/docker-compose.*.yml` — when bumping a pin,
 update both compose files (and `apps/bootstrap/Dockerfile`'s baked module zip)
 together, never `:latest` in any of them.
+
+Releasing: run `make licenses` (refresh third-party attribution if deps
+changed), commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`. The
+release workflow builds/pushes all three images (amd64+arm64) and syncs the
+public quickstart repo; it needs the `QUICKSTART_PUSH_TOKEN` secret (fine-
+grained PAT, Contents read/write on Tenezill/unseen-servant).
