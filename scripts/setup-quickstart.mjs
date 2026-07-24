@@ -18,7 +18,20 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const QDIR = join(REPO_ROOT, 'stack', 'quickstart');
+
+/**
+ * Private repo: quickstart lives at stack/quickstart. Public quickstart repo:
+ * the compose file sits at the repo root (scripts/ next to it). Everything
+ * downstream (secrets, .env, bind-mount dirs, compose cwd) hangs off this.
+ * @param {string} repoRoot
+ * @returns {string}
+ */
+export function resolveQuickstartDir(repoRoot) {
+  const nested = join(repoRoot, 'stack', 'quickstart');
+  return existsSync(join(nested, 'docker-compose.yml')) ? nested : repoRoot;
+}
+
+const QDIR = resolveQuickstartDir(REPO_ROOT);
 const SECRETS = join(QDIR, 'secrets');
 
 export function generateSecret(bytes = 18) {

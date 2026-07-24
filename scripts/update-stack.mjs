@@ -16,10 +16,10 @@
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectComposeCommand } from './setup-quickstart.mjs';
+import { detectComposeCommand, resolveQuickstartDir } from './setup-quickstart.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const QDIR = join(REPO_ROOT, 'stack', 'quickstart');
+const QDIR = resolveQuickstartDir(REPO_ROOT);
 
 /** Tokens that would destroy state — this updater must NEVER emit them. */
 export const DESTRUCTIVE_TOKENS = ['down', '-v', '--volumes', 'rm', 'prune', 'stop'];

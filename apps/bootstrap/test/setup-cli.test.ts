@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,6 +14,7 @@ import {
   isPodmanRuntime,
   PODMAN_OVERRIDE_MARKER,
   QUICKSTART_BIND_DIRS,
+  resolveQuickstartDir,
   writeEnvFiles,
   writeSecretIfAbsent,
   writeSecretsBundle,
@@ -27,6 +28,21 @@ function makeDir(): string {
 }
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
+
+describe('resolveQuickstartDir', () => {
+  it('returns stack/quickstart when its compose file exists (private repo layout)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'qdir-'));
+    mkdirSync(join(root, 'stack', 'quickstart'), { recursive: true });
+    writeFileSync(join(root, 'stack', 'quickstart', 'docker-compose.yml'), 'name: x\n');
+    expect(resolveQuickstartDir(root)).toBe(join(root, 'stack', 'quickstart'));
+  });
+
+  it('falls back to the repo root (public quickstart repo layout)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'qdir-'));
+    writeFileSync(join(root, 'docker-compose.yml'), 'name: x\n');
+    expect(resolveQuickstartDir(root)).toBe(root);
+  });
 });
 
 describe('generateSecret', () => {
