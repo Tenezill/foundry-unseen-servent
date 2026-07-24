@@ -51,8 +51,12 @@ Contains only orchestration glue, no app source:
 - `docker-compose.yml` — the current `stack/quickstart/docker-compose.yml`
   with the three `build:` blocks replaced by pinned `image:` refs.
 - Caddyfile templates (`Caddyfile`, `Caddyfile.tls.example`).
-- The setup wizard (`scripts/setup-quickstart.mjs`) and a `Makefile` with
-  `setup` / `setup-reset` targets.
+- The setup wizard (`scripts/setup-quickstart.mjs`), the updater
+  (`scripts/update-stack.mjs`), and a `Makefile` with `setup` / `setup-reset` /
+  `update` targets. The updater works unchanged against an image-only compose
+  file (`--build` is a no-op without `build:` sections); `make update` then
+  means: git pull the quickstart repo (new pinned versions) + `compose pull` +
+  recreate changed containers.
 - `README.md` with install docs; issues enabled — this repo is the public
   face of the project.
 
@@ -66,6 +70,16 @@ Quickstart files continue to live in the private repo. The release workflow
 syncs them to the public repo on each tag, rewriting the pinned image versions
 as it goes. The public repo is a generated artifact; direct hotfixes there are
 possible but the private repo wins on the next release.
+
+### Existing deployments
+
+No impact on machines running the quickstart from a private-repo clone: the
+private repo's compose keeps its `build:` blocks (the `image:` rewrite happens
+only in the synced public copy), so `make update` behaves exactly as today and
+those machines never depend on GHCR. Migrating such a machine to the public
+quickstart is possible but deliberate: move the bind-mount data folders next to
+the public compose file; service configs and project name are identical, so
+containers reattach to the data.
 
 ## 4. Licensing
 
